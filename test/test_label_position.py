@@ -7,14 +7,57 @@ This module tests:
 3. Edge cases (single lookups, batch lookups, 2D arrays)
 """
 
+from typing import Any
+
 import numpy as np
 import pytest
 
 from linopy import Model
-from linopy.common import (
-    LabelPositionIndex,
-    _get_label_position_linear,
-)
+from linopy.common import LabelPositionIndex, label_coord
+
+
+def _get_label_position_linear(
+    obj: Any, values: int | np.ndarray
+) -> (
+    tuple[str, dict]
+    | tuple[None, None]
+    | list[tuple[str, dict] | tuple[None, None]]
+    | list[list[tuple[str, dict] | tuple[None, None]]]
+):
+    """
+    Get tuple of name and coordinate for variable labels.
+
+    This is the original O(n) implementation that scans through all items.
+    Used only for testing/benchmarking comparisons.
+    """
+
+    def find_single(value: int) -> tuple[str, dict] | tuple[None, None]:
+        if value == -1:
+            return None, None
+        for name, val in obj.items():
+            labels = val.labels
+            start, stop = val.range
+
+            if value >= start and value < stop:
+                index = np.unravel_index(value - start, labels.shape)
+
+                coord = label_coord(labels, labels.dims, index)
+                return name, coord
+        raise ValueError(f"Label {value} is not existent in the model.")
+
+    if isinstance(values, int):
+        return find_single(values)
+
+    values = np.array(values)
+    ndim = values.ndim
+    if ndim == 0:
+        return find_single(values.item())
+    elif ndim == 1:
+        return [find_single(v) for v in values]
+    elif ndim == 2:
+        return [[find_single(v) for v in _] for _ in values.T]
+    else:
+        raise ValueError("Array's with more than two dimensions is not supported")
 
 
 @pytest.fixture

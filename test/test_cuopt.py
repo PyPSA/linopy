@@ -499,7 +499,7 @@ def test_status_map_empty_constraint_matrix() -> None:
 def test_status_map_mismatched_variable_types() -> None:
     """A malformed input array must not be reported as a solved model."""
     model = milp_model()
-    data_model = solvers.cuOpt._build_solver_model(model)
+    data_model = solvers.cuOpt._build_solver_model(model.matrices)
     data_model.set_variable_types(np.array(["I"], dtype="<U1"))
 
     result = raw_result(model, data_model)
@@ -511,7 +511,7 @@ def test_status_map_mismatched_variable_types() -> None:
 def test_status_map_numerical_error() -> None:
     """A concave quadratic objective makes cuOpt fail numerically."""
     model = sign_matrix_model("min", "<=")
-    data_model = solvers.cuOpt._build_solver_model(model)
+    data_model = solvers.cuOpt._build_solver_model(model.matrices)
     Q = csr_array(np.diag([-1.0, 0.0, 0.0]))
     data_model.set_quadratic_objective_matrix(Q.data, Q.indices, Q.indptr)
 
@@ -696,7 +696,7 @@ def test_naive_hessian_changes_the_answer() -> None:
     reachable and that the tolerances above would reject it.
     """
     model = three_variable_qp("min")
-    data_model = solvers.cuOpt._build_solver_model(model)
+    data_model = solvers.cuOpt._build_solver_model(model.matrices)
     assert model.matrices.Q is not None
     naive = csr_array(model.matrices.Q.tocsr())
     data_model.set_quadratic_objective_matrix(naive.data, naive.indices, naive.indptr)

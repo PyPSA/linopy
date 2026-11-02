@@ -30,6 +30,22 @@ and run it via `pre-commit <https://pre-commit.com/index.html>`_:
 * Install the git hook (once): ``pre-commit install``
 * Run manually: ``pre-commit run --all-files``
 
+Conventions for the dense store
+-------------------------------
+
+The dense store in ``linopy/store.py`` has numpy fast paths next to the
+general xarray path. To keep them lean, follow three rules:
+
+* A user value entering a fast path passes through ``on_cells`` (a NaN
+  raises) or ``laid_on`` (a NaN kept). Don't add a scalar NaN check or a
+  coordinate comparison at the call site.
+* A fast path doesn't call ``Dataset(...)`` or ``transpose`` directly. It
+  lays fields out with ``on_coords``, ``DenseStore._own``, ``transposed``
+  and ``DenseStore.normalized``.
+* A performance trick with a numeric threshold, e.g. a per-term loop below
+  some number of terms, needs a measured table in the pull request. Without
+  one, it goes.
+
 Running Tests
 =============
 
@@ -44,6 +60,9 @@ To run the test suite:
 
     # Install development dependencies
     uv sync --extra dev --extra solvers
+
+    # Also run the mathspec binder tests (needs Python >= 3.12)
+    uv sync --extra dev --extra solvers --extra spec
 
     # Run all tests
     pytest
@@ -83,20 +102,17 @@ When working on performance-sensitive code, use the internal benchmark suite in 
 
 .. code-block:: bash
 
-    # Install benchmark dependencies
-    uv sync --extra benchmarks
+    # Install benchmark dependencies (keep the dev extra: the benchmarks need both)
+    uv sync --extra dev --extra benchmarks
 
-    # Quick timing benchmarks
-    pytest benchmarks/ --quick
+    # Smoke run: every spec builds once, no timing
+    pytest benchmarks/ --benchmark-disable -q
 
     # Compare timing between branches
-    pytest benchmarks/test_build.py --benchmark-save=master
-    pytest benchmarks/test_build.py --benchmark-save=my-feature --benchmark-compare=0001_master
+    pytest benchmarks/drivers/test_build.py --benchmark-save=master
+    pytest benchmarks/drivers/test_build.py --benchmark-save=my-feature --benchmark-compare=0001_master
 
-    # Compare peak memory between branches
-    python benchmarks/memory.py save master --quick
-    python benchmarks/memory.py save my-feature --quick
-    python benchmarks/memory.py compare master my-feature
+Peak memory is tracked on every pull request by CodSpeed rather than by a local script.
 
 See ``benchmarks/README.md`` for full details on models, phases, and usage.
 

@@ -37,11 +37,12 @@ f_mask[:3] = False
 f = m.add_variables(0, upper[5:], name="f", mask=f_mask)
 
 
-multiindex = pd.MultiIndex.from_product(
-    [list("asdfhjkg"), list("asdfghj")], names=["level_0", "level_1"]
+levels = pd.MultiIndex.from_product([list("asdfhjkg"), list("asdfghj")])
+g = m.add_variables(coords=[pd.RangeIndex(len(levels), name="multi")], name="g")
+g = g.assign_coords(
+    level_0=("multi", levels.get_level_values(0)),
+    level_1=("multi", levels.get_level_values(1)),
 )
-multiindex.name = "multi"
-g = m.add_variables(coords=[multiindex], name="g")
 
 # create linear expression for each variable
 lu = 1 * u
@@ -184,6 +185,21 @@ def test_print_options(obj: Variable | LinearExpression | Constraint) -> None:
     obj.print(display_max_rows=20)
 
 
+def test_truncated_expression_repr_prints_constant_once() -> None:
+    expr = (np.arange(1, 11) * x).sum() + 5
+    assert repr(expr).splitlines()[-1] == (
+        "+1 x[0] + 2 x[1] + 3 x[2] ... +8 x[7] + 9 x[8] + 10 x[9] + 5"
+    )
+
+
+def test_truncated_quadratic_expression_repr_shows_last_terms() -> None:
+    expr = (np.arange(1, 11) * x * a).sum()
+    assert repr(expr).splitlines()[-1] == (
+        "+1 x[0] a[0] + 2 x[1] a[1] + 3 x[2] a[2] ... "
+        "+8 x[7] a[7] + 9 x[8] a[8] + 10 x[9] a[9]"
+    )
+
+
 def test_format_labels() -> None:
     assert m.variables.format_labels([1, 2, 3])
     assert m.constraints.format_labels([1, 2, 3])
@@ -208,7 +224,7 @@ def test_repr_with_transposed_dataset_dim_order() -> None:
     labels = np.tile(x.labels.values, (2, 1))[..., None]
     ds = xr.Dataset(
         {
-            "coeffs": (dims, np.ones(labels.shape)),
+            "coeffs": (dims, np.ones(labels.shape, dtype=int)),
             "vars": (dims, labels),
             "const": (dims[:2], np.zeros(labels.shape[:2])),
         },

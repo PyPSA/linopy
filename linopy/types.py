@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Hashable, Iterable, Mapping, Sequence
-from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias, Union, get_args
 
 import numpy
@@ -11,10 +10,7 @@ from xarray import DataArray
 from xarray.core.coordinates import DataArrayCoordinates, DatasetCoordinates
 
 if TYPE_CHECKING:
-    from linopy.constraints import (
-        AnonymousScalarConstraint,
-        ConstraintBase,
-    )
+    from linopy.constraints import AnonymousScalarConstraint, Constraint
     from linopy.expressions import (
         LinearExpression,
         QuadraticExpression,
@@ -45,13 +41,12 @@ UNLABELED_TYPES = get_args(UnlabeledLike)
 
 SignLike: TypeAlias = str | numpy.ndarray | DataArray | Series | DataFrame
 MaskLike: TypeAlias = numpy.ndarray | DataArray | Series | DataFrame
-PathLike: TypeAlias = str | Path
 
 # These reference types only available under TYPE_CHECKING, so use Union with strings
 VariableLike: TypeAlias = Union["ScalarVariable", "Variable"]
 ExpressionLike: TypeAlias = Union[
     "ScalarLinearExpression", "LinearExpression", "QuadraticExpression"
 ]
-ConstraintLike = Union["ConstraintBase", "AnonymousScalarConstraint"]
+ConstraintLike = Union["Constraint", "AnonymousScalarConstraint"]
 LinExprLike = Union["Variable", "LinearExpression"]
 SideLike = Union[ConstantLike, VariableLike, ExpressionLike]  # noqa: UP007

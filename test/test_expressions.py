@@ -9,7 +9,7 @@ import xarray as xr
 
 from linopy import Model
 from linopy.expressions import Expressions, LinearExpression, QuadraticExpression
-from linopy.solvers import available_solvers
+from linopy.solvers import licensed_solvers
 from linopy.testing import assert_linequal
 
 
@@ -128,16 +128,32 @@ def test_model_repr_contains_expressions(m: Model) -> None:
     assert "* expr_x" in r
 
 
-@pytest.mark.skipif(not available_solvers, reason="No solver available")
+@pytest.mark.skipif(not licensed_solvers, reason="No solver available")
 def test_expressions_solution() -> None:
     m = Model()
     x = m.add_variables(lower=0, coords=[pd.RangeIndex(3, name="first")], name="x")
     m.add_constraints(x >= 2)
     m.add_expressions(2 * x, name="double_x")
     m.add_objective(x.sum())
-    m.solve(available_solvers[0])
+    m.solve(licensed_solvers[0])
 
     sol = m.expressions.solution
     assert isinstance(sol, xr.Dataset)
     assert "double_x" in sol
     assert (sol["double_x"] == 4).all()
+
+
+def test_expression_solution_maps_variable_values() -> None:
+    m = Model()
+    y = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="y")
+    z = m.add_variables(coords=[pd.RangeIndex(2, name="j")], name="z")
+    m._mock_solve()
+    y.solution = xr.DataArray([10.0, 20.0, 30.0], coords=y.coords)
+    z.solution = xr.DataArray([1.0, 2.0], coords=z.coords)
+    expected = 2 * y.solution + z.solution
+    xr.testing.assert_equal((2 * y + z).solution, expected.rename("solution"))
+    expected = y.solution * z.solution
+    xr.testing.assert_equal((y * z).solution, expected.rename("solution"))
+    m.remove_variables("z")
+    with pytest.raises(KeyError):
+        (2 * y + z).solution

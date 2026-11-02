@@ -28,7 +28,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import Model, available_solvers
+from linopy import Model, licensed_solvers
 from linopy.solver_capabilities import SolverFeature, solver_supports
 
 # ---------------------------------------------------------------------------
@@ -37,12 +37,12 @@ from linopy.solver_capabilities import SolverFeature, solver_supports
 
 SOS_DIRECT = sorted(
     s
-    for s in available_solvers
+    for s in licensed_solvers
     if solver_supports(s, SolverFeature.SOS_CONSTRAINTS)
     and solver_supports(s, SolverFeature.DIRECT_API)
 )
 SOS_FILE = sorted(
-    s for s in available_solvers if solver_supports(s, SolverFeature.SOS_CONSTRAINTS)
+    s for s in licensed_solvers if solver_supports(s, SolverFeature.SOS_CONSTRAINTS)
 )
 SOS_PATHS = [
     *[pytest.param(s, "direct", id=f"{s}-direct") for s in SOS_DIRECT],

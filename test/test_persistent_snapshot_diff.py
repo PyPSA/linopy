@@ -52,7 +52,7 @@ def test_is_empty_on_unmutated(baseline: Model) -> None:
 
 def test_bounds_only_mutation(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
-    baseline.variables["x"].lower = 1
+    baseline.variables["x"].update(lower=1)
     diff = ModelDiff.from_snapshot(snap, baseline)
     assert isinstance(diff, ModelDiff)
     assert "x" in diff.changed_variables
@@ -63,7 +63,7 @@ def test_bounds_only_mutation(baseline: Model) -> None:
 
 def test_rhs_only_mutation(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
-    baseline.constraints["c1"].rhs = 9
+    baseline.constraints["c1"].update(rhs=9)
     diff = ModelDiff.from_snapshot(snap, baseline)
     assert isinstance(diff, ModelDiff)
     assert "c1" in diff.changed_constraints
@@ -115,7 +115,7 @@ def test_remove_variables_is_structural(baseline: Model) -> None:
 def test_coef_value_change_same_sparsity(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     c = baseline.constraints["c1"]
-    c.coeffs = c.coeffs * 3
+    c.update(coeffs=c.coeffs * 3)
     diff = ModelDiff.from_snapshot(snap, baseline)
     assert isinstance(diff, ModelDiff)
     assert "c1" in diff.changed_constraints
@@ -146,7 +146,7 @@ def test_coef_changes_across_containers(baseline: Model) -> None:
 def test_coef_sparsity_change(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     x = baseline.variables["x"]
-    baseline.constraints["c2"].lhs = 2 * x.sum()
+    baseline.constraints["c2"].update(lhs=2 * x.sum())
     diff = ModelDiff.from_snapshot(snap, baseline)
     assert diff is RebuildReason.SPARSITY
 
@@ -162,7 +162,7 @@ def test_deep_copy_invariant(baseline: Model) -> None:
 def test_same_model_false_ignores_dirty_flag(baseline: Model) -> None:
     snap = ModelSnapshot.capture(baseline)
     c = baseline.constraints["c1"]
-    c.coeffs = c.coeffs * 5
+    c.update(coeffs=c.coeffs * 5)
     c._coef_dirty = False
     diff_fast = ModelDiff.from_snapshot(snap, baseline, same_model=True)
     assert isinstance(diff_fast, ModelDiff)
@@ -334,6 +334,7 @@ def test_diff_snapshot_matches_capture(baseline: Model, mutate: str) -> None:
         baseline.add_objective(3 * x.sum() + 2 * y.sum(), overwrite=True)
     diff = ModelDiff.from_snapshot(snap, baseline)
     assert isinstance(diff, ModelDiff)
+    assert diff.snapshot is not None
     _assert_snapshot_equal(diff.snapshot, ModelSnapshot.capture(baseline))
 
 
@@ -350,6 +351,7 @@ def test_diff_snapshot_matches_capture_under_ignore_dims() -> None:
     snap = ModelSnapshot.capture(m1)
     diff = ModelDiff.from_snapshot(snap, m2, ignore_dims={"t"})
     assert isinstance(diff, ModelDiff)
+    assert diff.snapshot is not None
     _assert_snapshot_equal(diff.snapshot, ModelSnapshot.capture(m2))
 
 
@@ -364,6 +366,7 @@ def test_from_models_snapshot_matches_capture() -> None:
     m1, m2 = build(4.0), build(7.0)
     diff = ModelDiff.from_models(m1, m2)
     assert isinstance(diff, ModelDiff)
+    assert diff.snapshot is not None
     _assert_snapshot_equal(diff.snapshot, ModelSnapshot.capture(m2))
 
 

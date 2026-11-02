@@ -95,7 +95,7 @@ def test_two_consecutive_solves_no_stale_state(solver_name: str) -> None:
 def test_cross_model_scenario_sweep(solver_name: str) -> None:
     m1 = _base_model()
     m2 = _base_model()
-    m2.constraints["c1"].rhs = 6.0
+    m2.constraints["c1"].update(rhs=6.0)
     m3 = _base_model()
     m3.variables["x"].lower.values[...] = 2.0
 
@@ -118,7 +118,7 @@ def test_cross_model_scenario_sweep(solver_name: str) -> None:
     for mk in (m2, m3):
         fresh = _base_model()
         if mk is m2:
-            fresh.constraints["c1"].rhs = 6.0
+            fresh.constraints["c1"].update(rhs=6.0)
         else:
             fresh.variables["x"].lower.values[...] = 2.0
         s_fresh = _built(solver_name, fresh)
@@ -178,7 +178,7 @@ def test_dirty_flag_ignored_across_models(solver_name: str) -> None:
 
     m2 = _base_model()
     c = m2.constraints["c1"]
-    c.coeffs = c.coeffs * 3
+    c.update(coeffs=c.coeffs * 3)
     c._coef_dirty = False
 
     s.solve(m2, assign=True)
@@ -187,7 +187,7 @@ def test_dirty_flag_ignored_across_models(solver_name: str) -> None:
 
     fresh = _base_model()
     cf = fresh.constraints["c1"]
-    cf.coeffs = cf.coeffs * 3
+    cf.update(coeffs=cf.coeffs * 3)
     s_fresh = _built(solver_name, fresh)
     s_fresh.solve(assign=True)
     assert np.isclose(_obj(m2), _obj(fresh))
@@ -235,7 +235,7 @@ def test_backend_exception_during_apply_rebuilds(
     s.solve(assign=True)
 
     c = m.constraints["c1"]
-    c.coeffs = c.coeffs * 2
+    c.update(coeffs=c.coeffs * 2)
     assert c._coef_dirty is True
 
     def _boom(*args: Any, **kwargs: Any) -> None:
@@ -303,22 +303,22 @@ def _apply_scenario(model: Model, scenario: str) -> None:
     if scenario == "bound_only":
         model.variables["x"].lower.values[...] = 3.0
     elif scenario == "rhs_only":
-        model.constraints["c1"].rhs = 7.0
+        model.constraints["c1"].update(rhs=7.0)
     elif scenario == "single_cell_coef":
         c = model.constraints["c1"]
         new = c.coeffs.copy()
         new.values[0, 0] = 5.0
-        c.coeffs = new
+        c.update(coeffs=new)
     elif scenario == "multi_row_coef":
         c = model.constraints["c2"]
-        c.coeffs = c.coeffs * 2
+        c.update(coeffs=c.coeffs * 2)
     elif scenario == "mixed":
         model.variables["x"].lower.values[...] = 1.0
-        model.constraints["c1"].rhs = 6.0
+        model.constraints["c1"].update(rhs=6.0)
         c = model.constraints["c2"]
         new = c.coeffs.copy()
         new.values[0, 0] = 4.0
-        c.coeffs = new
+        c.update(coeffs=new)
     else:
         raise ValueError(scenario)
 
@@ -371,7 +371,7 @@ def test_disallow_rebuild_passes_when_update_works(solver_name: str) -> None:
     s = _built(solver_name, m)
     s.solve(assign=True)
 
-    m.constraints["c1"].rhs = 6.0
+    m.constraints["c1"].update(rhs=6.0)
     s.solve(m, disallow_rebuild=True, assign=True)
     assert s._in_place_updates == 1
     assert s._rebuilds == 0
@@ -438,7 +438,7 @@ def test_track_updates_false_cross_instance_resolve(solver_name: str) -> None:
     base_obj = _obj(m1)
 
     m2 = _base_model()
-    m2.constraints["c1"].rhs = 8.0
+    m2.constraints["c1"].update(rhs=8.0)
     result = s.solve(m2, assign=True)
     assert s._in_place_updates == 1
     assert s._rebuilds == 0
@@ -458,7 +458,7 @@ def test_track_updates_false_cross_instance_update(solver_name: str) -> None:
     s.solve(assign=True)
 
     m2 = _base_model()
-    m2.constraints["c1"].rhs = 8.0
+    m2.constraints["c1"].update(rhs=8.0)
     diff = s.update(m2, apply=False)
     assert isinstance(diff, ModelDiff)
     assert diff.summary()["con_rhs"] == 3

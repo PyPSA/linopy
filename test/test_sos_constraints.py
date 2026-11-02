@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import Model, available_solvers
+from linopy import Model, available_solvers, licensed_solvers
 
 
 def test_add_sos_constraints_registers_variable() -> None:
@@ -61,7 +61,7 @@ def test_sos_constraints_written_to_lp(tmp_path: Path) -> None:
     assert "3.5" in content
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
+@pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobipy not installed")
 def test_to_gurobipy_emits_sos_constraints() -> None:
     gurobipy = pytest.importorskip("gurobipy")
 
@@ -78,7 +78,7 @@ def test_to_gurobipy_emits_sos_constraints() -> None:
     assert model.NumSOS == 1
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+@pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobi not installed")
 def test_sos1_binary_maximize_lp_polars() -> None:
     gurobipy = pytest.importorskip("gurobipy")
 
@@ -98,7 +98,7 @@ def test_sos1_binary_maximize_lp_polars() -> None:
     assert np.isclose(m.objective.value, 3)
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+@pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobi not installed")
 def test_sos2_binary_maximize_direct() -> None:
     gurobipy = pytest.importorskip("gurobipy")
 
@@ -118,7 +118,7 @@ def test_sos2_binary_maximize_direct() -> None:
     assert np.isclose(m.objective.value, 5)
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+@pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobi not installed")
 def test_sos2_binary_maximize_different_coeffs() -> None:
     gurobipy = pytest.importorskip("gurobipy")
 
@@ -138,7 +138,7 @@ def test_sos2_binary_maximize_different_coeffs() -> None:
     assert np.isclose(m.objective.value, 4)
 
 
-@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+@pytest.mark.skipif("xpress" not in licensed_solvers, reason="Xpress not installed")
 def test_to_xpress_emits_sos_constraints() -> None:
     m = Model()
     segments = pd.Index([0.0, 0.5, 1.0], name="seg")
@@ -150,7 +150,7 @@ def test_to_xpress_emits_sos_constraints() -> None:
     assert problem.attributes.sets == 1
 
 
-@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+@pytest.mark.skipif("xpress" not in licensed_solvers, reason="Xpress not installed")
 def test_to_xpress_emits_grouped_sos_constraints() -> None:
     m = Model()
     groups = pd.Index(["a", "b"], name="group")
@@ -163,7 +163,7 @@ def test_to_xpress_emits_grouped_sos_constraints() -> None:
     assert problem.attributes.sets == len(groups)
 
 
-@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+@pytest.mark.skipif("xpress" not in licensed_solvers, reason="Xpress not installed")
 def test_sos2_xpress_direct() -> None:
     m = Model()
     locations = pd.Index([0, 1, 2], name="locations")
@@ -178,7 +178,7 @@ def test_sos2_xpress_direct() -> None:
     assert np.isclose(m.objective.value, 5)
 
 
-@pytest.mark.skipif("xpress" not in available_solvers, reason="Xpress not installed")
+@pytest.mark.skipif("xpress" not in licensed_solvers, reason="Xpress not installed")
 def test_qp_sos1_xpress_direct() -> None:
     m = Model()
     seg = pd.Index([0, 1, 2], name="seg")
@@ -196,7 +196,7 @@ def test_qp_sos1_xpress_direct() -> None:
     assert np.isclose(m.objective.value, -25)
 
 
-@pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobi not installed")
+@pytest.mark.skipif("gurobi" not in licensed_solvers, reason="Gurobi not installed")
 def test_reformulate_sos_true_reformulates_on_native_solver(tmp_path: Path) -> None:
     """
     ``reformulate_sos=True`` must reformulate even when the solver supports SOS.

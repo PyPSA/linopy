@@ -25,12 +25,37 @@ you're unsure what a particular operator or argument does.
   quadratic) expressions; arithmetic, broadcasting, ``sum``,
   ``groupby``, ``rolling``, ``where``.
 - :doc:`creating-constraints` — turning expressions into ``≤`` / ``≥``
-  / ``==`` constraints, and the ``CSRConstraint`` memory-efficient
-  alternative.
+  / ``==`` constraints, held dense or sparse (CSR).
 - :doc:`coordinate-alignment` — how linopy lines up operands that live
   on different coordinates, and how to control it with ``join``.
 
 After these four you can build any LP/MIP/QP linopy supports.
+
+If your data comes as tables, one row per key combination, read
+:doc:`long-form-inputs`. It pivots such frames with
+``linopy.from_long`` and sums over member-group tables with
+``linopy.Relation``.
+
+
+Dense and sparse models
+-----------------------
+
+Every model holds its expressions in one of two representations, picked
+with ``Model(sparse=...)`` at construction. The dense representation, the
+default, pads each row to the widest row along ``_term``. The sparse
+representation stores each expression as a CSR matrix (compressed sparse
+rows) and holds every constraint's left-hand side in CSR form whenever the
+grid can hold its coordinates. Both share one API and give the same model.
+
+.. code-block:: python
+
+    m = linopy.Model(sparse=True)
+
+Sparse suits models that aggregate many entities into few rows, such as
+generators into buses. Operations without a sparse path run on a dense
+copy, emit a ``PerformanceWarning`` and leave the expression sparse. See
+:doc:`sparse-models` for the operations that keep the sparse backing, the
+ones that densify, and the ``warn_on_densify`` option.
 
 
 Numerical scaling
@@ -83,6 +108,32 @@ bound, swap a constraint, or copy it for what-if analysis.
   variables.
 
 
+Building a model from a spec
+-----------------------------
+
+Instead of calling ``add_variables`` / ``add_constraints`` directly,
+you can declare a model as a `mathspec
+<https://mathspec.readthedocs.io>`__ YAML program attached to
+data, and let linopy build it.
+
+- :doc:`building-models-from-specs` — ``Model.from_spec``, attaching
+  data to a spec, solving, and folding named expressions with
+  ``linopy.spec.evaluate``. Requires ``pip install "linopy[spec]"``
+  (Python >= 3.12).
+- :doc:`spec-data` — the source contract and missing rows, storing the
+  data in ``model.parameters``, reading results, saving and rebuilding,
+  typesetting and variants.
+
+linopy supports a subset of mathspec. A constraint row that absence
+leaves without terms (a ``missing: absent`` parameter, a ``missing:
+neutral`` parameter such as ``0 == load``, or a ``where:``-masked
+variable inside a sum) is refused, where mathspec skips and reports it;
+linopy is stricter here (`#993
+<https://github.com/PyPSA/linopy/issues/993>`__). ``store=True`` stores
+only relations of one key column and one value column, and raises
+``SpecDataError`` for any other.
+
+
 Where to go next
 ----------------
 
@@ -94,8 +145,8 @@ Where to go next
   :doc:`piecewise-linear-constraints`, and the
   :doc:`testing-framework` for asserting structural properties of a
   model.
-- **Solving** — :doc:`solve-on-remote` (SSH),
-  :doc:`solve-on-oetc` (OET Cloud), :doc:`gpu-acceleration` (cuPDLPx).
+- **Solving** — :doc:`solve-on-remote` (SSH), :doc:`gpu-acceleration`
+  (cuPDLPx).
 - **Troubleshooting** — :doc:`infeasible-model` (diagnosing infeasible
   problems), :doc:`gurobi-double-logging` (and other solver quirks).
 - **Reference** — the full :doc:`api` listing.

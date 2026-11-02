@@ -5,7 +5,10 @@ Created on Tue Jan 28 09:03:35 2025.
 @author: sid
 """
 
+import sys
+from operator import attrgetter
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -14,7 +17,7 @@ from test_io import model  # noqa: F401
 
 from linopy import GREATER_EQUAL, Model, solvers
 from linopy.constants import Result, Solution, Status
-from linopy.constraints import CSRConstraint
+from linopy.constraints import Constraint
 from linopy.solver_capabilities import (
     SOLVER_REGISTRY,
     SolverFeature,
@@ -121,6 +124,18 @@ def test_from_name_applies_solver_options(simple_model: Model) -> None:
 
 
 @pytest.mark.skipif(
+    "scip" not in set(solvers.licensed_solvers), reason="SCIP is not installed"
+)
+def test_scip_quiet_model_solve(
+    simple_model: Model, capfd: pytest.CaptureFixture[str]
+) -> None:
+    solver_options: dict[str, Any] = {"display/verblevel": 0}
+    status, condition = simple_model.solve("scip", **solver_options)
+    assert (status, condition) == ("ok", "optimal")
+    assert capfd.readouterr() == ("", "")
+
+
+@pytest.mark.skipif(
     "highs" not in set(solvers.licensed_solvers), reason="HiGHS is not installed"
 )
 def test_solver_state_compatibility_setters(simple_model: Model) -> None:
@@ -167,14 +182,14 @@ def test_assign_result_explicit(simple_model: Model) -> None:
     assert float(simple_model.variables["y"].solution) == 2.0
 
 
-def test_assign_result_with_csr_constraints_avoids_data_reconstruction(
+def test_assign_result_with_sparse_constraints_avoids_data_reconstruction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    m = Model()
+    m = Model(sparse=True)
     x = m.add_variables(coords=[range(3)], name="x")
-    m.add_constraints(x >= 0, name="c", freeze=True)
+    m.add_constraints(x >= 0, name="c")
     con = m.constraints["c"]
-    assert isinstance(con, CSRConstraint)
+    assert con.lhs.is_sparse
 
     primal = np.arange(m._xCounter, dtype=float)
     dual = np.arange(m._cCounter, dtype=float) + 10
@@ -184,10 +199,10 @@ def test_assign_result_with_csr_constraints_avoids_data_reconstruction(
         solver_name="mock",
     )
 
-    def fail_data(self: CSRConstraint) -> None:
-        raise AssertionError("CSRConstraint.data was accessed")
+    def fail_data(self: Constraint) -> None:
+        raise AssertionError("Constraint.data was accessed")
 
-    monkeypatch.setattr(CSRConstraint, "data", property(fail_data))
+    monkeypatch.setattr(Constraint, "data", property(fail_data))
     m.assign_result(result)
 
     np.testing.assert_array_equal(m.variables["x"].solution.values, primal)
@@ -220,7 +235,7 @@ def test_copt_closes_env_per_solve(
     closes: list[object] = []
     original = coptpy.Envr.close
 
-    def close(self: object) -> None:
+    def close(self: Any) -> None:
         closes.append(self)
         original(self)
 
@@ -342,6 +357,43 @@ def test_free_mps_solution_parsing(solver: str, tmp_path: Path) -> None:
 
     assert result.status.is_ok
     assert result.solution.objective == 30.0
+
+
+@pytest.mark.skipif(
+    "scip" not in set(solvers.licensed_solvers), reason="SCIP is not installed"
+)
+def test_scip_lp_returns_duals() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, name="x")
+    y = m.add_variables(lower=0, name="y")
+    m.add_constraints(x + y >= 4, name="c1")
+    m.add_constraints(x + 3 * y >= 6, name="c2")
+    m.add_objective(2 * x + 3 * y)
+    status, _ = m.solve("scip")
+
+    assert status == "ok"
+    assert m.objective.value == pytest.approx(9)
+    assert m.constraints["c1"].dual.item() == pytest.approx(1.5)
+    assert m.constraints["c2"].dual.item() == pytest.approx(0.5)
+
+
+@pytest.mark.skipif(
+    "scip" not in set(solvers.licensed_solvers), reason="SCIP is not installed"
+)
+def test_scip_milp_returns_no_duals() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, integer=True, name="x")
+    y = m.add_variables(lower=0, name="y")
+    m.add_constraints(x + y >= 4.5, name="c1")
+    m.add_constraints(x + 3 * y >= 6, name="c2")
+    m.add_constraints(x <= 3.5, name="c3")
+    m.add_objective(2 * x + 3 * y)
+    status, _ = m.solve("scip")
+
+    assert status == "ok"
+    assert m.objective.value == pytest.approx(10.5)
+    with pytest.raises(AttributeError, match="dual"):
+        _ = m.constraints["c1"].dual
 
 
 @pytest.mark.skipif(
@@ -578,7 +630,7 @@ class TestValidateModelOnBuild:
             solvers.Solver.from_name(lp_only_solver, m, io_api="lp")
 
     @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+        "highs" not in solvers.licensed_solvers, reason="HiGHS not installed"
     )
     def test_solve_without_objective_raises(self) -> None:
         m = Model()
@@ -594,7 +646,7 @@ class TestSolverDoesNotMutateModel:
     """Solver.from_model() must not mutate model state (sanitize stays Model-level)."""
 
     @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+        "highs" not in solvers.licensed_solvers, reason="HiGHS not installed"
     )
     def test_from_model_leaves_constraints_untouched(self) -> None:
         m = Model()
@@ -620,7 +672,7 @@ class TestAssignResultWiring:
     """assign_result(result, solver=...) populates model.solver."""
 
     @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+        "highs" not in solvers.licensed_solvers, reason="HiGHS not installed"
     )
     def test_assign_result_with_solver_wires_model_solver(self) -> None:
         m = Model()
@@ -636,7 +688,7 @@ class TestAssignResultWiring:
         assert m.solver_model is solver.solver_model
 
     @pytest.mark.skipif(
-        "highs" not in solvers.available_solvers, reason="HiGHS not installed"
+        "highs" not in solvers.licensed_solvers, reason="HiGHS not installed"
     )
     def test_assign_result_without_solver_kwarg_leaves_solver_unset(self) -> None:
         m = Model()
@@ -685,106 +737,84 @@ def test_parse_glpk_objective_no_value_raises(objective_text: str) -> None:
         solvers.GLPK._parse_objective(objective_text)
 
 
-mosek_installed = pytest.importorskip("mosek", reason="Mosek is not installed")
-
-
 class TestMosekChooseSolution:
-    @staticmethod
-    def _make_task_mock(
-        *,
-        bas_solsta: object | None = None,
-        itr_solsta: object | None = None,
-        itg_solsta: object | None = None,
-    ) -> MagicMock:
-        defined = {
-            mosek_installed.soltype.bas: bas_solsta,
-            mosek_installed.soltype.itr: itr_solsta,
-            mosek_installed.soltype.itg: itg_solsta,
-        }
-        task = MagicMock()
-        task.solutiondef.side_effect = lambda st: defined[st] is not None
-        task.getsolsta.side_effect = lambda st: defined[st]
-        return task
-
     @pytest.mark.parametrize(
-        "kwargs, expected_soltype",
+        "solstas, expected",
         [
             pytest.param(
-                dict(
-                    bas_solsta=mosek_installed.solsta.optimal,
-                    itr_solsta=mosek_installed.solsta.dual_infeas_cer,
-                ),
-                mosek_installed.soltype.bas,
+                {"bas": "optimal", "itr": "dual_infeas_cer"},
+                "bas",
                 id="prefers_bas_when_itr_is_farkas",
             ),
             pytest.param(
-                dict(
-                    bas_solsta=mosek_installed.solsta.optimal,
-                    itr_solsta=mosek_installed.solsta.optimal,
-                ),
-                mosek_installed.soltype.itr,
-                id="prefers_itr_on_tie",
+                {"bas": "optimal", "itr": "optimal"}, "itr", id="prefers_itr_on_tie"
             ),
+            pytest.param({"itr": "optimal"}, "itr", id="only_itr_defined"),
+            pytest.param({"bas": "optimal"}, "bas", id="only_bas_defined"),
+            pytest.param({}, None, id="nothing_defined"),
+            pytest.param({"itg": "integer_optimal"}, "itg", id="itg_for_mip"),
             pytest.param(
-                dict(itr_solsta=mosek_installed.solsta.optimal),
-                mosek_installed.soltype.itr,
-                id="only_itr_defined",
-            ),
-            pytest.param(
-                dict(bas_solsta=mosek_installed.solsta.optimal),
-                mosek_installed.soltype.bas,
-                id="only_bas_defined",
-            ),
-            pytest.param(
-                dict(),
-                None,
-                id="nothing_defined",
-            ),
-            pytest.param(
-                dict(itg_solsta=mosek_installed.solsta.integer_optimal),
-                mosek_installed.soltype.itg,
-                id="itg_for_mip",
-            ),
-            pytest.param(
-                dict(
-                    bas_solsta=mosek_installed.solsta.optimal,
-                    itr_solsta=mosek_installed.solsta.optimal,
-                    itg_solsta=mosek_installed.solsta.integer_optimal,
-                ),
-                mosek_installed.soltype.itg,
+                {"bas": "optimal", "itr": "optimal", "itg": "integer_optimal"},
+                "itg",
                 id="itg_wins_over_bas_itr",
             ),
             pytest.param(
-                dict(
-                    bas_solsta=mosek_installed.solsta.unknown,
-                    itr_solsta=mosek_installed.solsta.optimal,
-                ),
-                mosek_installed.soltype.itr,
+                {"bas": "unknown", "itr": "optimal"},
+                "itr",
                 id="optimal_itr_over_unknown_bas",
             ),
             pytest.param(
-                dict(
-                    bas_solsta=mosek_installed.solsta.optimal,
-                    itr_solsta=mosek_installed.solsta.unknown,
-                ),
-                mosek_installed.soltype.bas,
+                {"bas": "optimal", "itr": "unknown"},
+                "bas",
                 id="optimal_bas_over_unknown_itr",
             ),
             pytest.param(
-                dict(
-                    bas_solsta=mosek_installed.solsta.prim_infeas_cer,
-                    itr_solsta=mosek_installed.solsta.dual_infeas_cer,
-                ),
-                mosek_installed.soltype.itr,
+                {"bas": "prim_infeas_cer", "itr": "dual_infeas_cer"},
+                "itr",
                 id="falls_back_to_itr_when_both_non_optimal",
             ),
         ],
     )
     def test_choose_solution(
-        self, kwargs: dict[str, object], expected_soltype: object
+        self, solstas: dict[str, str], expected: str | None
     ) -> None:
-        task = self._make_task_mock(**kwargs)
-        assert solvers.Mosek._choose_solution(task) is expected_soltype
+        mosek = pytest.importorskip("mosek", reason="Mosek is not installed")
+        defined = {
+            attrgetter(soltype)(mosek.soltype): attrgetter(solsta)(mosek.solsta)
+            for soltype, solsta in solstas.items()
+        }
+        task = MagicMock()
+        task.solutiondef.side_effect = lambda st: st in defined
+        task.getsolsta.side_effect = defined.get
+        chosen = solvers.Mosek._choose_solution(task)
+        if expected is None:
+            assert chosen is None
+        else:
+            assert chosen is attrgetter(expected)(mosek.soltype)
+
+    @pytest.mark.parametrize("log_fn", [None, Path("mosek.log")])
+    def test_log_stream_console_and_file(
+        self, log_fn: Path | None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Mocked task and module: runs without an installed or licensed Mosek.
+        fake_mosek = MagicMock()
+        monkeypatch.setattr(solvers, "mosek", fake_mosek)
+        monkeypatch.setattr(
+            solvers.Mosek, "is_available", classmethod(lambda cls: True)
+        )
+        task = MagicMock()
+        solver = solvers.Mosek()
+        # Only the stream setup matters; the rest of the solve runs on mocks.
+        solver._solve(task, None, log_fn, None, None, "direct", "min")
+
+        log = fake_mosek.streamtype.log
+        task.set_Stream.assert_called_once_with(log, sys.stdout.write)
+        if log_fn is None:
+            task.linkfiletostream.assert_not_called()
+        else:
+            task.linkfiletostream.assert_called_once_with(
+                log, solvers.path_to_string(log_fn), 0
+            )
 
     @pytest.mark.skipif(
         "mosek" not in set(solvers.licensed_solvers),
@@ -804,3 +834,12 @@ class TestMosekChooseSolution:
         assert result.solution is not None
         assert math.isfinite(result.solution.objective)
         assert result.solution.objective == pytest.approx(5.0, abs=1e-3)
+
+
+def test_cplex_unscaled_infeasibilities_is_imprecise_but_ok() -> None:
+    """CPLEX 'optimal with unscaled infeasibilities' must keep its solution (#368)."""
+    condition = "optimal with unscaled infeasibilities"
+    tc = solvers.Cplex.CONDITION_MAP[condition]
+    status = Status.from_termination_condition(tc)
+    assert status.termination_condition == "imprecise"
+    assert status.is_ok

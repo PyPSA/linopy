@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import EQUAL, Model, available_solvers
+from linopy import EQUAL, Model, licensed_solvers
 from linopy.testing import (
     assert_conequal,
     assert_equal,
@@ -38,22 +38,31 @@ def test_model_force_dims_names() -> None:
         m.add_variables([-5], [10])
 
 
+@pytest.mark.parametrize("sparse", [False, True])
+@pytest.mark.parametrize("dim", ["sign", "rhs", "scaling"])
+def test_model_rejects_reserved_dim_names(sparse: bool, dim: str) -> None:
+    m = Model(sparse=sparse)
+    coords = [pd.RangeIndex(3, name=dim)]
+    with pytest.raises(ValueError, match="unsupported dimension names"):
+        m.add_variables(coords=coords)
+    x = m.add_variables(coords=[pd.RangeIndex(3, name="i")], name="x")
+    with pytest.raises(ValueError, match="unsupported dimension names"):
+        m.add_constraints(x >= xr.DataArray(np.zeros(3), coords=coords))
+
+
 def test_model_solver_dir() -> None:
     d: str = gettempdir()
     m: Model = Model(solver_dir=d)
     assert m.solver_dir == Path(d)
 
 
-SPARSE_CONFIG = pytest.mark.parametrize(
-    "sparse", [False, pytest.param(True, marks=pytest.mark.v1)]
-)
+SPARSE_CONFIG = pytest.mark.parametrize("sparse", [False, True])
 
 
 @SPARSE_CONFIG
 def test_model_config_defaults(sparse: bool) -> None:
     m = Model(sparse=sparse, set_names_in_solver_io=False)
     assert m.sparse is sparse
-    assert m.freeze_constraints is sparse
     assert m.set_names_in_solver_io is False
 
 
@@ -61,7 +70,6 @@ def test_model_config_defaults(sparse: bool) -> None:
 def test_model_copy_preserves_config(sparse: bool) -> None:
     copied = Model(sparse=sparse, set_names_in_solver_io=True).copy()
     assert copied.sparse is sparse
-    assert copied.freeze_constraints is sparse
     assert copied.set_names_in_solver_io is True
 
 
@@ -170,13 +178,12 @@ def test_remove_variable() -> None:
     assert not m.objective.vars.isin(x.labels).any()
 
 
-@pytest.mark.parametrize("freeze", [False, True])
 @pytest.mark.parametrize("quadratic", [False, True])
 def test_remove_masked_variable_keeps_unrelated_constraints(
-    freeze: bool, quadratic: bool
+    backend: Model, quadratic: bool
 ) -> None:
     # https://github.com/PyPSA/linopy/issues/883
-    m: Model = Model()
+    m = backend
 
     i = pd.Index(range(3), name="i")
     mask = [True, False, True]
@@ -186,12 +193,10 @@ def test_remove_masked_variable_keeps_unrelated_constraints(
 
     # `b` is masked, so the constraint carries empty term slots (-1), but it
     # never references `a`
-    without_a = m.add_constraints(
-        b.sum() + c, EQUAL, 0, name="without_a", freeze=freeze
-    )
+    without_a = m.add_constraints(b.sum() + c, EQUAL, 0, name="without_a")
     assert not without_a.has_variable(a)
 
-    with_a = m.add_constraints(a.sum() + c, EQUAL, 0, name="with_a", freeze=freeze)
+    with_a = m.add_constraints(a.sum() + c, EQUAL, 0, name="with_a")
     assert with_a.has_variable(a)
 
     if quadratic:
@@ -425,7 +430,7 @@ def test_model_copy_preserves_quadratic_objective(
     assert_model_equal(m, c)
 
 
-@pytest.mark.skipif(not available_solvers, reason="No solver installed")
+@pytest.mark.skipif(not licensed_solvers, reason="No solver installed")
 class TestModelCopySolved:
     def test_model_deepcopy_protocol_excludes_solution(
         self, solved_copy_test_model: Model
@@ -481,3 +486,10 @@ class TestModelCopySolved:
             assert_conequal(c.constraints[con], m.constraints[con], strict=False)
         assert_linequal(c.objective.expression, m.objective.expression)
         assert c.objective.sense == m.objective.sense
+
+
+def test_parameters_reject_multiindex() -> None:
+    mi = pd.MultiIndex.from_product([[0, 1], ["a", "b"]], names=("l1", "l2"))
+    m = Model()
+    with pytest.raises(ValueError, match=r"parameters uses dimension 'd', a `pd"):
+        m.parameters = xr.Dataset(coords=xr.Coordinates.from_pandas_multiindex(mi, "d"))

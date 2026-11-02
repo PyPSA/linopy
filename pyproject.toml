@@ -30,15 +30,14 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "scipy",
-    "bottleneck",
-    "toolz",
-    "numexpr",
     "xarray>=2024.2.0",
-    "dask>=0.18.0",
+    "pandas",
     "polars>=1.31.1",
     "tqdm",
-    "deprecation",
     "packaging",
+    # Variable.ffill/bfill go through xarray's push, which imports bottleneck
+    # directly with no numpy fallback.
+    "bottleneck",
 ]
 
 [project.urls]
@@ -46,16 +45,16 @@ Homepage = "https://github.com/PyPSA/linopy"
 Source = "https://github.com/PyPSA/linopy"
 
 [project.optional-dependencies]
-oetc = [
-    "google-cloud-storage",
-    "requests",
+# Needed only for chunked (dask-backed) arrays, e.g. `Variable.chunk()`.
+dask = [
+    "dask>=0.18.0",
 ]
 remote = [
     "paramiko",
 ]
 docs = [
-    "ipython==9.15.0",
-    "numpydoc==1.10.0",
+    "ipython==9.17.1",
+    "numpydoc==1.11.0",
     "sphinx_rtd_theme==3.1.0",
     "sphinx==9.0.4",
     "sphinx_book_theme==1.4.0",
@@ -64,8 +63,8 @@ docs = [
     "nbsphinx-link==1.4.1",
     "docutils<0.24",
     "gurobipy>=13.0.0",
-    "ipykernel==7.3.0",
-    "matplotlib==3.11.0",
+    "ipykernel==7.4.0",
+    "matplotlib==3.11.2",
     "highspy>=1.7.1",
 ]
 dev = [
@@ -76,11 +75,11 @@ dev = [
     "netcdf4",
     "paramiko",
     "types-paramiko",
-    "types-requests",
     "gurobipy",
     "highspy",
     "jupyter",
     "matplotlib",
+    "linopy[dask]",
 ]
 # Perf-relevant deps pinned exactly so run-to-run deltas reflect linopy
 # changes, not dependency bumps.
@@ -89,15 +88,15 @@ benchmarks = [
     "netcdf4==1.7.4",
     "numpy==2.4.6",
     "scipy==1.17.1",
-    "xarray==2026.7.0",
-    "pandas==3.0.5",
-    "polars==1.44.1",
-    "dask==2026.7.1",
-    "pytest==9.1.1",
-    "pytest-benchmark==5.3.0",
+    "xarray==2026.9.0",
+    "pandas==3.1.0",
+    "polars==1.44.2",
+    "dask==2026.8.0",
+    "pytest==9.2.0",
+    "pytest-benchmark==5.3.1",
     "pytest-benchmem[plot-static]==0.5.5",
-    "pytest-memray==1.10.0",
-    "pytest-codspeed==5.0.3",
+    "pytest-memray==1.11.0",
+    "pytest-codspeed==5.0.4",
 ]
 solvers = [
     "gurobipy",
@@ -110,6 +109,10 @@ solvers = [
     "xpress; platform_system != 'Darwin'",
     "pyscipopt; platform_system != 'Darwin'",
     "knitro>=15.1.0",
+]
+spec = [
+    "mathspec>=0.4,<0.5 ; python_version >= '3.12'",
+    "pyarrow",
 ]
 # GPU-only solvers kept separate to avoid env clutter.
 # Requires a CUDA 12 driver (>= 525.60.13) and GPU of compute capability >= 7.0.
@@ -151,6 +154,8 @@ filterwarnings = [
     # collection of ``linopy/variables.py`` in the source tree on
     # Windows CI.
     "ignore:piecewise:FutureWarning",
+    "ignore:long-form:FutureWarning",
+    "ignore:spec:FutureWarning",
 ]
 
 [tool.coverage.run]
@@ -161,7 +166,7 @@ omit = ["test/*"]
 exclude_also = ["if TYPE_CHECKING:"]
 
 [tool.mypy]
-exclude = ['dev/*', 'examples/*', '^benchmark/', 'doc/*']
+exclude = ['dev/*', 'examples/*', '^benchmark/', 'doc/*', '^conftest\.py$']
 ignore_missing_imports = true
 no_implicit_optional = true
 warn_unused_ignores = true
