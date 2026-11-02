@@ -10,6 +10,7 @@ from xarray.testing import assert_equal
 
 from linopy.constants import TERM_DIM
 from linopy.constraints import Constraint, _con_unwrap
+from linopy.csr import indptr_from_counts
 from linopy.expressions import LinearExpression, QuadraticExpression, _expr_unwrap
 from linopy.model import Model
 from linopy.variables import Variable, _var_unwrap
@@ -74,9 +75,11 @@ def assert_linequal(
 
 def _cell_matrix(expr: LinearExpression, n_vars: int) -> scipy.sparse.csr_array:
     """Per-cell term matrix with duplicate labels summed and zeros pruned."""
-    cells, vars_, coeffs = expr._store.terms()
+    counts, vars_, coeffs = expr._store.terms()
+    indptr = indptr_from_counts(counts, np.int64)
     shape = (int(expr.const.size), n_vars)
-    matrix = scipy.sparse.coo_array((coeffs, (cells, vars_)), shape=shape).tocsr()
+    matrix = scipy.sparse.csr_array((coeffs, vars_, indptr), shape=shape)
+    matrix.sum_duplicates()
     matrix.eliminate_zeros()
     return matrix
 

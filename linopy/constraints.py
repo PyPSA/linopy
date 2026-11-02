@@ -47,7 +47,6 @@ from linopy.common import (
     check_has_nulls,
     check_has_nulls_polars,
     contains_labels,
-    filter_nulls_polars,
     format_coord,
     format_single_constraint,
     format_single_expression,
@@ -1257,18 +1256,17 @@ class Constraint:
         -------
         df : polars.DataFrame
         """
-        cells, vars_, coeffs = self._lhs._store.terms()
         labels_flat = self._label_values()
+        mask = labels_flat != -1
+        counts, vars_, coeffs = self._lhs._store.terms(active=mask)
         long = pl.DataFrame(
-            {"labels": labels_flat[cells], "coeffs": coeffs, "vars": vars_}
+            {"labels": np.repeat(labels_flat, counts), "coeffs": coeffs, "vars": vars_}
         )
-        del cells, vars_, coeffs
-        long = filter_nulls_polars(long)
+        del counts, vars_, coeffs
         if self.nterm > 1:
             long = maybe_group_terms_polars(long)
         check_has_nulls_polars(long, name=f"{self.type} {self.name}")
 
-        mask = labels_flat != -1
         short_data: dict = {
             "labels": labels_flat[mask],
             "rhs": self.rhs.values.ravel()[mask],
