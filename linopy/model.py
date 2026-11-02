@@ -2548,7 +2548,7 @@ class Model:
         for _, var in self.variables.items():
             start, end = var.range
             values = primal[start:end].reshape(var.shape) / var.solver_scaling.values
-            var.solution = xr.DataArray(values, var.coords, dims=var.dims)
+            var.solution = var.labels.copy(deep=False, data=values)
 
         if len(result.solution.dual):
             dual = result.solution.dual
