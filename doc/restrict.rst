@@ -133,6 +133,8 @@ A long-horizon problem is often solved one time slice at a time: solve a slice
     for start in range(24, 8760 - 24, 24):
         window.advance(snapshot=sns[start : start + 24], fix={"soc": initial})
         window.solve(solver_name="highs")
+        if window.termination_condition != "optimal":
+            raise RuntimeError(f"window starting at {start} failed")
 
         # containers are built when you read them
         solution = window.solution
@@ -157,9 +159,15 @@ directly:
 * :attr:`~linopy.restrict.WindowModel.matrices` holds ``A``, ``b``, ``sense``,
   ``c``, ``lb``, ``ub`` and the labels of its rows and columns.
 * :attr:`~linopy.restrict.WindowModel.solution` and
-  :attr:`~linopy.restrict.WindowModel.dual` are ``Dataset`` objects with one
-  array per variable or constraint. They are built when you read them.
+  :attr:`~linopy.restrict.WindowModel.dual` are dictionaries with one
+  ``DataArray`` per variable or constraint, each with its own coordinates. They
+  are built when you read them.
 * :attr:`~linopy.restrict.WindowModel.objective` is the last solve's value.
+* :attr:`~linopy.restrict.WindowModel.status` and
+  :attr:`~linopy.restrict.WindowModel.termination_condition` report the outcome
+  of the last solve, as on :class:`~linopy.Model`. An infeasible window does
+  not raise on ``solve()``, but reading its values does, so check the status
+  in a loop.
 
 Terms outside the window are dropped from the objective, so the window's value
 differs from the full model's by a constant.

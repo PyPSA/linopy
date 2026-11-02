@@ -494,7 +494,7 @@ class Solver(ABC, Generic[EnvType]):
         M: Matrices,
         disallow_rebuild: bool = False,
         **run_kwargs: Any,
-    ) -> Solution:
+    ) -> Result:
         """
         Solve one matrix window, reusing this solver's model when possible.
 
@@ -503,6 +503,10 @@ class Solver(ABC, Generic[EnvType]):
         in place. Otherwise, or when the solver rejects the update, the native
         model is rebuilt from ``M`` unless ``disallow_rebuild`` is set, with
         positional labels so results stay aligned with the window's arrays.
+
+        Returns the solver's :class:`~linopy.constants.Result`, whose status
+        tells whether the window was solved; its solution is indexed by window
+        position.
         """
         if self.io_api != "direct":
             raise NotImplementedError(
@@ -531,10 +535,7 @@ class Solver(ABC, Generic[EnvType]):
                 disallow_rebuild,
             )
         self._window = M
-        solution = self._run_direct(**run_kwargs).solution
-        if solution is None:
-            raise RuntimeError("the solver returned no solution for the window")
-        return solution
+        return self._run_direct(**run_kwargs)
 
     def _build_window(self, M: Matrices) -> None:
         self.close()
@@ -2470,6 +2471,25 @@ class Cplex(Solver[None]):
     """
 
     display_name: ClassVar[str] = "CPLEX"
+
+    # "optimal with unscaled infeasibilities": the solution is usable but
+    # violates constraints slightly after unscaling, so flag it as imprecise.
+    CONDITION_MAP: ClassVar[dict[str, str]] = {
+        "optimal with unscaled infeasibilities": "imprecise",
+        "integer optimal solution": "optimal",
+        "integer optimal, tolerance": "optimal",
+        "integer infeasible": "infeasible",
+        "time limit exceeded": "time_limit",
+        "time limit exceeded, no integer solution": "infeasible",
+        "error termination": "error",
+        "error termination, no integer solution": "error",
+        "memory limit exceeded": "internal_solver_error",
+        "memory limit exceeded, no integer solution": "internal_solver_error",
+        "aborted": "user_interrupt",
+        "integer unbounded": "unbounded",
+        "integer infeasible or unbounded": "infeasible_or_unbounded",
+        "Unknown status value": "unknown",
+    }
     features: ClassVar[frozenset[SolverFeature]] = frozenset(
         {
             SolverFeature.INTEGER_VARIABLES,
@@ -2498,21 +2518,6 @@ class Cplex(Solver[None]):
     ) -> Result:
         problem_fn = self._problem_fn
         assert problem_fn is not None
-        CONDITION_MAP = {
-            "integer optimal solution": "optimal",
-            "integer optimal, tolerance": "optimal",
-            "integer infeasible": "infeasible",
-            "time limit exceeded": "time_limit",
-            "time limit exceeded, no integer solution": "infeasible",
-            "error termination": "error",
-            "error termination, no integer solution": "error",
-            "memory limit exceeded": "internal_solver_error",
-            "memory limit exceeded, no integer solution": "internal_solver_error",
-            "aborted": "user_interrupt",
-            "integer unbounded": "unbounded",
-            "integer infeasible or unbounded": "infeasible_or_unbounded",
-            "Unknown status value": "unknown",
-        }
         io_api = read_io_api_from_problem_file(problem_fn)
         sense = read_sense_from_problem_file(problem_fn)
 
@@ -2549,7 +2554,7 @@ class Cplex(Solver[None]):
                 logger.info("Unable to save solution file. Raised error: %s", err)
 
         condition = m.solution.get_status_string()
-        termination_condition = CONDITION_MAP.get(condition, condition)
+        termination_condition = self.CONDITION_MAP.get(condition, condition)
         status = Status.from_termination_condition(termination_condition)
         status.legacy_status = condition
 
@@ -2650,7 +2655,6 @@ class SCIP(Solver[None]):
         sense = read_sense_from_problem_file(problem_fn)
 
         m = scip.Model()
-        m.readProblem(path_to_string(problem_fn))
 
         if self.solver_options is not None:
             emphasis = self.solver_options.pop("setEmphasis", None)
@@ -2666,6 +2670,8 @@ class SCIP(Solver[None]):
                 m.setEmphasis(getattr(scip.SCIP_PARAMSETTING, presolve.upper()))
 
             m.setParams(self.solver_options)
+
+        m.readProblem(path_to_string(problem_fn))
 
         if log_fn is not None:
             m.setLogfile(path_to_string(log_fn))
@@ -3787,10 +3793,10 @@ class Mosek(Solver[None]):
         for k, v in self.solver_options.items():
             m.putparam(k, str(v))
 
+        # Always log to the console; additionally write to ``log_fn`` if given.
+        m.set_Stream(mosek.streamtype.log, sys.stdout.write)
         if log_fn is not None:
             m.linkfiletostream(mosek.streamtype.log, path_to_string(log_fn), 0)
-        else:
-            m.set_Stream(mosek.streamtype.log, sys.stdout.write)
 
         if warmstart_fn is not None:
             m.putintparam(mosek.iparam.sim_hotstart, mosek.simhotstart.status_keys)

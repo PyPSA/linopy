@@ -67,20 +67,32 @@ def maybe_replace_sign(sign: str) -> str:
         raise ValueError(f"Sign {sign} not in {SIGNS} or {SIGNS_alternative}")
 
 
-def maybe_replace_signs(sign: DataArray) -> DataArray:
+def maybe_replace_signs(sign: DataArray, allow_null: bool = False) -> DataArray:
     """
     Replace signs with alternative signs if available.
 
     Parameters
     ----------
         sign (np.ndarray): The signs to be replaced.
+        allow_null (bool): Whether to keep null entries, e.g. absent rows.
 
     Returns
     -------
         np.ndarray: The replaced signs.
     """
-    func = np.vectorize(maybe_replace_sign)
-    return apply_ufunc(func, sign, dask="parallelized", output_dtypes=[sign.dtype])
+    values = sign.values
+    stored = values[tuple(slice(None) if s else slice(1) for s in values.strides)]
+    is_str = values.dtype.kind == "U"
+    candidates = stored.ravel() if is_str else pd.unique(stored.ravel())
+    other = candidates[~np.isin(candidates, list(SIGNS))]
+    if allow_null:
+        other = other[pd.notna(other)]
+    if not other.size:
+        return sign
+    data = values.astype(object)
+    for alternative in pd.unique(other):
+        data[values == alternative] = maybe_replace_sign(alternative)
+    return sign.copy(data=data.astype(str) if is_str else data)
 
 
 def format_string_as_variable_name(name: Hashable) -> str:

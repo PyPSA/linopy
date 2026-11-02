@@ -1153,8 +1153,30 @@ class Variable:
         """
         Set the optimal values of the variable.
         """
-        value = DataArray(value).broadcast_like(self.labels)
-        self._data = assign_fields(self.data, solution=value)
+        if not isinstance(value, DataArray):
+            value = DataArray(value)
+        labels = self.labels
+        on_grid = (
+            value.sizes == labels.sizes
+            and value.dims == labels.dims
+            and all(
+                index.equals(labels.indexes[dim])
+                for dim, index in value.indexes.items()
+                if dim in labels.indexes
+            )
+        )
+        if not on_grid:
+            value = value.broadcast_like(labels)
+            self._data = assign_fields(self.data, solution=value)
+        elif "solution" in self.data:
+            # Fast path, e.g. after a solve: overwrite the values in place of
+            # rebuilding the Dataset, which dominates repeated writes.
+            ds = self.data
+            data = {k: ds.variables[k].data for k in ds.data_vars}
+            data["solution"] = value.data
+            self._data = ds.copy(deep=False, data=data)
+        else:
+            self._data = self.data.assign(solution=value.variable)
 
     @has_optimized_model
     def get_solver_attribute(self, attr: str) -> DataArray:

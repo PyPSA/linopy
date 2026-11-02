@@ -15,7 +15,7 @@ from linopy import LinearExpression, Model, merge
 from linopy.matrices import Matrices
 from linopy.persistent.diff import ModelDiff, RebuildReason
 from linopy.persistent.errors import RebuildRequiredError
-from linopy.restrict import MatrixWindow, RestrictionError
+from linopy.restrict import MatrixWindow, RestrictionError, WindowModel
 from linopy.solvers import Solver
 
 TIME = pd.RangeIndex(8, name="time")
@@ -465,11 +465,85 @@ def test_reading_values_before_solve_raises(read: Any) -> None:
 def test_dual_size_mismatch_raises() -> None:
     window = linear_model().restrict(time=TIME[:2])
     window.solve(solver_name="highs", output_flag=False)
-    assert window._result is not None
-    window._result = replace(window._result, dual=np.empty(0))
+    assert window._result is not None and window._result.solution is not None
+    solution = replace(window._result.solution, dual=np.empty(0))
+    window._result = replace(window._result, solution=solution)
 
     with pytest.raises(AttributeError, match="no dual values"):
         window.dual
+
+
+def test_status_before_solve() -> None:
+    window = linear_model().restrict(time=TIME[:2])
+
+    assert window.status == "initialized"
+    assert window.termination_condition == ""
+    assert window.objective.value is None
+
+
+def test_status_after_optimal_solve() -> None:
+    window = linear_model().restrict(time=TIME[:2])
+    window.solve(solver_name="highs", output_flag=False)
+
+    assert window.status == "ok"
+    assert window.termination_condition == "optimal"
+
+
+def infeasible_window() -> WindowModel:
+    sns = pd.RangeIndex(4, name="snapshot")
+    m = Model()
+    x = m.add_variables(0, 1, coords=[sns], name="x")
+    m.add_constraints(x >= 2, name="infeasible")
+    m.add_objective(x.sum())
+    return m.restrict(snapshot=sns[:2])
+
+
+@pytest.mark.parametrize(
+    "read",
+    [lambda w: w.solution, lambda w: w.dual, lambda w: w["x"]],
+    ids=["solution", "dual", "getitem"],
+)
+def test_infeasible_window_reports_status_and_raises_on_read(read: Any) -> None:
+    window = infeasible_window()
+    window.solve(solver_name="highs", output_flag=False)
+
+    assert window.status == "warning"
+    assert window.termination_condition == "infeasible"
+    with pytest.raises(AttributeError, match="termination condition 'infeasible'"):
+        read(window)
+
+
+def test_status_resets_on_advance() -> None:
+    window = linear_model().restrict(time=TIME[:2])
+    window.solve(solver_name="highs", output_flag=False)
+    window.advance(time=TIME[1:3])
+
+    assert window.status == "initialized"
+    assert window.termination_condition == ""
+
+
+def test_solution_keeps_per_variable_coords_on_shared_dims() -> None:
+    sns = pd.RangeIndex(2, name="snapshot")
+    m = Model()
+    a = m.add_variables(
+        0, 1, coords=[sns, pd.Index(["g1", "g2"], name="name")], name="a"
+    )
+    b = m.add_variables(0, 1, coords=[sns, pd.Index(["s1"], name="name")], name="b")
+    m.add_constraints(a.sum("name") + b.sum("name") >= 1, name="demand")
+    m.add_constraints(a >= 0, name="a_lb")
+    m.add_constraints(b >= 0, name="b_lb")
+    m.add_objective(a.sum() + 2 * b.sum())
+    window = m.restrict(snapshot=sns[:1])
+    window.solve(solver_name="highs", output_flag=False)
+
+    solution, dual = window.solution, window.dual
+    assert list(solution["a"].indexes["name"]) == ["g1", "g2"]
+    assert list(solution["b"].indexes["name"]) == ["s1"]
+    assert solution["b"].identical(window["b"])
+    assert not solution["b"].isnull().any()
+    assert list(dual["a_lb"].indexes["name"]) == ["g1", "g2"]
+    assert list(dual["b_lb"].indexes["name"]) == ["s1"]
+    assert not dual["b_lb"].isnull().any()
 
 
 def test_getitem_after_solve_returns_values() -> None:

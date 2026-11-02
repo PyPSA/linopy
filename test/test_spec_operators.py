@@ -18,7 +18,15 @@ pytest.importorskip("mathspec")
 yaml = pytest.importorskip("yaml")
 pytest.importorskip("highspy")
 
-from spec_helpers import TT, WHERE_DATA, WHERE_SPEC, S, solved, with_  # noqa: E402
+from spec_helpers import (  # noqa: E402
+    TT,
+    WHERE_DATA,
+    WHERE_SPEC,
+    S,
+    solved,
+    table,
+    with_,
+)
 
 from linopy import (  # noqa: E402
     LinearExpression,
@@ -108,11 +116,11 @@ def operator_spec() -> dict[str, Any]:
 OPERATOR_DATA: dict[str, Any] = {
     "t": TT,
     "s": S,
-    "season_of": pd.Series(["a", "a", "b", "b"], index=TT),
-    "v": pd.Series(V, index=TT),
-    "z": pd.Series([10.0, 20.0], index=S),
-    "lag": pd.Series([1, 2], index=S),
-    "width": pd.Series([1, 2], index=S),
+    "season_of": pd.DataFrame({"t": TT, "s": ["a", "a", "b", "b"]}),
+    "v": pd.DataFrame({"t": TT, "v": V}),
+    "z": pd.DataFrame({"s": S, "z": [10.0, 20.0]}),
+    "lag": pd.DataFrame({"s": S, "lag": [1, 2]}),
+    "width": pd.DataFrame({"s": S, "width": [1, 2]}),
 }
 
 
@@ -166,9 +174,9 @@ def test_a_missing_shift_amount_is_refused_where_a_live_row_reads_it(
     data = {
         "t": t,
         "g": g,
-        "grp": pd.Series([0, 0, 1], index=t),
-        "v": pd.Series([0.0, 4.0, 5.0], index=t),
-        "lag": pd.Series([1], index=g[:1]),
+        "grp": pd.DataFrame({"t": t, "g": [0, 0, 1]}),
+        "v": pd.DataFrame({"t": t, "v": [0.0, 4.0, 5.0]}),
+        "lag": pd.DataFrame({"g": g[:1], "lag": [1]}),
     }
     link = {**AMOUNT_SPEC["constraints"]["link"], **where}
     spec = with_(AMOUNT_SPEC, constraints={"link": link})
@@ -193,7 +201,7 @@ WINDOW_SPEC: dict[str, Any] = {
     "constraints": {"fix": {"dims": ["t"], "expression": "x == v"}},
     "objective": {"sense": "minimize", "expression": "sum(x)"},
 }
-WINDOW_DATA: dict[str, Any] = {"t": TT, "v": pd.Series(V, index=TT)}
+WINDOW_DATA: dict[str, Any] = {"t": TT, "v": pd.DataFrame({"t": TT, "v": V})}
 
 
 def window(expression: str) -> dict[str, Any]:
@@ -241,8 +249,8 @@ def grouped_sources(capacity: pd.Series) -> dict[str, Any]:
     return {
         "bus": ["north", "south"],
         "generator": GENS,
-        "gen_bus": pd.Series(["north", "north"], index=GENS),
-        "capacity": capacity,
+        "gen_bus": pd.DataFrame({"generator": GENS, "bus": ["north", "north"]}),
+        "capacity": table(capacity, "capacity"),
     }
 
 
@@ -265,7 +273,7 @@ def test_a_relation_that_maps_nothing_leaves_every_group_at_the_empty_sum() -> N
         expressions={"per_bus": "sum(out, over=generator, by=gen_bus[bus])"},
     )
     sources = grouped_sources(pd.Series([3.0, 4.0], index=GENS))
-    sources["gen_bus"] = pd.Series([], dtype=object)
+    sources["gen_bus"] = pd.DataFrame({"generator": [], "bus": []}, dtype=object)
     m = solved(spec, sources)
 
     assert m.objective.value == pytest.approx(0.0)
@@ -372,8 +380,8 @@ def test_a_relation_into_its_own_dimension_joins_on_it(
     t = TT[:3]
     data = {
         "t": t,
-        "v": pd.Series(V[:3], index=t),
-        "next_of": pd.Series([1, 2, 2], index=t),
+        "v": pd.DataFrame({"t": t, "v": V[:3]}),
+        "next_of": pd.DataFrame({"t": t, "next": [1, 2, 2]}),
     }
     m = Model.from_spec(SELF_MAP_SPEC, data, sparse=backend.sparse)
     m.solve(solver_name="highs", output_flag=False)
@@ -391,7 +399,7 @@ RELATION_SUMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
         ),
         {
             **grouped_sources(pd.Series([3.0, 4.0], index=GENS)),
-            "gen_bus": pd.Series(["south", "south"], index=GENS),
+            "gen_bus": pd.DataFrame({"generator": GENS, "bus": ["south", "south"]}),
         },
     ),
     "into-its-own-dim": (
@@ -402,8 +410,8 @@ RELATION_SUMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
         },
         {
             "t": TT,
-            "v": pd.Series(V, index=TT),
-            "next_of": pd.Series([1, 2, 2, 0], index=TT),
+            "v": pd.DataFrame({"t": TT, "v": V}),
+            "next_of": pd.DataFrame({"t": TT, "next": [1, 2, 2, 0]}),
         },
     ),
 }
@@ -443,14 +451,17 @@ RELATION_DATA: dict[str, Any] = {
         {"t": TT, "from": ["a", "b", "a", "b"], "to": ["b", "a", "a", "b"]}
     ),
     "slot": pd.DataFrame(
-        {"s": ["a", "a", "b", "a"], "k": ["p", "q", "p", "p"]}, index=TT
+        {"t": TT, "s": ["a", "a", "b", "a"], "k": ["p", "q", "p", "p"]}
     ),
-    "zone_of": pd.Series(
-        list("aabbbbaa"), index=pd.MultiIndex.from_product([K, TT]).swaplevel()
+    "zone_of": table(
+        pd.Series(
+            list("aabbbbaa"), index=pd.MultiIndex.from_product([K, TT]).swaplevel()
+        ),
+        "s",
     ),
-    "v": pd.Series(V, index=TT),
-    "z": pd.Series([10.0, 20.0], index=S),
-    "w": pd.Series([1.0, 2.0], index=K),
+    "v": pd.DataFrame({"t": TT, "v": V}),
+    "z": pd.DataFrame({"s": S, "z": [10.0, 20.0]}),
+    "w": pd.DataFrame({"k": K, "w": [1.0, 2.0]}),
     "zk": xr.DataArray([[1.0, 2.0], [3.0, 4.0]], coords=[S, K]),
 }
 JOINS: dict[str, tuple[str, list[str], list[Any]]] = {
@@ -588,13 +599,13 @@ def test_a_where_reads_one_column_of_several(predicate: str, labels: list[int]) 
         pytest.param(
             "ends",
             pd.DataFrame({"t": TT, "from": list("abab")}),
-            r"arrived as a DataFrame with columns \['t', 'from'\]",
+            r"arrived as a DataFrame with the columns \['t', 'from'\]",
             id="multi-value-frame-lacking-a-column",
         ),
         pytest.param(
             "ends",
             pd.Series(list("abab"), index=TT),
-            r"cannot adapt Series to a table",
+            r"cannot read rows out of Series",
             id="multi-value-as-a-series",
         ),
     ],
@@ -705,7 +716,7 @@ PARTIAL_CASES: dict[str, list[float]] = {
 
 @pytest.mark.parametrize("key", PARTIAL_CASES)
 def test_a_member_a_relation_sends_nowhere_reaches_nothing(key: str) -> None:
-    data = {**OPERATOR_DATA, "season_of": pd.Series(["a", "a", "b"], index=TT[:3])}
+    data = {**OPERATOR_DATA, "season_of": pd.DataFrame({"t": TT[:3], "s": list("aab")})}
     m = solved(operator_spec(), data)
     _, dims, _ = OPERATORS[key]
     name = key.replace("-", "_")
@@ -732,8 +743,8 @@ def test_a_sum_beside_an_empty_dimension_is_the_empty_sum() -> None:
 def test_a_window_width_no_member_carries_is_a_window_of_nothing() -> None:
     data = {
         **OPERATOR_DATA,
-        "season_of": pd.Series(
-            [], index=pd.Index([], name="t", dtype=int), dtype=object
+        "season_of": pd.DataFrame(
+            {"t": pd.Series([], dtype=int), "s": pd.Series([], dtype=object)}
         ),
     }
     m = solved(operator_spec(), data)

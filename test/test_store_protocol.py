@@ -9,6 +9,7 @@ import operator
 import warnings
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -305,7 +306,8 @@ def test_vars_setter_densifies_with_reason() -> None:
 @pytest.mark.parametrize("cls", STORE_CLASSES)
 def test_absent_cell_drops_its_terms(cls: type[Store]) -> None:
     store = build_store("aux", cls)
-    cells, labels, _ = store.terms()
+    counts, labels, _ = store.terms()
+    cells = np.repeat(np.arange(store.n_cells), counts)
     absent = np.arange(store.n_cells) % 2 == 1
     expr = as_expr(store.assign_const(np.where(absent, np.nan, 1.0)))
     live = np.sort(labels[~absent[cells]])
@@ -313,3 +315,88 @@ def test_absent_cell_drops_its_terms(cls: type[Store]) -> None:
     np.testing.assert_array_equal(np.sort(expr.flat["vars"]), live)
     summed = expr.sum().vars.values
     np.testing.assert_array_equal(np.sort(summed[summed != -1]), live)
+
+
+def zero_coeff(m: Model) -> LinearExpression:
+    """A grid with a zero coefficient in some cells, kept in the store."""
+    expr = grid(m)
+    return expr.assign(coeffs=expr.coeffs.where(expr.coeffs.a != 1, 0.0))
+
+
+TERM_BUILDS = {**BUILDS, "zero-coeff": zero_coeff}
+
+
+@pytest.mark.parametrize("active", [False, True])
+@pytest.mark.parametrize("build", list(TERM_BUILDS))
+def test_terms_agree(build: str, active: bool) -> None:
+    expr = TERM_BUILDS[build](Model())
+    stores: list[Store] = []
+    for cls in STORE_CLASSES:
+        store = cls.from_dense(expr.data, expr.model)
+        assert isinstance(store, cls)
+        stores.append(store)
+    n_cells = stores[0].n_cells
+    mask = np.arange(n_cells) % 3 != 0 if active else None
+    dense, sparse = (s.terms(mask) for s in stores)
+    for got, want in zip(sparse, dense):
+        np.testing.assert_array_equal(got, want)
+    counts, labels, coeffs = dense
+    assert counts.shape == (n_cells,)
+    assert counts.sum() == len(labels) == len(coeffs)
+    assert (labels != -1).all() and (coeffs != 0).all()
+    absent = np.isnan(stores[0].const)
+    if mask is not None:
+        absent |= ~mask
+    assert (counts[absent] == 0).all()
+
+
+@pytest.mark.parametrize("cls", STORE_CLASSES)
+def test_terms_counts_match_stored_cells(cls: type[Store]) -> None:
+    store = build_store("absent", cls)
+    counts, labels, coeffs = store.terms()
+    cells = np.repeat(np.arange(store.n_cells), counts)
+    for cell, label, coeff in zip(cells, labels, coeffs):
+        cell_coeffs, cell_labels, _ = store.cell(
+            np.unravel_index(cell, store.grid.shape)
+        )
+        assert coeff in cell_coeffs[cell_labels == label]
+
+
+def masked_model(sparse: bool) -> Model:
+    """
+    Constraints with a masked row, a row dropped for an infinite rhs while
+    its lhs keeps live terms, a stored zero coefficient and duplicate terms.
+    """
+    m = Model(sparse=sparse)
+    lhs = zero_coeff(m)
+    x, y = m.variables["x"], m.variables["y"]
+    lhs = lhs + x
+    rhs = OVER_AB.where(OVER_AB != 3, np.inf)
+    m.add_constraints(lhs <= rhs, name="c", mask=OVER_AB != 2)
+    m.constraints["c"].sanitize_infinities()
+    m.add_constraints(x.sum("b") + x.sum("b") + y <= 4, name="dup")
+    m.add_objective(x.sum())
+    return m
+
+
+def test_constraint_to_polars_backends_agree() -> None:
+    dense, sparse = masked_model(False), masked_model(True)
+    for name in dense.constraints:
+        got = sparse.constraints[name].to_polars()
+        want = dense.constraints[name].to_polars()
+        key = ["labels", "vars"]
+        assert got.sort(key).equals(want.sort(key))
+        assert (want["labels"] != -1).all()
+        assert (want["coeffs"] != 0).all()
+    con = dense.constraints["c"]
+    counts = con.lhs._store.terms()[0]
+    masked = con.labels.values.ravel() == -1
+    assert counts[masked].sum() > 0, "masked rows keep live lhs terms"
+    assert con.to_polars()["labels"].n_unique() == (~masked).sum()
+
+
+def test_lp_file_backends_agree(tmp_path: Path) -> None:
+    paths = [tmp_path / f"{kind}.lp" for kind in ("dense", "sparse")]
+    for path, sparse in zip(paths, (False, True)):
+        masked_model(sparse).to_file(path, io_api="lp")
+    assert paths[0].read_text() == paths[1].read_text()

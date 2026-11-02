@@ -243,6 +243,29 @@ def test_variable_where_with_solution(x: linopy.Variable) -> None:
     assert np.isnan(filtered.data["solution"][9])
 
 
+def test_variable_solution_setter(x: linopy.Variable) -> None:
+    assert "solution" not in x.data
+    first = x.labels.copy(deep=False, data=np.arange(10.0))
+    x.solution = first
+    assert_equal(x.data["solution"], first.rename("solution"))
+
+    # an on-grid value overwrites an existing solution
+    before = x.data
+    second = x.labels.copy(deep=False, data=np.arange(10.0) + 1)
+    x.solution = second
+    assert_equal(x.data["solution"], second.rename("solution"))
+    assert_equal(before["solution"], first.rename("solution"))
+
+    # an off-grid value is aligned and broadcast as before
+    x.solution = xr.DataArray([5.0, 6.0], coords={"first": [8, 9]})
+    assert np.isnan(x.data["solution"][0])
+    assert x.data["solution"][9] == 6.0
+
+    x.solution = 2.0
+    assert (x.data["solution"] == 2.0).all()
+    assert x.data["solution"].dims == x.dims
+
+
 def test_variable_shift(x: linopy.Variable) -> None:
     x = x.shift(first=3)
     assert isinstance(x, linopy.variables.Variable)

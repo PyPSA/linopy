@@ -61,8 +61,17 @@ The source contract
 -------------------
 
 ``sources`` is any ``collections.abc.Mapping`` keyed by the names the spec
-declares, or an ``xarray.Dataset`` whose indexes are dimension sources and whose
-data variables are parameters and relations.
+declares, or an ``xarray.Dataset`` laid out the way ``store=True`` writes
+``m.parameters``: its indexes are dimension sources, its data variables
+parameters, and a relation of one key and one value column its value column
+over the key's dimension.
+
+Each kind of data takes exactly one shape for tables and one for grids, and
+anything else is refused with ``SpecDataError`` naming the shape to pass,
+rather than guessed at. A **table** is a ``pandas.DataFrame`` or a
+``polars.DataFrame`` that carries its labels in columns, never in its index,
+and has no column beyond those it is read for. A **grid** is an
+``xarray.DataArray`` over the declared dimensions.
 
 linopy reads the keys once, off ``keys()``, and never iterates the mapping
 beyond that. Each declared name is then read with one ``__getitem__``. A mapping
@@ -72,30 +81,46 @@ the :ref:`SQLite example <spec-data-sqlite>` below.
 **Dimensions.** A dimension's members come only from the source keyed by its
 name, in the order the source gives them; linopy never sorts them. A dimension
 source is a ``pandas.Index``, a list, a tuple, a 1-D numpy or pandas array
-(including extension arrays such as a ``Categorical`` or ``Int64``), a
-``pandas.Series`` or a 1-D ``DataArray``. A ``set`` or ``frozenset`` has no
-order and is read sorted; one whose labels do not sort is refused. Each label
-appears once.
+(including extension arrays such as a ``Categorical`` or ``Int64``), or a
+``pandas.Series`` or ``polars.Series``. A ``set`` has no order and is refused.
+Each label appears once: a repeated label is refused, never deduplicated. To
+take a dimension's labels from a table column, pass its unique values, which
+keeps the order of first appearance:
+
+.. code-block:: python
+
+    sources["bus"] = generators["bus"].unique()  # pandas
+    sources["bus"] = generators["bus"].unique(maintain_order=True)  # polars
+
+A dimension is never derived from a relation or a parameter: without a source
+under its name, it is refused.
 
 **Parameters.** A parameter source is read for values, aligned onto the
-dimension members. It can be
+dimension members. A parameter over dimensions is
 
-- a ``DataArray`` over the declared dimensions, in any order,
-- a ``pandas.Series`` whose (Multi)Index levels are the declared dimensions,
-- a ``dict`` keyed by label,
-- a tidy ``DataFrame`` with one column (or index level) per dimension and the
-  values in a column named after the parameter or ``value``; the
-  parameter's name wins when both are present,
-- a wide ``DataFrame`` for a parameter over two dimensions, its index and
-  columns named after them (a square frame with unnamed axes is refused, as it
-  does not say which axis is which),
-- one number, for a parameter over no dimension or the same value everywhere.
+- a table with exactly one column per dimension and the values in a column
+  named after the parameter, or
+- a ``DataArray`` over the declared dimensions, in any order.
+
+A parameter over no dimension is one number (or a 0-d ``DataArray``).
+
+.. code-block:: python
+
+    # cap: {dims: [generator]}
+    sources["cap"] = generators[["generator", "cap"]]
+    # cost: {dims: [snapshot, generator]}
+    sources["cost"] = pl.DataFrame(
+        {"snapshot": [0, 0], "generator": ["g1", "g2"], "cost": [10.0, 20.0]}
+    )
+
+A ``Series``, a ``dict``, a frame with its labels in the index or with a
+further column is refused; pass ``frame.reset_index()`` or select the
+columns.
 
 **Relations.** A relation is a table of rows with one column per column its
 entry declares, key and value columns alike, each named after it. Its source is
-a ``DataFrame`` with those columns, its named index levels counting as columns
-and any further column ignored. A bare relation (key columns only), several key
-columns and several value columns all arrive this way:
+a table with exactly those columns. A bare relation (key columns only), several
+key columns and several value columns all arrive this way:
 
 .. code-block:: python
 
@@ -104,13 +129,9 @@ columns and several value columns all arrive this way:
     # ends: {key: line, values: {bus0: bus, bus1: bus}}
     sources["ends"] = pd.DataFrame({"line": ["l0"], "bus0": ["b0"], "bus1": ["b1"]})
 
-A relation with one value column may also arrive as a ``pandas.Series`` whose
-(Multi)Index levels are the key columns, a ``dict`` keyed by key labels
-(tuples for several key columns) or a ``DataArray`` over the key's dimensions,
-where a ``NaN`` leaves that key unmapped. Each key tuple takes one row at most,
-a null in any column is refused, and every label must be a member of its
-column's dimension. Under ``missing: refused`` (the default) every key tuple
-needs a row.
+Each key tuple takes one row at most, a null in any column is refused, and every
+label must be a member of its column's dimension. Under ``missing: refused``
+(the default) every key tuple needs a row.
 
 linopy holds a relation as its rows and never lays it out as a grid over its
 key, so a bare relation over two columns of one long dimension stays as small
@@ -119,17 +140,25 @@ with mathspec's semantics: an unnamed key column is joined on and kept, and
 ``by=`` may name a list of columns. ``within=`` partitions by one value column
 of a relation keyed by the stepped dimension alone.
 
+.. note::
+
+   A parameter, unlike a relation, is laid out on the full grid of its
+   dimensions once a declaration reads it, so its memory follows the grid, not
+   the rows of its table; ``store=True`` stores that grid. Reduce sparse data on
+   a large grid before attaching it, e.g. pass ``sum(c, over=t)`` as its own
+   parameter, summed with pandas.
+
 Missing rows
 ~~~~~~~~~~~~
 
 A missing row is a member with no value. How it is spelt depends on the shape:
 
-- In a **table** (a ``Series``, a ``dict`` or a tidy ``DataFrame``), a missing
-  row is a row that is not there. A ``NaN`` in a table is refused: the row says
-  the coordinate exists and denies it in the same breath. Drop the row instead.
-- In a **grid** (a ``DataArray``, a ``Dataset`` data variable or a wide
-  ``DataFrame``), every coordinate has a cell, so a ``NaN`` (``NaT`` for a
-  datetime, ``NaN`` in an object array for a string) is a missing row.
+- In a **table**, a missing row is a row that is not there. A ``NaN`` in a
+  table is refused: the row says the coordinate exists and denies it in the
+  same breath. Drop the row instead.
+- In a **grid** (a ``DataArray`` or a ``Dataset`` data variable), every
+  coordinate has a cell, so a ``NaN`` (``NaT`` for a datetime, ``NaN`` in an
+  object array for a string) is a missing row.
 
 A grid cannot hold a hole in an integer or boolean array, so an ``int`` or
 ``bool`` parameter with holes arrives as floats with ``NaN``: an ``int`` passes
@@ -197,7 +226,7 @@ each key read with one query when the build asks for it:
 
         def __getitem__(self, key: str) -> Any:
             frame = pd.read_sql(self.QUERIES[key], self.con)
-            return frame.iloc[:, 0].tolist() if frame.shape[1] == 1 else frame
+            return frame.iloc[:, 0] if frame.shape[1] == 1 else frame
 
         def __iter__(self) -> Iterator[str]:
             return iter(self.QUERIES)
@@ -208,7 +237,7 @@ each key read with one query when the build asks for it:
 
     m = Model.from_spec(Path("dispatch.yaml"), Tables(sqlite3.connect("fleet.db")))
 
-Dimensions come back as lists, parameters as tidy frames with the values in a
+Dimensions come back as one column, parameters as tables with the values in a
 column named after the parameter. Declare a ``snapshot`` read from a date
 column as a datetime dimension and parse it with ``parse_dates=`` in
 ``read_sql``.
@@ -252,6 +281,54 @@ rows. To switch a feature off, say so with ``where:``, over a
   linear terms only. A product the data keeps raises ``NotImplementedError`` naming
   the constraint and its first such rows.
 
+
+Holes that operators create
+---------------------------
+
+Data the sources hold in full can still leave a hole in an expression: an
+operator that reads along a dimension, or through a relation, finds nothing at
+some rows. Such a hole is absence, and it behaves as above: outside a sum it
+takes the row with it, also beside other terms, and inside a sum it is a term
+left out. The model builds without an error or a warning, so a spec states
+what each edge means. Take a ramp over an ordered dimension ``s``:
+
+.. code-block:: yaml
+
+    constraints:
+      ramp:
+        dims: [s]
+        expression: p <= shift(p, along=s, offset=1)
+
+``shift(p, along=s, offset=1)`` reads nothing at the first ``s``, so ``ramp``
+has no row there; ``offset=2`` vacates the first two rows, ``offset=-1`` the
+last one. ``p + q <= shift(p, along=s, offset=1)`` loses the same row: the
+present ``p + q`` does not keep it. Pick what the edge means:
+
+- ``edge=0``, or any number, reads that number at the vacated rows, so the row
+  stays: ``shift(p, along=s, offset=1, edge=0)`` gives ``p[0] <= 0`` at the
+  first ``s``.
+- ``edge='wrap'`` reads from the other end, as on a cyclic horizon. With
+  ``within=rel[col]`` each group of a relation closes on itself.
+- ``where: position(s) > 0`` on the constraint keeps the drop and says so in
+  the spec. The rows built are the same as without it. For ``offset=2`` write
+  ``position(s) >= 2``, for ``offset=-1`` ``position(s) != -1``.
+
+The other operators read past an edge in their own way:
+
+- ``sum_back(p, along=s, window=3)`` is a sum, so it shortens its window at the
+  start rather than dropping the row: the first ``s`` reads ``p[0]`` alone.
+  ``edge='wrap'`` reaches back into the end, ``within=rel[col]`` stops at each
+  group's edge.
+- ``at(p, by=rel[col])`` reads nothing for a member the relation maps nowhere,
+  and the row goes with it. ``where: rel`` on the constraint names the rows it
+  keeps.
+- Inside a sum a hole is a term left out, so
+  ``sum(shift(q, along=s, offset=1), over=s)`` builds every row.
+
+A row the data leaves present but without a variable term is the other case,
+refused as described above. To see which rows a built constraint lacks, read
+``m.constraints["ramp"].labels == -1``: a row absence dropped or a ``where:``
+masked has no label.
 
 Storing the data in ``m.parameters``
 ------------------------------------
