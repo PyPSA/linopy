@@ -67,7 +67,6 @@ from linopy.alignment import (
     as_constant,
     as_dataarray,
     broadcast_to_coords,
-    densify_sparse_operand,
     is_sparse_backed,
 )
 from linopy.common import (
@@ -108,7 +107,7 @@ from linopy.constants import (
     STACKED_TERM_DIM,
     TERM_DIM,
 )
-from linopy.csr import CSRStore, Grid, _densify_notice
+from linopy.csr import CSRStore, Grid, _conversion_notice, _densify_notice
 from linopy.long import Relation, _positions
 from linopy.semantics import (
     AbsentType,
@@ -913,6 +912,11 @@ def _check_full_const(value: Any, like: DataArray) -> None:
         )
 
 
+def _densified_operand(other: DataArray, reason: str, model: Model) -> DataArray:
+    _conversion_notice(f"Sparse (pydata/sparse) operand densified: {reason}.", model)
+    return other.copy(data=other.data.todense())
+
+
 class BaseExpression(ABC):
     __slots__ = ("_model",)
     __array_ufunc__ = None
@@ -1491,10 +1495,8 @@ class BaseExpression(ABC):
         the dense path. The result is CSR-backed for a sparse model
         (``Model(sparse=True)``) or a CSR-backed input.
 
-        ``other`` may be a labelled :class:`xarray.DataArray` backed by a
-        `pydata/sparse <https://sparse.pydata.org>`_ array (e.g.
-        ``sparse.COO``), which the sparse contraction consumes without
-        densifying; see :meth:`LinearExpression.__matmul__`.
+        Accepts a pydata/sparse-backed DataArray; see
+        :meth:`LinearExpression.__matmul__`.
         """
         return self.__matmul__(other)
 
@@ -2815,14 +2817,13 @@ class LinearExpression(BaseExpression):
         takes the same sparse product without ever being densified, so e.g.
         a large incidence matrix costs memory in its non-zeros only. Where
         the sparse product does not apply (see :meth:`_sparse_matmul`), the
-        operand is densified with a
-        :class:`~linopy.constants.PerformanceWarning`, silenced by
-        ``linopy.options["warn_on_densify"] = False``.
+        operand is densified with a densify notice, which follows
+        ``linopy.options["warn_on_densify"]`` like the others.
         """
         other = as_constant(other)
         other_is_const = not isinstance(other, LinearExpression | variables.Variable)
         expr: LinearExpression = self
-        reason: str = "matmul without a sparse path"
+        reason = "matmul"
         if other_is_const and type(self) is LinearExpression:
             sparse = self._sparse_matmul(other)
             if not isinstance(sparse, str):
@@ -2832,7 +2833,7 @@ class LinearExpression(BaseExpression):
         if other_is_const:
             other = _matmul_operand_to_dataarray(other, expr.coords, expr.coord_dims)
             if is_sparse_backed(other):
-                other = densify_sparse_operand(other, reason)
+                other = _densified_operand(other, reason, self.model)
 
         common_dims = list(set(expr.coord_dims).intersection(other.dims))
         res = (expr * other).sum(dim=common_dims)
@@ -3455,7 +3456,9 @@ class QuadraticExpression(BaseExpression):
 
         other = _matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
         if is_sparse_backed(other):
-            other = densify_sparse_operand(other, "matmul on a quadratic expression")
+            other = _densified_operand(
+                other, "matmul on a quadratic expression", self.model
+            )
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
 

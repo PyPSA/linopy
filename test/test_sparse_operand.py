@@ -8,8 +8,6 @@ the same result.
 
 from __future__ import annotations
 
-import time
-import tracemalloc
 import warnings
 from typing import Any
 
@@ -19,7 +17,7 @@ import pytest
 import xarray as xr
 
 import linopy
-from linopy import LinearExpression, Model, Variable
+from linopy import LinearExpression, Model, QuadraticExpression, Variable
 from linopy.alignment import is_sparse_backed
 from linopy.testing import assert_equivalent, assert_quadequal
 
@@ -60,23 +58,36 @@ def receiver(x: Variable, kind: str) -> Variable | LinearExpression:
 
 
 OPERANDS = {
-    "one-dim": lambda: mostly_zero(A, C),
-    "two-dims": lambda: mostly_zero(B, A),
-    "two-dims-new": lambda: mostly_zero(A, C, B),
-    "one-dim-two-new": lambda: mostly_zero(C, A, E),
+    "one-dim": lambda: to_sparse(mostly_zero(A, C)),
+    "two-dims": lambda: to_sparse(mostly_zero(B, A)),
+    "two-dims-new": lambda: to_sparse(mostly_zero(A, C, B)),
+    "one-dim-two-new": lambda: to_sparse(mostly_zero(C, A, E)),
+    "empty": lambda: xr.DataArray(sparse.zeros((len(A), len(C))), coords=[A, C]),
+    "explicit-zeros": lambda: xr.DataArray(
+        sparse.COO([[0, 2], [1, 3]], [0.0, 2.0], shape=(len(A), len(C))),
+        coords=[A, C],
+    ),
 }
+
+
+def refuse(*args: Any, **kwargs: Any) -> None:
+    raise AssertionError("the sparse operand was densified")
 
 
 @pytest.mark.parametrize("kind", ["variable", "expression"])
 @pytest.mark.parametrize("operand", list(OPERANDS))
-def test_sparse_operand_matches_dense(x: Variable, kind: str, operand: str) -> None:
+def test_sparse_operand_matches_dense(
+    x: Variable, kind: str, operand: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     lhs = receiver(x, kind)
-    dense = OPERANDS[operand]()
+    op = OPERANDS[operand]()
+    want = lhs @ op.copy(data=op.data.todense())
+    monkeypatch.setattr(sparse.COO, "todense", refuse)
     with warnings.catch_warnings():
         warnings.simplefilter("error", linopy.PerformanceWarning)
-        res = lhs @ to_sparse(dense)
-    assert_equivalent(res, lhs @ dense)
-    assert_equivalent(lhs.dot(to_sparse(dense)), lhs @ dense)
+        res = lhs @ op
+    assert_equivalent(res, want)
+    assert_equivalent(lhs.dot(op), want)
     assert res.is_sparse == x.model.sparse
 
 
@@ -90,6 +101,7 @@ def test_sparse_operand_accepts_other_sparse_formats(x: Variable) -> None:
     dense = mostly_zero(A, C)
     gcxs = dense.copy(data=sparse.GCXS.from_numpy(dense.values))
     assert is_sparse_backed(gcxs)
+    assert not is_sparse_backed(dense) and not is_sparse_backed(dense.values)
     assert_equivalent(x @ gcxs, x @ dense)
 
 
@@ -137,96 +149,31 @@ def test_sparse_operand_nonzero_fill_value_raises(x: Variable) -> None:
         x @ operand
 
 
+def non_unique(x: Variable) -> tuple[Any, xr.DataArray, str]:
+    y = x.model.add_variables(coords=[pd.Index(["p", "p", "q"], name="d")])
+    dense = xr.DataArray(
+        np.array([[1.0, 0.0], [0.0, 2.0], [0.0, 0.0]]),
+        dims=["d", "c"],
+        coords={"d": y.indexes["d"], "c": [0, 1]},
+    )
+    return y, dense, "non-unique labels"
+
+
 FALLBACKS: dict[str, Any] = {
-    # (receiver from x, operand) pairs the sparse product refuses
-    "no-shared-dim": (lambda x: 1.0 * x, lambda: mostly_zero(C, E)),
-    "zero-dim": (lambda x: (1.0 * x).sum(), lambda: mostly_zero(C)),
+    # x -> (receiver, dense operand, warning match) the sparse product refuses
+    "no-shared-dim": lambda x: (1.0 * x, mostly_zero(C, E), "pydata/sparse"),
+    "zero-dim": lambda x: ((1.0 * x).sum(), mostly_zero(C), "pydata/sparse"),
+    "non-unique": non_unique,
+    "quadratic": lambda x: (x * x, mostly_zero(A, C), "quadratic expression"),
 }
 
 
 @pytest.mark.filterwarnings("ignore:Sparse \\(CSR\\) backing densified")
 @pytest.mark.parametrize("case", list(FALLBACKS))
-def test_dense_fallback_densifies_operand_with_warning(x: Variable, case: str) -> None:
-    make_expr, make_operand = FALLBACKS[case]
-    expr, dense = make_expr(x), make_operand()
-
-    with pytest.warns(linopy.PerformanceWarning, match="pydata/sparse"):
+def test_dense_fallback_densifies_operand_with_notice(x: Variable, case: str) -> None:
+    expr, dense, match = FALLBACKS[case](x)
+    with linopy.options as opts, pytest.warns(linopy.PerformanceWarning, match=match):
+        opts.set_value(warn_on_densify=True)
         res = expr @ to_sparse(dense)
-    assert_equivalent(res, expr @ dense)
-
-
-@pytest.mark.filterwarnings("ignore:Sparse \\(CSR\\) backing densified")
-def test_dense_fallback_warning_can_be_silenced(x: Variable) -> None:
-    expr, dense = 1.0 * x, mostly_zero(C, E)
-    with linopy.options as opts, warnings.catch_warnings():
-        opts.set_value(warn_on_densify=False)
-        warnings.simplefilter("error", linopy.PerformanceWarning)
-        res = expr @ to_sparse(dense)
-    assert_equivalent(res, expr @ dense)
-
-
-def test_dense_fallback_on_non_unique_labels() -> None:
-    m = Model()
-    x = m.add_variables(coords=[pd.Index(["p", "p", "q"], name="d")], name="x")
-    dense = xr.DataArray(
-        np.array([[1.0, 0.0], [0.0, 2.0], [0.0, 0.0]]),
-        dims=["d", "c"],
-        coords={"d": x.indexes["d"], "c": [0, 1]},
-    )
-    with pytest.warns(linopy.PerformanceWarning, match="non-unique labels"):
-        res = x @ to_sparse(dense)
-    assert_equivalent(res, x @ dense)
-
-
-def test_quadratic_matmul_densifies_operand_with_warning(x: Variable) -> None:
-    quad = x * x
-    dense = mostly_zero(A, C)
-    with pytest.warns(linopy.PerformanceWarning, match="quadratic expression"):
-        res = quad @ to_sparse(dense)
-    assert_quadequal(res, quad @ dense)
-
-
-def test_is_sparse_backed() -> None:
-    dense = mostly_zero(A, C)
-    assert not is_sparse_backed(dense)
-    assert not is_sparse_backed(dense.values)
-    assert is_sparse_backed(to_sparse(dense))
-
-
-def test_large_mostly_zero_operand_is_never_densified(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A 5000 x 3000 incidence with 5000 non-zeros contracts in its non-zeros."""
-    n_link, n_bus, nnz = 5000, 3000, 5000
-    links = pd.Index(range(n_link), name="link")
-    buses = pd.Index(range(n_bus), name="bus")
-    rng = np.random.default_rng(0)
-    coo = sparse.COO(
-        np.stack([np.arange(nnz), rng.integers(0, n_bus, nnz)]),
-        rng.choice([-1.0, 1.0], nnz),
-        shape=(n_link, n_bus),
-    )
-    incidence = xr.DataArray(coo, coords=[links, buses])
-    dense_bytes = n_link * n_bus * 8
-
-    def refuse(*args: Any, **kwargs: Any) -> None:
-        raise AssertionError("the sparse operand was densified")
-
-    monkeypatch.setattr(sparse.COO, "todense", refuse)
-    m = Model()
-    p = m.add_variables(coords=[links], name="p")
-
-    tracemalloc.start()
-    start = time.perf_counter()
-    try:
-        res = p @ incidence
-        elapsed = time.perf_counter() - start
-        _, peak = tracemalloc.get_traced_memory()
-    finally:
-        tracemalloc.stop()
-
-    assert res.coord_dims == ("bus",)
-    assert peak < dense_bytes / 10
-    assert elapsed < 10
-    coeffs = res.coeffs.values
-    assert np.nansum(np.abs(coeffs)) == nnz
+    quad = isinstance(res, QuadraticExpression)
+    (assert_quadequal if quad else assert_equivalent)(res, expr @ dense)

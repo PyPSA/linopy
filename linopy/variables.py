@@ -574,12 +574,8 @@ class Variable:
         """
         Matrix multiplication of variables with a coefficient.
 
-        Same as ``self.to_linexpr() @ other``, see
-        :meth:`linopy.expressions.LinearExpression.__matmul__`: a constant,
-        including a labelled :class:`xarray.DataArray` backed by a
-        `pydata/sparse <https://sparse.pydata.org>`_ array (e.g.
-        ``sparse.COO``), is contracted as one sparse product without
-        densifying it.
+        Accepts a pydata/sparse-backed DataArray; see
+        :meth:`linopy.expressions.LinearExpression.__matmul__`.
         """
         return self.to_linexpr() @ other
 
@@ -827,9 +823,8 @@ class Variable:
         Generalized dot product for linopy and compatible objects. Like np.einsum if performs a
         multiplaction of the two objects with a subsequent summation over common dimensions.
 
-        Identical to ``@``; a labelled :class:`xarray.DataArray` backed by a
-        `pydata/sparse <https://sparse.pydata.org>`_ array (e.g.
-        ``sparse.COO``) is contracted without densifying it.
+        Accepts a pydata/sparse-backed DataArray; see
+        :meth:`linopy.expressions.LinearExpression.__matmul__`.
         """
         return self.__matmul__(other)
 
