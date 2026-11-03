@@ -6,6 +6,7 @@ Any other selection keeps going through xarray's ``sel``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -49,7 +50,7 @@ def objects(m: Model, x: Variable) -> dict[str, Any]:
     }
 
 
-ASSERT_EQUAL = {
+ASSERT_EQUAL: dict[str, Callable[[Any, Any], None]] = {
     "variable": assert_varequal,
     "linear": assert_linequal,
     "quadratic": assert_quadequal,
