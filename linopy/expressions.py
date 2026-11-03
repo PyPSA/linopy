@@ -3328,10 +3328,10 @@ class LinearExpression(BaseExpression):
         dimension varying fastest, as by ``numpy.ravel_multi_index``), e.g.
         an incidence matrix times a variable.
 
-        A repeated ``(row, var)`` pair adds up, as a repeated variable does
-        in any linopy expression. A masked label (``-1``) contributes no
-        term. A cell without any term is absent, as after ``where``. To give
-        every cell a constant, use ``.fillna(0) + const``.
+        The result equals one term per triplet summed by
+        ``groupby(rows).sum()`` and reindexed to the grid: cells no triplet
+        addresses are absent, cells addressed only by masked labels (``-1``)
+        are present with value 0.
 
         The result is built on the model's store class
         (:attr:`~linopy.model.Model.store_cls`): CSR-backed in a sparse
@@ -3350,9 +3350,9 @@ class LinearExpression(BaseExpression):
             ``[0, prod(grid shape))``.
         vars : array_like of int
             Variable label of each term, e.g. taken from
-            ``Variable.labels``; ``-1`` skips the term.
+            ``Variable.labels``; ``-1`` masks the term.
         coeffs : array_like of float
-            Finite coefficient of each term (ignored where ``vars`` is ``-1``).
+            Coefficient of each term; NaN raises unless ``vars`` is ``-1``.
 
         Returns
         -------
@@ -3395,9 +3395,7 @@ class LinearExpression(BaseExpression):
                 "pandas.Index, and must not repeat a name."
             )
         grid = Grid({str(d): _as_index(v).rename(str(d)) for d, v in dims.items()})
-        rows_, vars_, coeffs_ = (
-            np.asarray(a).reshape(-1) for a in (rows, vars, coeffs)
-        )
+        rows_, vars_, coeffs_ = (np.array(a).reshape(-1) for a in (rows, vars, coeffs))
         if not rows_.size == vars_.size == coeffs_.size:
             raise ValueError(
                 "`rows`, `vars` and `coeffs` must have the same length, got "
@@ -3408,10 +3406,8 @@ class LinearExpression(BaseExpression):
                 raise TypeError(
                     f"`{name}` must hold integers, got dtype {values.dtype}."
                 )
-        # the mask also copies, so the result never shares the input memory
-        keep = vars_ != -1
-        rows_, vars_ = rows_[keep], vars_[keep]
-        coeffs_ = coeffs_[keep].astype(float, copy=False)
+        rows_ = rows_.astype(np.intp, copy=False)
+        coeffs_ = coeffs_.astype(float, copy=False)
         n_cells = grid.size
         if rows_.size and (rows_.min() < 0 or rows_.max() >= n_cells):
             bad = rows_[(rows_ < 0) | (rows_ >= n_cells)]
@@ -3419,15 +3415,16 @@ class LinearExpression(BaseExpression):
                 f"`rows` must lie in [0, {n_cells}) for a grid of shape "
                 f"{grid.shape}, got e.g. {bad[:5].tolist()}."
             )
-        if vars_.size and (vars_.min() < 0 or vars_.max() >= model._xCounter):
-            bad = vars_[(vars_ < 0) | (vars_ >= model._xCounter)]
+        if vars_.size and (vars_.min() < -1 or vars_.max() >= model._xCounter):
+            bad = vars_[(vars_ < -1) | (vars_ >= model._xCounter)]
             raise ValueError(
-                "`vars` must be variable labels of the model (or -1 to skip a "
+                "`vars` must be variable labels of the model (or -1 to mask a "
                 f"term), in [0, {model._xCounter}); got e.g. {bad[:5].tolist()}."
             )
-        if not np.isfinite(coeffs_).all():
-            raise ValueError("`coeffs` must be finite.")
-        store = CSRStore.from_coo(grid, rows_, vars_, coeffs_, model)
+        if np.isnan(coeffs_[vars_ != -1]).any():
+            check_user_nan("coefficient")
+        terms = Dataset({"vars": ("_coo", vars_), "coeffs": ("_coo", coeffs_)})
+        store = CSRStore.from_labels(terms, model).aggregate(grid, rows_)
         return cls._from_store(store if model.sparse else store.to_dense(), model)
 
 

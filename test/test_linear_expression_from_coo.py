@@ -53,15 +53,6 @@ def test_matches_arithmetic(m: Model) -> None:
     assert_equivalent(expr, balance_arithmetic(m))
 
 
-def test_unsorted_rows(m: Model) -> None:
-    rows, vars_, coeffs = balance_triplets(m)
-    order = np.random.default_rng(0).permutation(rows.size)
-    expr = LinearExpression.from_coo(
-        m, [TIME, BUS], rows[order], vars_[order], coeffs[order]
-    )
-    assert_equivalent(expr, balance_arithmetic(m))
-
-
 def test_mapping_coords(m: Model) -> None:
     rows, vars_, coeffs = balance_triplets(m)
     expr = LinearExpression.from_coo(
@@ -70,25 +61,51 @@ def test_mapping_coords(m: Model) -> None:
     assert_equivalent(expr, balance_arithmetic(m))
 
 
-def test_duplicates_sum(m: Model) -> None:
-    p = m.variables["p"]
-    label = int(p.labels.values[0, 0])
-    expr = LinearExpression.from_coo(
-        m, [TIME], [0, 0, 0], [label, label, label], [1.0, 2.0, 0.5]
-    )
-    want = (3.5 * p.isel(gen=0, drop=True)).where(xr.DataArray([1, 0, 0], [TIME]) > 0)
-    assert_equivalent(expr, want)
+CELL = pd.RangeIndex(6, name="cell")
 
 
-def test_masked_labels_and_empty_cells(m: Model) -> None:
-    p = m.variables["p"]
-    labels = p.labels.isel(gen=0, drop=True).values
-    expr = LinearExpression.from_coo(
-        m, [TIME], [0, 99, 2], [labels[0], -1, labels[2]], [1.0, np.nan, 1.0]
+@pytest.mark.parametrize(
+    ("rows", "pos", "coeffs"),
+    [
+        ([0, 1, 4], [0, 1, 2], [1.0, 2.0, 3.0]),
+        ([0, 1], [0, -1], [1.0, 1.0]),  # cell 1 addressed only by a masked term
+        ([0, 1], [0, -1], [1.0, np.nan]),
+        ([0, 1], [0, 1], [1.0, 0.0]),
+        ([2, 2, 2], [1, 1, 1], [1.0, 2.0, 0.5]),
+        ([5, 0, 3, 0], [3, 0, 2, 1], [1.0, 1.0, -1.0, 2.0]),
+        ([0, 0], [1, 2], [np.inf, -np.inf]),
+    ],
+    ids=["plain", "masked-only", "nan-on-masked", "zero", "dupes", "unsorted", "inf"],
+)
+def test_conforms_to_groupby_sum(
+    m: Model, rows: list[int], pos: list[int], coeffs: list[float]
+) -> None:
+    labels = np.where(
+        np.array(pos) >= 0, m.variables["p"].labels.values.ravel()[pos], -1
     )
-    mask = xr.DataArray([True, False, True], [TIME])
-    assert_equivalent(expr, p.isel(gen=0, drop=True).to_linexpr().where(mask))
-    assert expr.const.isnull().values.tolist() == [False, True, False]
+    got = LinearExpression.from_coo(m, [CELL], rows, labels, coeffs)
+    k = pd.RangeIndex(len(rows), name="k")
+    one = xr.Dataset(
+        {
+            "vars": (("k", "_term"), labels[:, None]),
+            "coeffs": (("k", "_term"), np.array(coeffs)[:, None]),
+        },
+        coords={"k": k},
+    )
+    want = (
+        LinearExpression(one, m)
+        .groupby(xr.DataArray(rows, coords=[k], name="cell"))
+        .sum()
+        .reindex(cell=CELL)
+    )
+    assert got.isnull().values.tolist() == want.isnull().values.tolist()
+    assert_equivalent(got, want)
+    x = m.add_variables(coords=[CELL], name="x")
+    via_coo = m.add_constraints(got - x == 0, name="coo")
+    via_ops = m.add_constraints(want - x == 0, name="ops")
+    assert (via_coo.labels.values >= 0).tolist() == (
+        via_ops.labels.values >= 0
+    ).tolist()
 
 
 def test_no_terms(m: Model) -> None:
@@ -123,8 +140,8 @@ def test_does_not_share_input_memory(m: Model) -> None:
         ({"rows": [0.0, 1.0, 2.0]}, TypeError, "`rows` must hold integers"),
         ({"vars": [0, 999, 1]}, ValueError, "variable labels"),
         ({"vars": [0, -2, 1]}, ValueError, "variable labels"),
-        ({"coeffs": [1.0, np.nan, 1.0]}, ValueError, "`coeffs` must be finite"),
-        ({"coeffs": [1.0, np.inf, 1.0]}, ValueError, "`coeffs` must be finite"),
+        ({"rows": [0, 99, 1], "vars": [0, -1, 1]}, IndexError, r"\[0, 6\)"),
+        ({"coeffs": [1.0, np.nan, 1.0]}, ValueError, "NaN found"),
         ({"coeffs": ["a", "b", "c"]}, ValueError, "convert"),
         ({"coords": [TIME, TIME]}, ValueError, "repeat"),
         ({"coords": [[0, 1, 2], BUS]}, ValueError, "name every dimension"),

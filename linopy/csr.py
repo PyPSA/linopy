@@ -404,23 +404,6 @@ class CSRStore(Store):
         return cls(csr, np.where(present, 0.0, np.nan), grid, model)
 
     @classmethod
-    def from_coo(
-        cls,
-        grid: Grid,
-        rows: np.ndarray,
-        vars_: np.ndarray,
-        coeffs: np.ndarray,
-        model: Model,
-    ) -> CSRStore:
-        """
-        Build from validated COO triplets on ``grid``, see
-        :meth:`linopy.LinearExpression.from_coo`.
-        """
-        csr = coo_to_csr(coeffs, rows, vars_, (grid.size, model._xCounter), model)
-        const = np.where(np.diff(csr.indptr) > 0, 0.0, np.nan)
-        return cls(csr, const, grid, model)
-
-    @classmethod
     def _from_scatter(
         cls,
         ds: Dataset,
