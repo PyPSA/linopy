@@ -1912,9 +1912,10 @@ class Highs(Solver[None]):
                 "Use io_api='lp' instead."
             )
 
-        # build with a column-wise matrix; HiGHS stores the LP column-wise,
-        # so a row-wise addRows would be transposed later
-        A = (M.A if M.A is not None else csr_array((0, len(M.vlabels)))).tocsc()
+        # pass the cached row-wise matrix as is; converting it to column-wise
+        # here would hold a second copy of A without making the build faster
+        A = M.A if M.A is not None else csr_array((0, len(M.vlabels)))
+        A = A.tocsr()
         # compare the 1-char sense as integer codes, not unicode strings
         codes = M.sense.astype("U1", copy=False).view(np.uint32)
         row_lower = np.where(codes != ord("<"), M.b, -np.inf)
@@ -1935,7 +1936,7 @@ class Highs(Solver[None]):
                 A.shape[1],
                 A.shape[0],
                 A.nnz,
-                highspy.MatrixFormat.kColwise.value,
+                highspy.MatrixFormat.kRowwise.value,
                 sense.value,
                 0.0,
                 M.c,
@@ -1951,23 +1952,23 @@ class Highs(Solver[None]):
         else:
             # pure LP: passModel would store an all-continuous integrality
             # array, which makes HiGHS write empty bin/gen/semi sections to
-            # LP files. Add empty rows, then the columns column-wise.
-            h.addRows(
-                A.shape[0],
-                row_lower,
-                row_upper,
-                0,
-                np.zeros(1, dtype=np.int32),
-                np.zeros(0, dtype=np.int32),
-                np.zeros(0),
-            )
+            # LP files. Add the columns without entries, then the rows.
             h.addCols(
                 A.shape[1],
                 M.c,
                 M.lb,
                 M.ub,
+                0,
+                np.zeros(A.shape[1], dtype=np.int32),
+                np.zeros(0, dtype=np.int32),
+                np.zeros(0),
+            )
+            h.addRows(
+                A.shape[0],
+                row_lower,
+                row_upper,
                 A.nnz,
-                A.indptr[:-1],
+                A.indptr,
                 A.indices,
                 A.data,
             )

@@ -711,11 +711,8 @@ def test_to_gurobipy(model: Model) -> None:
 @pytest.mark.skipif("highs" not in licensed_solvers, reason="Highspy not installed")
 @pytest.mark.parametrize("set_names", [True, False])
 def test_to_highspy(model: Model, set_names: bool) -> None:
-    import highspy
-
     lp = model.to_highspy(set_names=set_names).getLp()
     assert lp.num_col_ > 0
-    assert lp.a_matrix_.format_ == highspy.MatrixFormat.kColwise
     assert len(lp.col_names_) == (lp.num_col_ if set_names else 0)
     assert len(lp.row_names_) == (lp.num_row_ if set_names else 0)
 
