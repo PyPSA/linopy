@@ -828,6 +828,86 @@ def test_highs_direct_qp_keeps_hessian_with_names() -> None:
     assert m.objective.value == pytest.approx(1.5)
 
 
+def _highs_lp_model() -> Model:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    x = m.add_variables(lower=0, upper=10, coords=[i], name="x")
+    y = m.add_variables(lower=-5, coords=[i], name="y")
+    m.add_constraints(x + y >= [1, 2, 3], name="ge")
+    m.add_constraints(x - 2 * y <= 8, name="le")
+    m.add_constraints(x.sum() == 6, name="eq")
+    m.add_objective((2 * x + y).sum())
+    return m
+
+
+def _highs_milp_model() -> Model:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    b = m.add_variables(coords=[i], binary=True, name="b")
+    n = m.add_variables(lower=0, upper=7, coords=[i], integer=True, name="n")
+    x = m.add_variables(lower=0, upper=4, coords=[i], name="x")
+    m.add_constraints(x <= 4 * b, name="link")
+    m.add_constraints(n + x >= [2.5, 3.5, 1.5], name="cover")
+    m.add_objective((3 * b + 2 * n + x).sum())
+    return m
+
+
+def _highs_semi_continuous_model() -> Model:
+    m = Model()
+    s = m.add_variables(lower=2, upper=10, name="s", semi_continuous=True)
+    x = m.add_variables(lower=0, upper=10, name="x")
+    m.add_constraints(s + x >= 1.5, name="demand")
+    m.add_objective(s + 3 * x)
+    return m
+
+
+def _highs_no_constraints_model() -> Model:
+    m = Model()
+    x = m.add_variables(lower=1, upper=4, coords=[pd.RangeIndex(2, name="i")])
+    n = m.add_variables(lower=0, upper=3, integer=True, name="n")
+    m.add_objective(x.sum() - 2 * n)
+    return m
+
+
+def _highs_max_model() -> Model:
+    m = Model()
+    x = m.add_variables(lower=0, upper=4, coords=[pd.RangeIndex(2, name="i")])
+    m.add_constraints(x.sum() <= 5, name="cap")
+    m.add_objective((x * [1, 2]).sum(), sense="max")
+    return m
+
+
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="Highspy not installed")
+@pytest.mark.parametrize(
+    "build,expected",
+    [
+        (_highs_lp_model, None),
+        (_highs_milp_model, None),
+        (_highs_semi_continuous_model, 2.0),
+        (_highs_no_constraints_model, -4.0),
+        (_highs_max_model, 9.0),
+    ],
+)
+def test_to_highspy_solves_like_lp_file(
+    build: Callable[[], Model], expected: float | None, tmp_path: Path
+) -> None:
+    import highspy
+
+    m = build()
+    h = m.to_highspy()
+    assert h.getLp().a_matrix_.format_ == highspy.MatrixFormat.kColwise
+    h.setOptionValue("output_flag", False)
+    h.run()
+    assert h.getModelStatus() == highspy.HighsModelStatus.kOptimal
+    direct_obj = h.getInfo().objective_function_value
+
+    status, _ = m.solve(solver_name="highs", io_api="lp", problem_fn=tmp_path / "m.lp")
+    assert status == "ok"
+    assert direct_obj == pytest.approx(m.objective.value)
+    if expected is not None:
+        assert direct_obj == pytest.approx(expected)
+
+
 def test_to_blocks(tmp_path: Path) -> None:
     m: Model = Model()
 

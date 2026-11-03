@@ -1913,27 +1913,41 @@ class Highs(Solver[None]):
             )
 
         h = highspy.Highs()
-        h.addVars(len(M.vlabels), M.lb, M.ub)
+        # One bulk ``passModel`` with a column-wise matrix: HiGHS stores the LP
+        # column-wise, so ``addRows`` with a CSR matrix pays a transpose plus
+        # per-row validation on every call (~7x slower for 7M nonzeros).
+        n_cols = len(M.vlabels)
         vtypes = M.vtypes
+        integrality = np.zeros(n_cols, dtype=np.int32)
         int_mask = vtypes != "C"
         if int_mask.any():
-            integrality_map = {"B": 1, "I": 1, "S": 2}
-            labels = np.flatnonzero(int_mask)
-            integrality = np.array(
-                [integrality_map[v] for v in vtypes[int_mask]], dtype=np.uint8
-            )
-            h.changeColsIntegrality(len(labels), labels, integrality)
-
-        c = M.c
-        h.changeColsCost(len(c), np.arange(len(c), dtype=np.int32), c)
-
+            integrality[(vtypes == "B") | (vtypes == "I")] = 1
+            integrality[vtypes == "S"] = 2
         A = M.A
-        if A is not None:
-            A = A.tocsr()
-            num_cons = A.shape[0]
-            lower = np.where(M.sense != "<", M.b, -np.inf)
-            upper = np.where(M.sense != ">", M.b, np.inf)
-            h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
+        if A is None or A.shape[0] == 0:
+            A = csr_array((0, n_cols))
+        Ac = A.tocsc()
+        # compare the 1-char sense as integer codes, not unicode strings
+        codes = np.ascontiguousarray(M.sense, dtype="U1").view(np.uint32)
+        lower = np.where(codes != ord("<"), M.b, -np.inf)
+        upper = np.where(codes != ord(">"), M.b, np.inf)
+        h.passModel(
+            n_cols,
+            Ac.shape[0],
+            Ac.nnz,
+            1,  # MatrixFormat.kColwise
+            1,  # ObjSense.kMinimize, flipped below
+            0.0,
+            np.ascontiguousarray(M.c, dtype=float),
+            np.ascontiguousarray(M.lb, dtype=float),
+            np.ascontiguousarray(M.ub, dtype=float),
+            np.ascontiguousarray(lower, dtype=float),
+            np.ascontiguousarray(upper, dtype=float),
+            Ac.indptr.astype(np.int32, copy=False),
+            Ac.indices.astype(np.int32, copy=False),
+            np.ascontiguousarray(Ac.data, dtype=float),
+            integrality,
+        )
 
         if names is not None:
             print_variables, print_constraints = names
