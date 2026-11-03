@@ -41,6 +41,8 @@ class _RowBlock(NamedTuple):
 
 def _non_unit(scaling: ndarray) -> ndarray | None:
     """``scaling`` where any factor differs from 1, else None."""
+    if not scaling.ndim:
+        return None if scaling == 1 else scaling
     return None if (scaling == 1).all() else scaling
 
 
@@ -48,17 +50,36 @@ def _concat(arrays: list[ndarray]) -> ndarray:
     return np.concatenate(arrays) if arrays else np.empty(0, dtype=float)
 
 
+def _uniform(values: ndarray) -> bool:
+    """Whether ``values`` is a broadcast scalar (all strides zero), O(1)."""
+    return values.size > 0 and not any(values.strides)
+
+
+def _active(values: ndarray, active: ndarray, all_active: bool) -> ndarray:
+    """
+    ``values`` raveled and restricted to ``active``. A broadcast scalar stays a
+    0-d array and an all-active field a view, so neither is materialized.
+    """
+    if _uniform(values):
+        return values.reshape(-1)[:1].reshape(())
+    flat = values.reshape(-1)
+    return flat if all_active else flat[active]
+
+
 def _row_block(
     con: Constraint, active: ndarray, label_index: VariableLabelIndex
 ) -> _RowBlock:
     store = con.lhs._store
+    all_active = bool(active.all())
+    n_rows = active.size if all_active else int(active.sum())
+    sign = _active(con.sign.values, active, all_active)
     return _RowBlock(
         partial(store.positional_csr, label_index, active, con.name),
-        int(active.sum()),
+        n_rows,
         store.nnz(active),
-        con.rhs.values.ravel()[active],
-        con.sign.values.ravel()[active].astype("U1"),
-        con.scaling.values.ravel()[active],
+        _active(con.rhs.values, active, all_active),
+        sign.astype("U1") if sign.ndim else np.asarray(str(sign)[:1]),
+        _active(con.scaling.values, active, all_active),
     )
 
 
@@ -112,7 +133,11 @@ def _stack(
             data[entries] = block_data
             b[rows] = block.rhs
         else:
-            per_row = repeat_per_row(row_scaling, block_indptr)
+            per_row = (
+                repeat_per_row(row_scaling, block_indptr)
+                if row_scaling.ndim
+                else row_scaling
+            )
             np.multiply(block_data, per_row, out=data[entries])
             np.multiply(block.rhs, row_scaling, out=b[rows])
         if col_scaling is not None:
@@ -293,7 +318,9 @@ def _build_cons(m: Model, col_scaling: ndarray | None) -> _ConArrays:
     label_dtype = m._dtypes["labels"]
     return _ConArrays(
         clabels=m.constraints.label_index.clabels,
-        con_scaling=_concat([block.scaling for block in regular]),
+        con_scaling=_concat(
+            [np.broadcast_to(block.scaling, block.n_rows) for block in regular]
+        ),
         A=A,
         b=b,
         sense=sense,

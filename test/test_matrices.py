@@ -11,7 +11,7 @@ import pytest
 import xarray as xr
 
 from linopy import EQUAL, GREATER_EQUAL, Model
-from linopy.matrices import Matrices
+from linopy.matrices import Matrices, _row_block
 
 
 def test_basic_matrices() -> None:
@@ -238,3 +238,72 @@ def test_matrices_take_rejects_indicator_constraints() -> None:
 
     with pytest.raises(NotImplementedError, match="indicator"):
         m.matrices.take(rows, cols)
+
+
+def test_row_block_keeps_broadcast_fields_lazy() -> None:
+    m = Model()
+    i = pd.RangeIndex(4, name="i")
+    x = m.add_variables(coords=[i], name="x")
+    c = m.add_constraints(2 * x >= 3, name="c", scaling=2.0)
+    label_index = m.variables.label_index
+
+    block = _row_block(c, np.ones(4, dtype=bool), label_index)
+    assert block.n_rows == 4
+    assert block.sign.ndim == 0 and block.sign.dtype == np.dtype("U1")
+    assert block.scaling.ndim == 0
+
+    masked = _row_block(c, np.array([True, False, True, True]), label_index)
+    assert masked.n_rows == 3
+    assert masked.sign.ndim == 0 and masked.scaling.ndim == 0
+
+
+@pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
+def test_matrices_scalar_and_array_fields(sparse: bool) -> None:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    x = m.add_variables(coords=[i], name="x")
+    # scalar sign and scalar non-unit scaling
+    a = m.add_constraints(2 * x >= 1, name="a", scaling=2.0)
+    # scalar sign, unit scaling, masked rows
+    b = m.add_constraints(
+        x <= 5, name="b", mask=xr.DataArray([False, True, True], coords=[i])
+    )
+    # mixed signs and per-cell scaling
+    c = m.add_constraints(
+        3 * x,
+        xr.DataArray(["<=", "=", ">="], coords=[i]),
+        xr.DataArray([1.0, 2.0, 3.0], coords=[i]),
+        name="c",
+        scaling=xr.DataArray([1.0, 10.0, 0.5], coords=[i]),
+    )
+    # scalar scaling with masked rows
+    d = m.add_constraints(
+        x == 4,
+        name="d",
+        scaling=4.0,
+        mask=xr.DataArray([True, False, True], coords=[i]),
+    )
+    if sparse:
+        for con in (a, b, c, d):
+            con.to_sparse()
+    M = m.matrices
+
+    assert M.A is not None
+    expected = np.zeros((10, 3))
+    expected[0:3] = 4 * np.eye(3)
+    expected[3:5, 1:] = np.eye(2)
+    expected[5:8] = np.diag([3.0, 30.0, 1.5])
+    expected[8, 0] = expected[9, 2] = 4.0
+    np.testing.assert_array_equal(M.A.toarray(), expected)
+    np.testing.assert_array_equal(
+        M.b, [2.0, 2.0, 2.0, 5.0, 5.0, 1.0, 20.0, 1.5, 16.0, 16.0]
+    )
+    assert M.sense.dtype == np.dtype("U1")
+    np.testing.assert_array_equal(
+        M.sense, [">", ">", ">", "<", "<", "<", "=", ">", "=", "="]
+    )
+    assert M.con_scaling.dtype == float
+    np.testing.assert_array_equal(
+        M.con_scaling, [2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 10.0, 0.5, 4.0, 4.0]
+    )
+    np.testing.assert_array_equal(M.clabels, [0, 1, 2, 4, 5, 6, 7, 8, 9, 11])

@@ -1,6 +1,13 @@
 Release Notes
 =============
 
+Upcoming Version
+----------------
+
+**Performance**
+
+* ``Model.matrices`` no longer materialises constraint fields that are stored as broadcast scalars (e.g. a scalar sign or scaling), and skips the boolean-mask copy when all rows of a constraint are active. This speeds up matrix assembly for large models; the returned arrays are unchanged.
+
 Version 1.0.0
 -------------
 
