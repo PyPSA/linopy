@@ -88,6 +88,7 @@ from linopy.common import (
     maybe_group_terms_polars,
     reassign_coords,
     save_join,
+    selects_everything,
     to_dataframe,
     to_polars,
     validate_coords_reassignment,
@@ -2148,7 +2149,25 @@ class BaseExpression(ABC):
 
     ffill = exprwrap(Dataset.ffill)
 
-    sel = exprwrap(Dataset.sel)
+    _sel = _dense_sel = exprwrap(Dataset.sel)
+
+    def sel(self, *args: Any, **kwargs: Any) -> Self:
+        """
+        Select by label as ``Dataset.sel``. A selection of every label of
+        each selected dimension, in order, returns a shallow copy sharing the
+        data instead of indexing.
+        """
+        if selects_everything(self._label_indexes(), args, kwargs):
+            return self._shallow_copy()
+        return self._sel(*args, **kwargs)
+
+    def _label_indexes(self) -> Mapping[Any, pd.Index]:
+        """The indexes :meth:`sel` selects on."""
+        return self.indexes
+
+    @abstractmethod
+    def _shallow_copy(self) -> Self:
+        """A new expression on the same model sharing this one's arrays."""
 
     isel = exprwrap(Dataset.isel)
 
@@ -2466,12 +2485,26 @@ class LinearExpression(BaseExpression):
             return method(self._fallback(store))
         return type(self)._from_store(store, self._model)
 
-    def sel(self, *args: Any, **kwargs: Any) -> Self:
+    def _sel(self, *args: Any, **kwargs: Any) -> Self:
         """
         Select by label as ``Dataset.sel``. For a CSR-backed expression,
         returns a CSR-backed result when the selection stays on the grid.
         """
-        return self._gathered("sel", super().sel, *args, **kwargs)
+        return self._gathered("sel", super()._sel, *args, **kwargs)
+
+    def _label_indexes(self) -> Mapping[Any, pd.Index]:
+        store = self._store
+        if isinstance(store, DenseStore):
+            return store.ds.indexes
+        return store.grid.indexes
+
+    def _shallow_copy(self) -> Self:
+        store = self._store
+        if isinstance(store, DenseStore):
+            store = DenseStore(store.ds.copy(deep=False), self._model)
+        obj = type(self)._from_store(store, self._model)
+        obj._attrs = dict(self._attrs)
+        return obj
 
     def isel(self, *args: Any, **kwargs: Any) -> Self:
         """
@@ -3337,6 +3370,12 @@ class QuadraticExpression(BaseExpression):
 
     def _set_data(self, data: Dataset) -> None:
         self._data = absorb_absence(data)
+
+    def _shallow_copy(self) -> Self:
+        obj = type(self).__new__(type(self))
+        obj._model = self._model
+        obj._data = self._data.copy(deep=False)
+        return obj
 
     @property
     def data(self) -> Dataset:

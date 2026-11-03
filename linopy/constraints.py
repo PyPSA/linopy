@@ -59,6 +59,7 @@ from linopy.common import (
     reassign_coords,
     replace_by_map,
     save_join,
+    selects_everything,
     slice_indexers,
     to_dataframe,
 )
@@ -1312,7 +1313,27 @@ class Constraint:
     drop_sel = conwrap(Dataset.drop_sel)
     drop_isel = conwrap(Dataset.drop_isel)
     expand_dims = conwrap(Dataset.expand_dims)
-    sel = conwrap(Dataset.sel)
+    _sel = conwrap(Dataset.sel)
+
+    def sel(self, *args: Any, **kwargs: Any) -> Constraint:
+        """
+        Select by label as ``Dataset.sel``. A selection of every label of
+        each selected dimension, in order, returns a shallow copy sharing the
+        data instead of indexing.
+        """
+        if selects_everything(self.indexes, args, kwargs):
+            return self._shallow_copy()
+        return self._sel(*args, **kwargs)
+
+    def _shallow_copy(self) -> Constraint:
+        """A new, unregistered Constraint sharing this one's arrays."""
+        obj = Constraint.__new__(Constraint)
+        for slot in Constraint.__slots__:
+            object.__setattr__(obj, slot, getattr(self, slot))
+        obj._attrs = dict(self._attrs)
+        obj._coef_dirty = False
+        return obj
+
     isel = conwrap(Dataset.isel)
     shift = conwrap(Dataset.shift)
     swap_dims = conwrap(Dataset.swap_dims)

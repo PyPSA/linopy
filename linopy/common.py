@@ -1105,6 +1105,57 @@ LocT = TypeVar(
 )
 
 
+_SEL_DEFAULTS = {"method": None, "tolerance": None, "drop": False}
+
+
+def selects_everything(
+    indexes: Mapping[Any, pd.Index], args: tuple, kwargs: dict[str, Any]
+) -> bool:
+    """
+    Whether ``sel(*args, **kwargs)`` provably selects every label in order.
+
+    True only if every indexer is a label list, a one-dimensional array or a
+    ``pd.Index`` (unnamed or named after the dimension) on a dimension whose
+    unique, non-multi ``indexes`` entry equals it, and ``method``,
+    ``tolerance`` and ``drop`` keep their defaults. Such a ``sel`` returns
+    the object as is, so callers may skip it. Scalars, slices, DataArrays
+    and anything else are left to ``sel``.
+    """
+    if len(args) > 1:
+        return False
+    kwargs = dict(kwargs)
+    for option, default in _SEL_DEFAULTS.items():
+        if option in kwargs and kwargs.pop(option) is not default:
+            return False
+    indexers = args[0] if args else kwargs.pop("indexers", None)
+    if indexers is None:
+        indexers = kwargs
+    elif kwargs or not isinstance(indexers, Mapping):
+        return False
+    if not indexers:
+        return False
+    for dim, labels in indexers.items():
+        idx = indexes.get(dim)
+        if idx is None or isinstance(idx, pd.MultiIndex) or not idx.is_unique:
+            return False
+        if labels is idx:
+            continue
+        if isinstance(labels, pd.Index):
+            if labels.name is not None and labels.name != dim:
+                return False
+        elif isinstance(labels, np.ndarray):
+            if labels.ndim != 1:
+                return False
+        elif not isinstance(labels, list):
+            return False
+        if len(labels) != len(idx):
+            return False
+        candidate = labels if isinstance(labels, pd.Index) else pd.Index(labels)
+        if isinstance(candidate, pd.MultiIndex) or not idx.equals(candidate):
+            return False
+    return True
+
+
 class LocIndexer(Generic[LocT]):
     __slots__ = ("object",)
     object: LocT
