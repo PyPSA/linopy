@@ -29,13 +29,14 @@ projects below can add custom variables and constraints on top of it.
 - `ISPyPSA <https://github.com/Open-ISP/ISPyPSA>`__: PyPSA-based capacity expansion modelling of the Australian Integrated System Plan.
 - `eTraGo <https://github.com/openego/eTraGo>`__: optimisation of flexibility options for transmission grids (open_eGo).
 - `247-cfe <https://github.com/PyPSA/247-cfe>`__: 24/7 carbon-free energy procurement.
+- `tza-pypsa <https://github.com/transition-zero/tza-pypsa>`__: PyPSA model of the Tanzanian power system (Transition Zero).
 
 Energy system models and tools using linopy directly
 ----------------------------------------------------
 
 - `ZEN-garden <https://github.com/ZEN-universe/ZEN-garden>`__: energy transition model of the ETH Zürich Energy Science Center.
 - `flixOpt <https://github.com/flixOpt/flixopt>`__: optimisation of energy and material flow systems.
-- `OSeMOSYS_linopy <https://github.com/OSeMOSYS/OSeMOSYS_linopy>`__ and `tz-osemosys <https://github.com/transition-zero/tz-osemosys>`__: OSeMOSYS implementations in Python.
+- `OSeMOSYS_linopy <https://github.com/OSeMOSYS/OSeMOSYS_linopy>`__ and `tz-osemosys <https://github.com/transition-zero/tz-osemosys>`__ (Transition Zero): OSeMOSYS implementations in Python.
 - `Dispa-SET <https://github.com/energy-modelling-toolkit/Dispa-SET>`__: unit-commitment and dispatch model of the European Commission's JRC.
 - `MicroGridsPy <https://github.com/MicroGridsPy/MicroGridsPy>`__: microgrid sizing and operation.
 - `GemsPy <https://github.com/AntaresSimulatorTeam/GemsPy>`__: Python interpreter of the GEMS modelling language (RTE, Antares).
