@@ -137,7 +137,6 @@ from linopy.store import (
     expression_dataset,
     merge_datasets,
     merge_stores,
-    on_cells,
     pruned_terms,
     summed,
 )
@@ -3319,7 +3318,6 @@ class LinearExpression(BaseExpression):
         rows: ArrayLike,
         vars: ArrayLike,
         coeffs: ArrayLike,
-        const: ConstantLike | None = None,
     ) -> LinearExpression:
         """
         Create a linear expression from COO triplets on a coordinate grid.
@@ -3327,15 +3325,13 @@ class LinearExpression(BaseExpression):
         Each triplet ``(rows[k], vars[k], coeffs[k])`` adds the term
         ``coeffs[k] * x[vars[k]]`` to the cell ``rows[k]`` of the grid
         spanned by ``coords``, cells being numbered in C order (the last
-        dimension varying fastest, as by ``numpy.ravel_multi_index``). This
-        hands over a sparse structure, e.g. an incidence matrix times a
-        variable, without building it from ``sel``, ``groupby().sum()``,
-        ``merge`` or ``reindex`` steps.
+        dimension varying fastest, as by ``numpy.ravel_multi_index``), e.g.
+        an incidence matrix times a variable.
 
         A repeated ``(row, var)`` pair adds up, as a repeated variable does
         in any linopy expression. A masked label (``-1``) contributes no
-        term. A cell without any term is absent, as after ``where``, unless
-        ``const`` is given, which makes every cell present.
+        term. A cell without any term is absent, as after ``where``. To give
+        every cell a constant, use ``.fillna(0) + const``.
 
         The result is built on the model's store class
         (:attr:`~linopy.model.Model.store_cls`): CSR-backed in a sparse
@@ -3346,10 +3342,9 @@ class LinearExpression(BaseExpression):
         model : linopy.Model
             The model the variable labels belong to.
         coords : list/dict/xarray.Coordinates
-            The coordinates of the result, as for
-            :meth:`~linopy.model.Model.add_variables`: a mapping of dimension
-            names to labels, or a sequence of (preferably named)
-            ``pandas.Index``; an unnamed entry ``i`` becomes ``dim_i``.
+            The coordinates of the result: a mapping of dimension names to
+            labels, or a sequence of named ``pandas.Index`` or
+            ``(name, values)`` tuples. Every dimension must be named.
         rows : array_like of int
             Flat C-order cell position of each term, in
             ``[0, prod(grid shape))``.
@@ -3357,11 +3352,7 @@ class LinearExpression(BaseExpression):
             Variable label of each term, e.g. taken from
             ``Variable.labels``; ``-1`` skips the term.
         coeffs : array_like of float
-            Finite coefficient of each term.
-        const : int/float/array_like, optional
-            The constant of every cell: a number, a ``DataArray`` lying on a
-            subset of the grid's dimensions with its coordinates, or an array
-            of the grid's shape or of its flat size. Must be finite.
+            Finite coefficient of each term (ignored where ``vars`` is ``-1``).
 
         Returns
         -------
@@ -3397,9 +3388,16 @@ class LinearExpression(BaseExpression):
         [1, a]: +1 p[1, g1] - 1 line[1]
         [1, b]: +1 p[1, g2] + 1 line[1]
         """
-        grid = _coo_grid(coords)
-        n_cells = grid.size
-        rows_, vars_, coeffs_ = (np.array(a).reshape(-1) for a in (rows, vars, coeffs))
+        dims = _coords_to_dict(coords)
+        if not isinstance(coords, Mapping) and len(dims) != len(coords):
+            raise ValueError(
+                "`coords` must name every dimension, e.g. with a named "
+                "pandas.Index, and must not repeat a name."
+            )
+        grid = Grid({str(d): _as_index(v).rename(str(d)) for d, v in dims.items()})
+        rows_, vars_, coeffs_ = (
+            np.asarray(a).reshape(-1) for a in (rows, vars, coeffs)
+        )
         if not rows_.size == vars_.size == coeffs_.size:
             raise ValueError(
                 "`rows`, `vars` and `coeffs` must have the same length, got "
@@ -3410,31 +3408,27 @@ class LinearExpression(BaseExpression):
                 raise TypeError(
                     f"`{name}` must hold integers, got dtype {values.dtype}."
                 )
-        if coeffs_.size and coeffs_.dtype.kind not in "biuf":
-            raise TypeError(
-                f"`coeffs` must hold real numbers, got dtype {coeffs_.dtype}."
-            )
-        coeffs_ = coeffs_.astype(float, copy=False)
+        # the mask also copies, so the result never shares the input memory
+        keep = vars_ != -1
+        rows_, vars_ = rows_[keep], vars_[keep]
+        coeffs_ = coeffs_[keep].astype(float, copy=False)
+        n_cells = grid.size
         if rows_.size and (rows_.min() < 0 or rows_.max() >= n_cells):
             bad = rows_[(rows_ < 0) | (rows_ >= n_cells)]
             raise IndexError(
                 f"`rows` must lie in [0, {n_cells}) for a grid of shape "
                 f"{grid.shape}, got e.g. {bad[:5].tolist()}."
             )
-        if vars_.size and (vars_.min() < -1 or vars_.max() >= model._xCounter):
-            bad = vars_[(vars_ < -1) | (vars_ >= model._xCounter)]
+        if vars_.size and (vars_.min() < 0 or vars_.max() >= model._xCounter):
+            bad = vars_[(vars_ < 0) | (vars_ >= model._xCounter)]
             raise ValueError(
                 "`vars` must be variable labels of the model (or -1 to skip a "
                 f"term), in [0, {model._xCounter}); got e.g. {bad[:5].tolist()}."
             )
         if not np.isfinite(coeffs_).all():
             raise ValueError("`coeffs` must be finite.")
-        present = vars_ != -1
-        if not present.all():
-            rows_, vars_, coeffs_ = rows_[present], vars_[present], coeffs_[present]
-        const_ = None if const is None else _coo_const(const, grid)
-        store = model.store_cls.from_coo(grid, rows_, vars_, coeffs_, const_, model)
-        return cls._from_store(store, model)
+        store = CSRStore.from_coo(grid, rows_, vars_, coeffs_, model)
+        return cls._from_store(store if model.sparse else store.to_dense(), model)
 
 
 class QuadraticExpression(BaseExpression):
@@ -3713,66 +3707,6 @@ def as_expression(
         except ValueError as e:
             raise ValueError(f"Cannot convert to LinearExpression: {e}") from e
         return LinearExpression(obj, model)
-
-
-def _coo_grid(coords: Sequence[Sequence | pd.Index] | Mapping) -> Grid:
-    """
-    The grid of :meth:`LinearExpression.from_coo`: ``coords`` normalized as
-    for ``add_variables``, an unnamed sequence entry ``i`` named ``dim_i``.
-    """
-    if isinstance(coords, Mapping | Coordinates):
-        entries = _coords_to_dict(coords)
-    else:
-        entries = {}
-        for i, c in enumerate(coords):
-            if isinstance(c, tuple):
-                entries.update(_coords_to_dict([c]))
-            elif isinstance(c, pd.Index | DataArray) and c.name is not None:
-                entries[c.name] = c
-            else:
-                entries[f"dim_{i}"] = c
-        if len(entries) != len(coords):
-            raise ValueError("`coords` must not repeat a dimension name.")
-    indexes = {}
-    for d, values in entries.items():
-        index = _as_index(values)
-        if isinstance(index, pd.MultiIndex):
-            raise ValueError(
-                f"`coords` dimension '{d}' is a MultiIndex, which is unsupported; "
-                "flatten it with `reset_index` first."
-            )
-        indexes[str(d)] = index.rename(str(d))
-    return Grid(indexes)
-
-
-def _coo_const(const: Any, grid: Grid) -> np.ndarray:
-    """The ``const`` of :meth:`LinearExpression.from_coo` as a flat array over ``grid``."""
-    if isinstance(const, DataArray) or np.ndim(const) == 0:
-        values = on_cells(const, grid.dims, grid.to_dataset())
-        if values is None:
-            raise ValueError(
-                "`const` must be a number or a DataArray lying on a subset of "
-                f"the dimensions {list(grid.dims)} with matching coordinates."
-            )
-    else:
-        values = np.asarray(const)
-        if values.dtype.kind not in "biuf" or values.shape not in (
-            grid.shape,
-            (grid.size,),
-        ):
-            raise ValueError(
-                f"`const` must be numeric with the grid shape {grid.shape} or "
-                f"its flat size {grid.size}, got {values.dtype} {values.shape}."
-            )
-    values = np.asarray(values, dtype=float)
-    flat = (
-        values.reshape(-1)
-        if values.shape == (grid.size,)
-        else np.broadcast_to(values, grid.shape).reshape(-1)
-    )
-    if not np.isfinite(flat).all():
-        raise ValueError("`const` must be finite.")
-    return flat.copy()
 
 
 def result_store_cls(store: Store, model: Model) -> type[Store]:

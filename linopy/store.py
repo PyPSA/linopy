@@ -95,19 +95,6 @@ class Store(ABC):
 
     @classmethod
     @abstractmethod
-    def from_coo(
-        cls,
-        grid: Grid,
-        rows: np.ndarray,
-        vars_: np.ndarray,
-        coeffs: np.ndarray,
-        const: np.ndarray | None,
-        model: Model,
-    ) -> Self:
-        """Build from COO triplets on ``grid``, see :meth:`linopy.csr.CSRStore.from_coo`."""
-
-    @classmethod
-    @abstractmethod
     def from_grouper(
         cls,
         source: Store,
@@ -672,20 +659,6 @@ class DenseStore(Store):
             const = xr.where(absent, np.nan, 0.0)
             terms = terms.assign(coeffs=terms.coeffs.where(~absent), const=const)
         return cls.normalized(terms, model)
-
-    @classmethod
-    def from_coo(
-        cls,
-        grid: Grid,
-        rows: np.ndarray,
-        vars_: np.ndarray,
-        coeffs: np.ndarray,
-        const: np.ndarray | None,
-        model: Model,
-    ) -> DenseStore:
-        from linopy.csr import CSRStore
-
-        return CSRStore.from_coo(grid, rows, vars_, coeffs, const, model).to_dense()
 
     @classmethod
     def from_grouper(
