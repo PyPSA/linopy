@@ -3383,9 +3383,7 @@ class LinearExpression(BaseExpression):
         >>> line = m.add_variables(coords=[time], name="line")
         >>> gen_bus = np.array([0, 1])  # bus position of g1 and g2
         >>> t = np.arange(2)[:, None]
-        >>> rows = np.concatenate(
-        ...     [(t * 2 + gen_bus).ravel(), (t * 2 + [0, 1]).ravel()]
-        ... )
+        >>> rows = np.concatenate([(t * 2 + gen_bus).ravel(), (t * 2 + [0, 1]).ravel()])
         >>> vars = np.concatenate(
         ...     [gen.labels.values.ravel(), np.repeat(line.labels.values, 2)]
         ... )
