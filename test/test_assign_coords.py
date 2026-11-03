@@ -309,8 +309,8 @@ def test_assign_coords_tz_aware_datetime_index() -> None:
 
     The tz-aware path is the expensive one: mapping labels through a Python
     dict falls into pandas' object-to-datetime inference, so the relabel locates
-    labels positionally instead. This guards that both the full-length
-    (``equals``) and subset (``get_indexer``) branches keep the right labels.
+    labels positionally instead. This guards that both full-length and subset
+    containers keep the right labels.
     """
     idx = pd.date_range(
         "2026-01-01", periods=4, freq="h", tz="Australia/Melbourne", name="time"

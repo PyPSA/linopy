@@ -106,6 +106,7 @@ Version 1.0.0
 * Building a model is faster on the dense path: ``add_variables``, ``add_constraints``, arithmetic between variables and constants, ``where``, subtraction and ``merge`` skip xarray alignment and copies when the operands already share their coordinates. PyPSA's own ``create_model`` builds about twice as fast.
 * ``Model.from_spec`` builds the PyPSA spec about 4 to 5 times faster with about a third less peak memory: evaluated nodes are reused within a build, empty constraints are skipped before evaluation, and ``sum(..., by=...)`` on a dense expression groups in numpy.
 * ``Store.terms(active=None)`` returns the number of live terms per cell instead of a cell index per term, and drops the cells outside ``active``. ``Constraint.to_polars`` spreads labels with ``np.repeat`` and masks rows inside the store, so it no longer allocates an int64 index per nonzero or copies its frame to filter masked rows. (`#1058 <https://github.com/PyPSA/linopy/issues/1058>`__)
+* ``Model.assign_coords`` no longer relabels containers through a Python dict. It locates each container's labels with ``master.get_indexer(index)`` and takes the new values with ``new.take(positions)``: on a tz-aware ``DatetimeIndex``, the rolling-horizon case it is built for, the previous ``Index.map`` over a dict fell into pandas' object-to-datetime inference and cost milliseconds per container. Reassigning a dataset's coordinates also builds it once instead of twice. A model with ~30 containers on a 4380-label tz-aware axis reassigns in ~9 ms, down from ~810 ms.
 
 **Bug fixes**
 
@@ -147,10 +148,6 @@ Version 0.10.1
 * ``read_netcdf`` no longer drops parameters, parameter attributes or ``MultiIndex`` dimensions whose name contains ``-``. (`#1025 <https://github.com/PyPSA/linopy/pull/1025>`__)
 * ``to_netcdf``/``read_netcdf`` keep the auxiliary (non-index) coordinates of dense variables, constraints, expressions and ``Model.parameters``, such as the levels on a flat dimension that v1 recommends instead of a ``MultiIndex``, and scalar coordinates left by a scalar selection. (`#1024 <https://github.com/PyPSA/linopy/pull/1024>`__)
 * ``licensed_solvers`` and ``check_solver_licenses()`` no longer report Xpress as licensed when its licence is rejected, e.g. a licence that only covers an older Xpress release. Xpress now probes its licence with ``xpress.init()``. (`#994 <https://github.com/PyPSA/linopy/issues/994>`__)
-
-**Performance**
-
-* ``Model.assign_coords`` no longer relabels containers through a Python dict. It maps full-length containers straight to the new values and locates subset containers' labels with a positional ``get_indexer`` / ``take``: on a tz-aware ``DatetimeIndex`` — the rolling-horizon case it is built for — the previous ``Index.map`` over a dict fell into pandas' object-to-datetime inference and cost milliseconds per container. Reassigning a dataset's coordinates also builds it once instead of twice. A model with ~30 containers on a 4380-label tz-aware axis reassigns in ~3 ms, down from ~817 ms.
 
 Version 0.10.0
 --------------

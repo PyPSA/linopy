@@ -2381,14 +2381,6 @@ class Model:
                 )
 
             for name, index in carriers:
-                if index.equals(master):
-                    # A full-length container carries the master's labels, so its
-                    # new values are simply ``new``.
-                    mapped.setdefault(dim, {})[name] = new
-                    continue
-                # A subset container: locate each of its labels in the master and
-                # take the new value positionally. ``get_indexer`` is a C-level
-                # lookup, far cheaper than ``Index.map`` over a Python dict.
                 positions = master.get_indexer(index)
                 if (positions < 0).any():
                     raise ValueError(
@@ -2397,7 +2389,7 @@ class Model:
                         "dimension's index. Relabel model-wide first, or "
                         "align the container with `.sel`."
                     )
-                mapped.setdefault(dim, {})[name] = new.take(positions).rename(dim)
+                mapped.setdefault(dim, {})[name] = new.take(positions)
 
         for container in (self.variables, self.constraints, self.expressions):
             for name, item in container.items():

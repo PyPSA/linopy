@@ -395,7 +395,6 @@ def reassign_coords(ds: Dataset, **coords: Any) -> Dataset:
     """
     sizes = {str(name): coord.size for name, coord in ds.coords.items()}
     new_indexes = validate_coords_reassignment(sizes, coords, "dataset")
-    # Build the dataset once, keeping each reassigned coordinate in its original position.
     ordered: dict[Any, Any] = {name: ds.coords[name].variable for name in ds.coords}
     for name, index in new_indexes.items():
         ordered[name] = index
