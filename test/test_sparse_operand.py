@@ -86,8 +86,11 @@ def test_sparse_operand_matches_dense(
     with warnings.catch_warnings():
         warnings.simplefilter("error", linopy.PerformanceWarning)
         res = lhs @ op
+    dotted = lhs.dot(op)
+    assert isinstance(res, LinearExpression)
+    assert isinstance(dotted, LinearExpression)
     assert_equivalent(res, want)
-    assert_equivalent(lhs.dot(op), want)
+    assert_equivalent(dotted, want)
     assert res.is_sparse == x.model.sparse
 
 

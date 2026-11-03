@@ -818,7 +818,9 @@ class Variable:
         """
         return self.__pow__(other)
 
-    def dot(self, other: ndarray | Variable) -> QuadraticExpression | LinearExpression:
+    def dot(
+        self, other: ConstantLike | VariableLike | ExpressionLike
+    ) -> QuadraticExpression | LinearExpression:
         """
         Generalized dot product for linopy and compatible objects. Like np.einsum if performs a
         multiplaction of the two objects with a subsequent summation over common dimensions.
