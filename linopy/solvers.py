@@ -1912,36 +1912,67 @@ class Highs(Solver[None]):
                 "Use io_api='lp' instead."
             )
 
-        # one passModel with a column-wise matrix; HiGHS stores the LP
-        # column-wise, so a row-wise addRows is transposed later
-        integrality = (M.vtypes != "C").astype(np.int32)  # 1 = integer/binary
-        integrality[M.vtypes == "S"] = 2  # semi-continuous
+        # build with a column-wise matrix; HiGHS stores the LP column-wise,
+        # so a row-wise addRows would be transposed later
         A = (M.A if M.A is not None else csr_array((0, len(M.vlabels)))).tocsc()
         # compare the 1-char sense as integer codes, not unicode strings
         codes = M.sense.astype("U1", copy=False).view(np.uint32)
+        row_lower = np.where(codes != ord("<"), M.b, -np.inf)
+        row_upper = np.where(codes != ord(">"), M.b, np.inf)
         sense = (
             highspy.ObjSense.kMaximize
             if M.objective_sense == "max"
             else highspy.ObjSense.kMinimize
         )
         h = highspy.Highs()
-        h.passModel(
-            A.shape[1],
-            A.shape[0],
-            A.nnz,
-            highspy.MatrixFormat.kColwise.value,
-            sense.value,
-            0.0,
-            M.c,
-            M.lb,
-            M.ub,
-            np.where(codes != ord("<"), M.b, -np.inf),
-            np.where(codes != ord(">"), M.b, np.inf),
-            A.indptr,
-            A.indices,
-            A.data,
-            integrality,
-        )
+        discrete = M.vtypes != "C"
+        if discrete.any():
+            # one passModel call; integrality must be a full-length array
+            # (0 continuous, 1 binary/integer, 2 semi-continuous)
+            integrality = discrete.astype(np.int32)
+            integrality[M.vtypes == "S"] = 2
+            h.passModel(
+                A.shape[1],
+                A.shape[0],
+                A.nnz,
+                highspy.MatrixFormat.kColwise.value,
+                sense.value,
+                0.0,
+                M.c,
+                M.lb,
+                M.ub,
+                row_lower,
+                row_upper,
+                A.indptr,
+                A.indices,
+                A.data,
+                integrality,
+            )
+        else:
+            # pure LP: passModel would store an all-continuous integrality
+            # array, which makes HiGHS write empty bin/gen/semi sections to
+            # LP files. Add empty rows, then the columns column-wise.
+            h.addRows(
+                A.shape[0],
+                row_lower,
+                row_upper,
+                0,
+                np.zeros(1, dtype=np.int32),
+                np.zeros(0, dtype=np.int32),
+                np.zeros(0),
+            )
+            h.addCols(
+                A.shape[1],
+                M.c,
+                M.lb,
+                M.ub,
+                A.nnz,
+                A.indptr[:-1],
+                A.indices,
+                A.data,
+            )
+            if M.objective_sense == "max":
+                h.changeObjectiveSense(sense)
 
         if names is not None:
             print_variables, print_constraints = names

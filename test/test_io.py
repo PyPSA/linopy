@@ -861,6 +861,20 @@ def test_highs_direct_known_optimum(
     assert m.objective.value == pytest.approx(expected)
 
 
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="Highspy not installed")
+def test_to_highspy_pure_lp_writes_no_integer_sections(
+    model: Model, tmp_path: Path
+) -> None:
+    # an all-continuous integrality array makes HiGHS write empty
+    # bin/gen/semi sections, which other LP readers misparse
+    h = model.to_highspy()
+    assert len(h.getLp().integrality_) == 0
+    fn = tmp_path / "problem.lp"
+    h.writeModel(str(fn))
+    lines = {line.strip() for line in fn.read_text().splitlines()}
+    assert not lines & {"bin", "gen", "semi"}
+
+
 def test_to_blocks(tmp_path: Path) -> None:
     m: Model = Model()
 
