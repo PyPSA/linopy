@@ -1114,9 +1114,9 @@ def selects_everything(
     """
     Whether ``sel(*args, **kwargs)`` provably selects every label in order.
 
-    True only if every indexer is a label list, a one-dimensional array or a
-    ``pd.Index`` (unnamed or named after the dimension) on a dimension whose
-    unique, non-multi ``indexes`` entry equals it, and ``method``,
+    True only if every indexer is a non-boolean label list, one-dimensional
+    array or ``pd.Index`` (unnamed or named after the dimension) on a
+    dimension whose unique, non-multi ``indexes`` entry equals it, and ``method``,
     ``tolerance`` and ``drop`` keep their defaults. Such a ``sel`` returns
     the object as is, so callers may skip it. Scalars, slices, DataArrays
     and anything else are left to ``sel``.
@@ -1138,8 +1138,6 @@ def selects_everything(
         idx = indexes.get(dim)
         if idx is None or isinstance(idx, pd.MultiIndex) or not idx.is_unique:
             return False
-        if labels is idx:
-            continue
         if isinstance(labels, pd.Index):
             if labels.name is not None and labels.name != dim:
                 return False
@@ -1151,7 +1149,11 @@ def selects_everything(
         if len(labels) != len(idx):
             return False
         candidate = labels if isinstance(labels, pd.Index) else pd.Index(labels)
-        if isinstance(candidate, pd.MultiIndex) or not idx.equals(candidate):
+        if (
+            candidate.dtype.kind == "b"
+            or isinstance(candidate, pd.MultiIndex)
+            or not idx.equals(candidate)
+        ):
             return False
     return True
 

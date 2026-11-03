@@ -1498,11 +1498,7 @@ class Variable:
     _sel = varwrap(Dataset.sel)  # type: ignore[arg-type]
 
     def sel(self, *args: Any, **kwargs: Any) -> Variable:
-        """
-        Select by label as ``Dataset.sel``. A selection of every label of
-        each selected dimension, in order, returns a shallow copy sharing the
-        data instead of indexing.
-        """
+        """As ``Dataset.sel``; selecting every label in order gives a shallow copy."""
         if selects_everything(self.data.indexes, args, kwargs):
             return self._shallow_copy()
         return self._sel(*args, **kwargs)

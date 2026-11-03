@@ -179,12 +179,15 @@ def test_selects_everything_rejects() -> None:
     duplicated = {"a": pd.Index([10, 10], name="a")}
     assert not selects_everything(duplicated, (), {"a": duplicated["a"]})
     assert not selects_everything(duplicated, (), {"a": [10, 10]})
+    ints01 = {"a": pd.Index([0, 1], name="a")}
+    assert not selects_everything(ints01, (), {"a": [False, True]})
+    assert not selects_everything(ints01, (), {"a": np.array([False, True])})
+    bools = {"a": pd.Index([False, True], name="a")}
+    assert not selects_everything(bools, (), {"a": bools["a"]})
+    assert not selects_everything(bools, (), {"a": [False, True]})
 
 
-def test_sel_of_non_dimension_coordinate_unchanged(
-    x: Variable, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    y = x.assign_coords(c=("a", [1, 2, 3]))
-    expected = y._sel(c=[1, 2, 3])
-    monkeypatch.setattr(Variable, "_shallow_copy", _no_shortcut)
-    assert_varequal(y.sel(c=[1, 2, 3]), expected)
+def test_sel_of_boolean_mask_unchanged(m: Model) -> None:
+    v = m.add_variables(coords=[pd.Index([0, 1], name="a")], name="v")
+    assert_varequal(v.sel(a=[False, True]), v._sel(a=[False, True]))
+    assert v.sel(a=[False, True]).sizes["a"] == 1

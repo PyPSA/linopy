@@ -1316,20 +1316,14 @@ class Constraint:
     _sel = conwrap(Dataset.sel)
 
     def sel(self, *args: Any, **kwargs: Any) -> Constraint:
-        """
-        Select by label as ``Dataset.sel``. A selection of every label of
-        each selected dimension, in order, returns a shallow copy sharing the
-        data instead of indexing.
-        """
+        """As ``Dataset.sel``; selecting every label in order gives a shallow copy."""
         if selects_everything(self.indexes, args, kwargs):
             return self._shallow_copy()
         return self._sel(*args, **kwargs)
 
     def _shallow_copy(self) -> Constraint:
         """A new, unregistered Constraint sharing this one's arrays."""
-        obj = Constraint.__new__(Constraint)
-        for slot in Constraint.__slots__:
-            object.__setattr__(obj, slot, getattr(self, slot))
+        obj = copy.copy(self)
         obj._attrs = dict(self._attrs)
         obj._coef_dirty = False
         return obj
