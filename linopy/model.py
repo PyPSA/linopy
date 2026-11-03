@@ -1363,15 +1363,10 @@ class Model:
             name f"{name}_slack_pos" (and f"{name}_slack_neg" for
             equality constraints).
         as_bound : bool, optional
-            Lower the rows to variable bounds instead of constraint matrix
-            rows. Every active row must hold exactly one variable term
-            ``c * x`` (raises ValueError otherwise); when the model is lowered
-            (:attr:`matrices`, the direct solver APIs and the LP/MPS writers)
-            the row tightens the bounds of ``x`` to ``rhs / c`` and is not
-            handed to the solver. The duals of these rows are recovered from
-            the reduced costs after the solve. Cannot be combined with
-            ``penalty``. Rows on semi-continuous variables are rejected. The
-            default is False. See :ref:`bound-rows`.
+            Lower the rows to variable bounds instead of matrix rows. Every
+            active row must hold exactly one variable term ``c * x``, which
+            tightens the bounds of ``x`` to ``rhs / c``. Duals are recovered
+            after the solve. The default is False. See :ref:`bound-rows`.
 
         Returns
         -------
@@ -2574,7 +2569,7 @@ class Model:
         if len(result.solution.dual):
             dual = result.solution.dual
             for _, con in self.constraints.items():
-                if con.is_indicator:
+                if con.is_indicator or con.as_bound:
                     continue
                 start, end = con.range
                 coords = {dim: con.coords[dim] for dim in con.coord_dims}
@@ -2596,13 +2591,16 @@ class Model:
         them; :func:`linopy.matrices.bound_row_duals` derives them from the
         reduced costs. The derivation relies on the dual sign convention,
         verified only for the solvers in ``BOUND_ROW_DUAL_SOLVERS``; other
-        solvers get NaN duals for these constraints and a warning.
+        solvers get NaN duals for these constraints and a warning. Mixed-integer
+        problems have no meaningful duals, so they get NaN without a warning.
         """
         folded = [con for con in self.constraints.data.values() if con.as_bound]
         if not folded or result.solution is None:
             return
         values = np.full(self._cCounter, np.nan)
-        if result.solver_name in BOUND_ROW_DUAL_SOLVERS:
+        if "I" in self.type:
+            pass
+        elif result.solver_name in BOUND_ROW_DUAL_SOLVERS:
             M = self.matrices
             assert M.bound_rows is not None
             values[M.bound_rows.labels] = bound_row_duals(

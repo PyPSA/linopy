@@ -654,13 +654,15 @@ class Constraint:
         """
         return bool(self._attrs.get("as_bound", False))
 
-    def check_bound_rows(self) -> None:
+    def check_bound_rows(self, counts: np.ndarray | None = None) -> None:
         """
-        Raise unless every active row holds exactly one variable term with a
-        nonzero coefficient, as rows lowered to bounds must.
+        Raise unless every active row holds exactly one variable term, with
+        ``counts`` the terms per active row (default: as stored, so duplicate
+        terms are not merged).
         """
         active = self.active_row_mask()
-        counts = self._lhs._store.terms(active)[0][active]
+        if counts is None:
+            counts = self._lhs._store.terms(active)[0][active]
         invalid = counts != 1
         if invalid.any():
             labels = self._label_values()[active][invalid]
@@ -1489,7 +1491,11 @@ class Constraints(LabelContainer[Constraint]):
         This excludes constraints with missing labels or where all variables
         are masked (vars == -1).
         """
-        return sum(con.ncons for con in self.data.values() if not con.is_indicator)
+        return sum(
+            con.ncons
+            for con in self.data.values()
+            if not (con.is_indicator or con.as_bound)
+        )
 
     @property
     def inequalities(self) -> Constraints:

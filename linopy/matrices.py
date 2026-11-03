@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 #: Solvers whose dual sign convention was verified against ordinary rows for
 #: recovering the duals of rows folded into bounds (``as_bound=True``).
-BOUND_ROW_DUAL_SOLVERS = frozenset({"highs", "gurobi"})
+BOUND_ROW_DUAL_SOLVERS = frozenset({"highs", "gurobi", "cplex", "xpress", "copt"})
 
 
 class _RowBlock(NamedTuple):
@@ -152,62 +152,22 @@ class BoundRows:
     lower_row: ndarray
     upper_row: ndarray
 
-    def take(self, cols: ndarray) -> BoundRows:
-        """The folded rows on the given column positions, remapped onto them."""
-        position = np.full(self.lower_row.size, -1, dtype=np.intp)
-        position[cols] = np.arange(cols.size)
-        keep = position[self.cols] >= 0
-        return BoundRows(
-            labels=self.labels[keep],
-            cols=position[self.cols[keep]],
-            coeffs=self.coeffs[keep],
-            lower_row=self.lower_row[cols],
-            upper_row=self.upper_row[cols],
-        )
-
-
-def _bound_row_terms(
-    con: Constraint, active: ndarray, label_index: VariableLabelIndex
-) -> tuple[ndarray, ndarray]:
-    """Column positions and coefficients of the single term of each active row."""
-    csr = con.lhs._store.positional_csr(label_index, active, con.name).copy()
-    csr.eliminate_zeros()
-    counts = np.diff(csr.indptr)
-    if (counts != 1).any():
-        con.check_bound_rows()
-        raise ValueError(
-            f"Constraint {con.name!r} is lowered to variable bounds "
-            "(as_bound=True), which requires exactly one variable term with a "
-            "nonzero coefficient per row."
-        )
-    return csr.indices.astype(np.intp), csr.data.astype(float)
-
 
 def _tightest(
     cols: ndarray, values: ndarray, labels: ndarray, bound: ndarray, lower: bool
 ) -> ndarray:
     """
     Tighten ``bound`` in place with ``values`` on ``cols``; return the label
-    of the row that sets each bound, -1 where the bound is unchanged.
-
-    The first row wins between rows with equal values; a row wins over an
-    equal bound of the variable itself, so its dual is reported.
+    of the row that sets each bound, -1 where no row does. A row wins over an
+    equal bound of the variable itself, the first row over later equal rows.
     """
-    binding = np.full(bound.size, -1, dtype=labels.dtype)
-    finite = np.isfinite(values)
-    cols, values, labels = cols[finite], values[finite], labels[finite]
-    if not cols.size:
-        return binding
-    order = np.lexsort((np.arange(cols.size), -values if lower else values, cols))
-    cols, values, labels = cols[order], values[order], labels[order]
-    first = np.ones(cols.size, dtype=bool)
-    first[1:] = cols[1:] != cols[:-1]
-    cols, values, labels = cols[first], values[first], labels[first]
-    tighter = values >= bound[cols] if lower else values <= bound[cols]
-    cols, values, labels = cols[tighter], values[tighter], labels[tighter]
-    bound[cols] = values
-    binding[cols] = labels
-    return binding
+    keep = np.isfinite(values)
+    cols, values, labels = cols[keep], values[keep], labels[keep]
+    (np.maximum if lower else np.minimum).at(bound, cols, values)
+    win = np.flatnonzero(values == bound[cols])
+    first = np.full(bound.size, labels.size)
+    np.minimum.at(first, cols[win], win)
+    return np.append(labels, -1)[first]
 
 
 def _fold_bound_rows(
@@ -223,24 +183,18 @@ def _fold_bound_rows(
     label_index = m.variables.label_index
     parts = []
     for con in cons:
-        if con.is_indicator:
-            raise ValueError(
-                f"Indicator constraint {con.name!r} cannot be lowered to bounds."
-            )
         active = con.active_row_mask()
-        cols, coeffs = _bound_row_terms(con, active, label_index)
-        parts.append(
-            (
-                con._label_values()[active],
-                cols,
-                coeffs,
-                con.rhs.values.ravel()[active].astype(float),
-                con.sign.values.ravel()[active].astype("U1"),
-            )
+        block = _row_block(con, active, label_index)
+        csr = block.positional()
+        data, cols, indptr = keep_entries(
+            csr.data, csr.indices, csr.indptr, csr.data != 0
         )
+        con.check_bound_rows(np.diff(indptr))
+        parts.append((con._label_values()[active], cols, data, block.rhs, block.sign))
     labels, cols, coeffs, rhs, sign = (
         np.concatenate([p[i] for p in parts]) for i in range(5)
     )
+    cols = cols.astype(np.intp)
     semi = vtypes[cols] == "S"
     if semi.any():
         raise ValueError(
@@ -249,20 +203,15 @@ def _fold_bound_rows(
             f"see constraint label {int(labels[semi][0])}."
         )
     values = rhs / coeffs
-    negative = coeffs < 0
-    upper = ((sign == "<") & ~negative) | ((sign == ">") & negative)
-    lower = ((sign == ">") & ~negative) | ((sign == "<") & negative)
-    equal = sign == "="
-    lower |= equal
-    upper |= equal
-    lower_row = _tightest(cols[lower], values[lower], labels[lower], lb, True)
-    upper_row = _tightest(cols[upper], values[upper], labels[upper], ub, False)
+    flip, equal = coeffs < 0, sign == "="
+    lower = equal | ((sign == ">") != flip)
+    upper = equal | ((sign == "<") != flip)
     return BoundRows(
         labels=labels,
         cols=cols,
         coeffs=coeffs,
-        lower_row=lower_row,
-        upper_row=upper_row,
+        lower_row=_tightest(cols[lower], values[lower], labels[lower], lb, True),
+        upper_row=_tightest(cols[upper], values[upper], labels[upper], ub, False),
     )
 
 
@@ -393,7 +342,8 @@ class Matrices:
             indicator_sense=self.indicator_sense,
             indicator_binvar=self.indicator_binvar,
             indicator_binval=self.indicator_binval,
-            bound_rows=None if self.bound_rows is None else self.bound_rows.take(cols),
+            # windows keep the folded bounds in lb/ub; no dual recovery there
+            bound_rows=None,
         )
 
 
@@ -446,9 +396,6 @@ def _build_vars(m: Model) -> _VarArrays:
         pos = cols.stop
 
     bound_rows = _fold_bound_rows(m, lb, ub, vtypes)
-    if _non_unit(var_scaling) is not None:
-        lb *= var_scaling
-        ub *= var_scaling
     return _VarArrays(
         vlabels=vlabels,
         var_scaling=var_scaling,
@@ -467,11 +414,9 @@ def folded_bounds(m: Model) -> tuple[ndarray, ndarray] | None:
     if not any(c.as_bound for c in m.constraints.data.values()):
         return None
     arrays = _build_vars(m)
-    scaling = arrays["var_scaling"]
-    size = m._xCounter
-    lower, upper = np.full(size, np.nan), np.full(size, np.nan)
-    lower[arrays["vlabels"]] = arrays["lb"] / scaling
-    upper[arrays["vlabels"]] = arrays["ub"] / scaling
+    lower, upper = np.full(m._xCounter, np.nan), np.full(m._xCounter, np.nan)
+    lower[arrays["vlabels"]] = arrays["lb"]
+    upper[arrays["vlabels"]] = arrays["ub"]
     return lower, upper
 
 
@@ -549,10 +494,14 @@ class MatrixAccessor(Matrices):
     def __init__(self, model: Model) -> None:
         object.__setattr__(self, "_parent", model)
         variables = _build_vars(model)
+        col_scaling = _non_unit(variables["var_scaling"])
+        if col_scaling is not None:
+            variables["lb"] *= col_scaling
+            variables["ub"] *= col_scaling
         c, Q = _objective(model, variables["vlabels"], variables["var_scaling"])
         super().__init__(
             **variables,
-            **_build_cons(model, _non_unit(variables["var_scaling"])),
+            **_build_cons(model, col_scaling),
             c=c,
             Q=Q,
             objective_scaling=model.objective.scaling,

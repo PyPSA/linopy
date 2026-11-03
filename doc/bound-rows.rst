@@ -21,32 +21,21 @@ solver APIs and the LP and MPS writers, a row ``c * x (sign) b`` tightens the
 bounds of ``x`` to ``b / c`` (the direction flips for ``c < 0``; ``=`` sets
 both bounds). Several rows on one variable and the variable's own bounds
 combine to the tightest bound. The constraint does not appear in
-``m.matrices.clabels``.
+``m.matrices.clabels`` nor in ``m.ncons``.
 
 Duals
 -----
 
-The duals of these rows are recovered after the solve and stored in
-``Constraint.dual`` as for any other constraint. The solver reports duals
-for the remaining rows only; linopy rebuilds the reduced cost of each
-column as ``d = c + Q x - A^T y`` in user units and assigns ``d / c`` to the
-row that sets the active bound, the side being given by the sign of ``d``
-and the objective sense. Every other row on the column is not binding and
-gets a dual of 0. This is the dual the row would get as an ordinary
-constraint, with the same sign convention, for variable, constraint and
-objective scaling alike.
-
-Ties are resolved in favour of rows: when a row and the variable's own
+The duals of these rows are recovered from the reduced costs after the
+solve and stored in ``Constraint.dual``, with the same sign convention and
+scaling as for an ordinary constraint. When a row and the variable's own
 bound give the same value, the row is reported as binding; between equal
-rows, the first one added. In a degenerate optimum the dual of an ordinary
-row is not unique either, so in such cases the reported dual can differ
-from the one the solver would pick for an ordinary row.
+rows, the first one added. In such degenerate cases the dual can differ from
+the one the solver would pick for an ordinary row.
 
-Dual recovery has been verified against ordinary rows for HiGHS and Gurobi,
-with the direct API and LP and MPS files, for minimisation and
-maximisation, linear and quadratic objectives and with scaling. For other
-solvers, the duals of rows lowered to bounds are set to NaN with a warning.
-Mixed-integer problems report no duals, as usual.
+Dual recovery has been verified against ordinary rows for HiGHS, Gurobi,
+CPLEX, Xpress and COPT. For other solvers, the duals of rows lowered to
+bounds are set to NaN with a warning. Mixed-integer problems get NaN.
 
 Limitations
 -----------

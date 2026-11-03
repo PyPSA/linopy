@@ -320,15 +320,22 @@ def objective_to_file(
         objective_write_quadratic_terms(f, quads, print_variable)
 
 
-def _binary_has_nondefault_bounds(var: Variable) -> bool:
+def _binary_has_nondefault_bounds(
+    var: Variable, folded: tuple[np.ndarray, np.ndarray] | None
+) -> bool:
     """
-    Whether a binary variable carries bounds other than the implied (0, 1).
+    Whether a binary variable carries bounds other than the implied (0, 1),
+    taken from the label-indexed ``folded`` bounds if given.
 
     Scans the raw bound values (a single vectorised pass each), so masked
     slots are tolerated: a false positive only routes the variable through
     the bounds loop, where masked labels are dropped before writing.
     """
-    return bool((var.lower.values != 0).any() or (var.upper.values != 1).any())
+    lower, upper = var.lower.values, var.upper.values
+    if folded is not None:
+        labels = var.labels.values[var.labels.values != -1]
+        lower, upper = folded[0][labels], folded[1][labels]
+    return bool((lower != 0).any() or (upper != 1).any())
 
 
 def bounds_to_file(
@@ -348,20 +355,15 @@ def bounds_to_file(
     from linopy.matrices import folded_bounds
 
     folded = folded_bounds(m)
-
-    def binary_bounds_written(name: str) -> bool:
-        var = m.variables[name]
-        if folded is None:
-            return _binary_has_nondefault_bounds(var)
-        labels = var.labels.values.ravel()
-        labels = labels[labels != -1]
-        return bool((folded[0][labels] != 0).any() or (folded[1][labels] != 1).any())
-
     names = (
         list(m.variables.continuous)
         + list(m.variables.integers)
         + list(m.variables.semi_continuous)
-        + [n for n in m.variables.binaries if binary_bounds_written(n)]
+        + [
+            n
+            for n in m.variables.binaries
+            if _binary_has_nondefault_bounds(m.variables[n], folded)
+        ]
     )
     if not len(list(names)):
         return

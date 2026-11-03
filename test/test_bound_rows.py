@@ -11,15 +11,19 @@ import pandas as pd
 import pytest
 
 from linopy import Model, read_netcdf
+from linopy.matrices import BOUND_ROW_DUAL_SOLVERS
 from linopy.persistent.diff import ModelDiff, RebuildReason
+from linopy.solver_capabilities import SolverFeature, get_available_solvers_with_feature
 from linopy.solvers import Solver, licensed_solvers
 
-SOLVERS = [s for s in ("highs", "gurobi") if s in licensed_solvers]
+SOLVERS = [s for s in sorted(BOUND_ROW_DUAL_SOLVERS) if s in licensed_solvers]
+DIRECT = get_available_solvers_with_feature(SolverFeature.DIRECT_API, SOLVERS)
+SOLVER = DIRECT[0] if DIRECT else ""
 IO_APIS = ["direct", "lp", "mps"]
 ROW_NAMES = ["up", "up_loose", "neg", "fix", "lo", "dem", "tot"]
 FOLDED = ["up", "up_loose", "neg", "fix", "lo"]
 
-pytestmark = pytest.mark.skipif(not SOLVERS, reason="needs highs or gurobi")
+pytestmark = pytest.mark.skipif(not DIRECT, reason="needs a dual-verified solver")
 
 
 def build(as_bound: bool, sense: str = "min", scaled: bool = False) -> Model:
@@ -59,6 +63,8 @@ def build(as_bound: bool, sense: str = "min", scaled: bool = False) -> Model:
 
 
 def solved(model: Model, solver: str, io_api: str) -> Model:
+    if io_api == "direct" and solver not in DIRECT:
+        pytest.skip(f"{solver} has no direct API")
     status, _ = model.solve(solver, io_api=io_api)
     assert status == "ok"
     return model
@@ -114,6 +120,8 @@ def test_bound_rows_milp(solver: str) -> None:
     folded = solved(milp(True), solver, "direct")
     assert np.isclose(folded.objective.value, ordinary.objective.value)
     assert folded.solution["n"].item() == ordinary.solution["n"].item() == 2
+    nmax = folded.constraints.dual.get("nmax")  # no spurious MILP duals
+    assert nmax is None or np.isnan(nmax).all()
 
 
 @pytest.mark.parametrize("solver", SOLVERS)
@@ -170,7 +178,7 @@ def test_variable_bound_tighter_than_row() -> None:
     assert (M.lb[0], M.ub[0]) == (0, 1)
     assert M.bound_rows is not None
     assert M.bound_rows.upper_row[0] == M.bound_rows.lower_row[0] == -1
-    m.solve(SOLVERS[0])
+    m.solve(SOLVER)
     assert m.constraints["loose"].dual.item() == 0
     assert m.constraints["loose_lower"].dual.item() == 0
 
@@ -184,13 +192,45 @@ def test_masked_rows_are_skipped() -> None:
     np.testing.assert_array_equal(m.matrices.ub, [2, np.inf, 2])
 
 
-def test_take_keeps_folded_bounds() -> None:
-    M = build(True).matrices
-    taken = M.take(np.array([0]), np.array([1, 2, 8]))
-    np.testing.assert_array_equal(taken.ub, [2, 3, 1.5])
-    assert taken.bound_rows is not None
-    assert len(taken.bound_rows.cols) == 2 + 2 + 1
-    assert (taken.bound_rows.cols < 3).all()
+@pytest.mark.parametrize("io_api", IO_APIS)
+@pytest.mark.parametrize("case", ["constant", "scaling", "infeasible"])
+def test_edge_cases_match_ordinary_rows(case: str, io_api: str) -> None:
+    def edge(as_bound: bool) -> Model:
+        m = Model()
+        mask = np.array([True, False])  # the row on the masked x[1] is skipped
+        x = m.add_variables(
+            0, 10, coords=[pd.RangeIndex(2, name="i")], name="x", mask=mask
+        )
+        if case == "constant":
+            m.add_constraints(2 * x + 3 <= 7, name="c", as_bound=as_bound)
+        elif case == "scaling":
+            m.add_constraints(x <= 2, name="c", scaling=4.0, as_bound=as_bound)
+        else:
+            m.add_constraints(x >= 11, name="c", as_bound=as_bound)
+        m.add_objective(-x.sum())
+        return m
+
+    ordinary, folded = edge(False), edge(True)
+    result = ordinary.solve(SOLVER, io_api=io_api)
+    assert folded.solve(SOLVER, io_api=io_api) == result
+    if case == "infeasible":
+        assert result[1] == "infeasible"
+        return
+    np.testing.assert_allclose(folded.solution["x"], ordinary.solution["x"])
+    np.testing.assert_allclose(
+        folded.constraints["c"].dual, ordinary.constraints["c"].dual
+    )
+
+
+def test_ties_go_to_first_row() -> None:
+    m = Model()
+    x = m.add_variables(upper=3, name="x")
+    m.add_constraints(x <= 3, name="a", as_bound=True)  # beats the equal own bound
+    m.add_constraints(2 * x <= 6, name="b", as_bound=True)  # loses to ``a``
+    m.add_objective(-x)
+    m.solve(SOLVER)
+    assert m.constraints["a"].dual.item() == -1
+    assert m.constraints["b"].dual.item() == 0
 
 
 def test_multi_term_rows_raise() -> None:
@@ -263,18 +303,18 @@ def test_lp_file_binary_bound(tmp_path: Path) -> None:
     m.add_objective(-b)
     text = m.to_file(tmp_path / "model.lp").read_text()
     assert "x0 <= +0.0\n" in text
-    m.solve(SOLVERS[0], io_api="lp")
+    m.solve(SOLVER, io_api="lp")
     assert m.solution["b"].item() == 0
 
 
 def test_dual_matrix_accessor_aligned_with_clabels() -> None:
-    m = solved(build(True), SOLVERS[0], "direct")
+    m = solved(build(True), SOLVER, "direct")
     assert len(m.matrices.dual) == len(m.matrices.clabels)
 
 
 def test_unverified_solver_gets_nan_duals() -> None:
     m = build(True)
-    solver = Solver.from_name(SOLVERS[0], m, io_api="direct")
+    solver = Solver.from_name(SOLVER, m, io_api="direct")
     result = solver.solve()
     with pytest.warns(UserWarning, match="only recovered"):
         m.assign_result(replace(result, solver_name="cbc"))
@@ -285,7 +325,7 @@ def test_unverified_solver_gets_nan_duals() -> None:
 def test_persistent_update_rebuilds() -> None:
     m = build(True)
     assert ModelDiff.from_models(m, build(True)) is RebuildReason.BOUND_ROWS
-    solver = Solver.from_name(SOLVERS[0], m, io_api="direct", track_updates=True)
+    solver = Solver.from_name(SOLVER, m, io_api="direct", track_updates=True)
     solver.solve(assign=True)
     first = m.constraints["up"].dual.values.copy()
     m.constraints["up"].update(rhs=m.constraints["up"].rhs * 0.9)
@@ -303,8 +343,8 @@ def test_dualize_treats_bound_rows_as_rows() -> None:
     folded = build(True).dualize()
     assert set(folded.variables) == set(ordinary.variables)
     assert len(folded.matrices.clabels) == len(ordinary.matrices.clabels)
-    folded.solve(SOLVERS[0])
-    ordinary.solve(SOLVERS[0])
+    folded.solve(SOLVER)
+    ordinary.solve(SOLVER)
     assert np.isclose(folded.objective.value, ordinary.objective.value)
 
 
@@ -315,11 +355,10 @@ def test_netcdf_roundtrip_keeps_flag(tmp_path: Path) -> None:
     assert back.constraints["up"].as_bound
     assert not back.constraints["dem"].as_bound
     assert len(back.matrices.clabels) == len(m.matrices.clabels)
-    assert list(back.constraints.as_bound) == FOLDED
+    assert [n for n, c in back.constraints.items() if c.as_bound] == FOLDED
 
 
 def test_default_unchanged() -> None:
     m = build(False)
     assert not any(c.as_bound for c in m.constraints.data.values())
     assert m.matrices.bound_rows is None
-    assert len(m.constraints.as_bound) == 0
