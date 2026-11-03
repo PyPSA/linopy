@@ -463,7 +463,11 @@ class CSRStore(Store):
         source = self.csr
         if (rows[1:] < rows[:-1]).any():
             order, bounds = _grouped(rows, grid.size)
-            source = source[order]
+            if (np.diff(source.indptr) == 1).all():
+                entries = (source.data[order], source.indices[order], source.indptr)
+                source = scipy.sparse.csr_array(entries, shape=source.shape)
+            else:
+                source = source[order]
         else:
             bounds = np.searchsorted(rows, np.arange(grid.size + 1))
         dtype = index_dtype(source.nnz, shape, self.model)

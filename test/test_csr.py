@@ -5,6 +5,7 @@ materialization, and constraints on a sparse lhs.
 
 from __future__ import annotations
 
+import itertools
 import re
 import tracemalloc
 import warnings
@@ -2930,3 +2931,21 @@ def test_duplicate_terms_kept_like_dense_and_summed_in_constraint() -> None:
     assert got is not None and want is not None
     assert got.nnz == want.nnz
     np.testing.assert_allclose(got.toarray(), want.toarray())
+
+
+@pytest.mark.parametrize("terms", [[1, 1, 1, 1], [2, 0, 1, 3]], ids=["single", "multi"])
+def test_aggregate_unsorted_rows_stacks_terms_in_row_order(terms: list[int]) -> None:
+    indptr = np.cumsum([0, *terms])
+    data = np.arange(indptr[-1], dtype=float)
+    csr = scipy.sparse.csr_array((data, data.astype(int), indptr), shape=(4, 8))
+    source = Grid({"s": pd.RangeIndex(4, name="s")})
+    store = CSRStore(csr, np.array([1.0, np.nan, 2.0, 4.0]), source, Model())
+    res = store.aggregate(
+        Grid({"g": pd.RangeIndex(3, name="g")}), np.array([2, 0, 2, 0])
+    )
+    cells = [
+        res.csr.indices[a:b].tolist() for a, b in itertools.pairwise(res.csr.indptr)
+    ]
+    rows = [csr.indices[a:b].tolist() for a, b in itertools.pairwise(indptr)]
+    assert cells == [rows[1] + rows[3], [], rows[0] + rows[2]]
+    np.testing.assert_array_equal(res.const, [4.0, np.nan, 3.0])
