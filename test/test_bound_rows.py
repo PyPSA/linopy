@@ -80,7 +80,7 @@ def test_bound_rows_match_ordinary_rows(
     ordinary = solved(build(False, sense, scaled), solver, io_api)
     folded = solved(build(True, sense, scaled), solver, io_api)
 
-    assert np.isclose(folded.objective.value, ordinary.objective.value)
+    assert folded.objective.value == pytest.approx(ordinary.objective.value)
     for name in ["x", "y", "z"]:
         np.testing.assert_allclose(
             folded.solution[name], ordinary.solution[name], atol=1e-7
@@ -118,7 +118,7 @@ def test_bound_rows_milp(solver: str) -> None:
 
     ordinary = solved(milp(False), solver, "direct")
     folded = solved(milp(True), solver, "direct")
-    assert np.isclose(folded.objective.value, ordinary.objective.value)
+    assert folded.objective.value == pytest.approx(ordinary.objective.value)
     assert folded.solution["n"].item() == ordinary.solution["n"].item() == 2
     nmax = folded.constraints.dual.get("nmax")  # no spurious MILP duals
     assert nmax is None or np.isnan(nmax).all()
@@ -134,7 +134,7 @@ def test_bound_rows_quadratic_objective(solver: str) -> None:
 
     ordinary = solved(qp(False), solver, "direct")
     folded = solved(qp(True), solver, "direct")
-    assert np.isclose(folded.objective.value, ordinary.objective.value)
+    assert folded.objective.value == pytest.approx(ordinary.objective.value)
     for name in ROW_NAMES:
         np.testing.assert_allclose(
             folded.constraints[name].dual.values,
@@ -147,8 +147,10 @@ def test_bound_rows_quadratic_objective(solver: str) -> None:
 def test_matrices_fold_rows_into_bounds() -> None:
     ordinary, folded = build(False).matrices, build(True).matrices
     assert len(ordinary.clabels) == 4 + 4 + 4 + 1 + 4 + 4 + 1
-    assert len(folded.clabels) == folded.A.shape[0] == 4 + 1
-    assert folded.A.nnz == ordinary.A.nnz - (4 + 4 + 4 + 1 + 4)
+    folded_A, ordinary_A = folded.A, ordinary.A
+    assert folded_A is not None and ordinary_A is not None
+    assert len(folded.clabels) == folded_A.shape[0] == 4 + 1
+    assert folded_A.nnz == ordinary_A.nnz - (4 + 4 + 4 + 1 + 4)
     np.testing.assert_array_equal(folded.ub[:4], [1, 2, 3, 4])
     np.testing.assert_array_equal(folded.ub[4:8], -1)
     np.testing.assert_array_equal(folded.lb[4:8], -3)
@@ -345,7 +347,7 @@ def test_dualize_treats_bound_rows_as_rows() -> None:
     assert len(folded.matrices.clabels) == len(ordinary.matrices.clabels)
     folded.solve(SOLVER)
     ordinary.solve(SOLVER)
-    assert np.isclose(folded.objective.value, ordinary.objective.value)
+    assert folded.objective.value == pytest.approx(ordinary.objective.value)
 
 
 def test_netcdf_roundtrip_keeps_flag(tmp_path: Path) -> None:
