@@ -1912,40 +1912,34 @@ class Highs(Solver[None]):
                 "Use io_api='lp' instead."
             )
 
-        h = highspy.Highs()
-        # One bulk ``passModel`` with a column-wise matrix: HiGHS stores the LP
-        # column-wise, so ``addRows`` with a CSR matrix pays a transpose plus
-        # per-row validation on every call (~7x slower for 7M nonzeros).
-        n_cols = len(M.vlabels)
-        vtypes = M.vtypes
-        integrality = np.zeros(n_cols, dtype=np.int32)
-        int_mask = vtypes != "C"
-        if int_mask.any():
-            integrality[(vtypes == "B") | (vtypes == "I")] = 1
-            integrality[vtypes == "S"] = 2
-        A = M.A
-        if A is None or A.shape[0] == 0:
-            A = csr_array((0, n_cols))
-        Ac = A.tocsc()
+        # one passModel with a column-wise matrix; HiGHS stores the LP
+        # column-wise, so a row-wise addRows is transposed later
+        integrality = (M.vtypes != "C").astype(np.int32)  # 1 = integer/binary
+        integrality[M.vtypes == "S"] = 2  # semi-continuous
+        A = (M.A if M.A is not None else csr_array((0, len(M.vlabels)))).tocsc()
         # compare the 1-char sense as integer codes, not unicode strings
-        codes = np.ascontiguousarray(M.sense, dtype="U1").view(np.uint32)
-        lower = np.where(codes != ord("<"), M.b, -np.inf)
-        upper = np.where(codes != ord(">"), M.b, np.inf)
+        codes = M.sense.astype("U1", copy=False).view(np.uint32)
+        sense = (
+            highspy.ObjSense.kMaximize
+            if M.objective_sense == "max"
+            else highspy.ObjSense.kMinimize
+        )
+        h = highspy.Highs()
         h.passModel(
-            n_cols,
-            Ac.shape[0],
-            Ac.nnz,
-            1,  # MatrixFormat.kColwise
-            1,  # ObjSense.kMinimize, flipped below
+            A.shape[1],
+            A.shape[0],
+            A.nnz,
+            highspy.MatrixFormat.kColwise.value,
+            sense.value,
             0.0,
-            np.ascontiguousarray(M.c, dtype=float),
-            np.ascontiguousarray(M.lb, dtype=float),
-            np.ascontiguousarray(M.ub, dtype=float),
-            np.ascontiguousarray(lower, dtype=float),
-            np.ascontiguousarray(upper, dtype=float),
-            Ac.indptr.astype(np.int32, copy=False),
-            Ac.indices.astype(np.int32, copy=False),
-            np.ascontiguousarray(Ac.data, dtype=float),
+            M.c,
+            M.lb,
+            M.ub,
+            np.where(codes != ord("<"), M.b, -np.inf),
+            np.where(codes != ord(">"), M.b, np.inf),
+            A.indptr,
+            A.indices,
+            A.data,
             integrality,
         )
 
@@ -1962,9 +1956,6 @@ class Highs(Solver[None]):
             Q = triu(Q).tocsr()
             num_vars = Q.shape[0]
             h.passHessian(num_vars, Q.nnz, 1, Q.indptr, Q.indices, Q.data)
-
-        if M.objective_sense == "max":
-            h.changeObjectiveSense(highspy.ObjSense.kMaximize)
 
         return h
 
