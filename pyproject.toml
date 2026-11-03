@@ -80,6 +80,8 @@ dev = [
     "jupyter",
     "matplotlib",
     "linopy[dask]",
+    # sparse-backed (pydata/sparse) `@` operands; optional, tests skip without it
+    "sparse",
 ]
 # Perf-relevant deps pinned exactly so run-to-run deltas reflect linopy
 # changes, not dependency bumps.

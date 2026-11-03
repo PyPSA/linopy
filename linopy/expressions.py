@@ -67,6 +67,8 @@ from linopy.alignment import (
     as_constant,
     as_dataarray,
     broadcast_to_coords,
+    densify_sparse_operand,
+    is_sparse_backed,
 )
 from linopy.common import (
     LocIndexer,
@@ -1488,6 +1490,11 @@ class BaseExpression(ABC):
         sparse contraction; :class:`QuadraticExpression` always takes
         the dense path. The result is CSR-backed for a sparse model
         (``Model(sparse=True)``) or a CSR-backed input.
+
+        ``other`` may be a labelled :class:`xarray.DataArray` backed by a
+        `pydata/sparse <https://sparse.pydata.org>`_ array (e.g.
+        ``sparse.COO``), which the sparse contraction consumes without
+        densifying; see :meth:`LinearExpression.__matmul__`.
         """
         return self.__matmul__(other)
 
@@ -2801,17 +2808,31 @@ class LinearExpression(BaseExpression):
         zeros pruned -- so its term count may differ from the dense path's
         while the values agree. Returns a CSR-backed result when ``self`` is
         CSR-backed or the model is sparse.
+
+        ``other`` may be a sparse-backed :class:`xarray.DataArray` whose data
+        is a `pydata/sparse <https://sparse.pydata.org>`_ array (e.g.
+        ``sparse.COO``, fill value 0), labelled like a dense operand. It
+        takes the same sparse product without ever being densified, so e.g.
+        a large incidence matrix costs memory in its non-zeros only. Where
+        the sparse product does not apply (see :meth:`_sparse_matmul`), the
+        operand is densified with a
+        :class:`~linopy.constants.PerformanceWarning`, silenced by
+        ``linopy.options["warn_on_densify"] = False``.
         """
         other = as_constant(other)
         other_is_const = not isinstance(other, LinearExpression | variables.Variable)
         expr: LinearExpression = self
+        reason: str = "matmul without a sparse path"
         if other_is_const and type(self) is LinearExpression:
             sparse = self._sparse_matmul(other)
             if not isinstance(sparse, str):
                 return sparse
+            reason = sparse
             expr = self._fallback(sparse)
         if other_is_const:
             other = _matmul_operand_to_dataarray(other, expr.coords, expr.coord_dims)
+            if is_sparse_backed(other):
+                other = densify_sparse_operand(other, reason)
 
         common_dims = list(set(expr.coord_dims).intersection(other.dims))
         res = (expr * other).sum(dim=common_dims)
@@ -3433,6 +3454,8 @@ class QuadraticExpression(BaseExpression):
             )
 
         other = _matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
+        if is_sparse_backed(other):
+            other = densify_sparse_operand(other, "matmul on a quadratic expression")
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
 

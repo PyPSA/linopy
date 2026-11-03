@@ -17,6 +17,7 @@ DataArrays conforming to a model's coordinates):
 
 from __future__ import annotations
 
+import sys
 from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from functools import partial
@@ -39,7 +40,8 @@ except ImportError:
     # Added in xarray 2025.6.0; it subclasses ValueError on newer versions.
     CoordinateValidationError = ValueError  # type: ignore[assignment, misc]
 
-from linopy.constants import HELPER_DIMS
+from linopy.config import options
+from linopy.constants import HELPER_DIMS, PerformanceWarning
 from linopy.semantics import (
     _multiindex_message,
     _shared_dim_mismatch_message,
@@ -47,6 +49,7 @@ from linopy.semantics import (
     enforce_aux_conflict,
     enforce_no_multiindex,
     first_mismatched_dim,
+    warn_outside_linopy,
 )
 from linopy.types import UNLABELED_TYPES, CoordsLike, DimsLike
 
@@ -496,6 +499,72 @@ def _matmul_operand_to_dataarray(
     return as_dataarray(other, coords=coords, dims=dims)
 
 
+def is_sparse_backed(arr: Any) -> bool:
+    """
+    Whether ``arr`` is a DataArray holding a `pydata/sparse
+    <https://sparse.pydata.org>`_ array (e.g. ``sparse.COO``).
+
+    ``sparse`` is an optional dependency and is never imported here: an array
+    can only be one if the user already imported the package.
+    """
+    sparse = sys.modules.get("sparse")
+    if sparse is None or not isinstance(arr, DataArray):
+        return False
+    sparse_array = getattr(sparse, "SparseArray", None)
+    return sparse_array is not None and isinstance(arr.variable._data, sparse_array)
+
+
+def densify_sparse_operand(other: DataArray, reason: str) -> DataArray:
+    """
+    The dense copy of a sparse-backed ``@`` operand for the dense path.
+
+    Emits a :class:`~linopy.constants.PerformanceWarning` naming ``reason``
+    unless ``options["warn_on_densify"]`` is ``False``: unlike the densify
+    notice of a CSR-backed expression, it is on by default in a dense model
+    too, as the user handed in a sparse array on purpose.
+    """
+    if options["warn_on_densify"] is not False:
+        warn_outside_linopy(
+            f"Sparse (pydata/sparse) operand densified: {reason}.",
+            PerformanceWarning,
+        )
+    return other.copy(data=other.data.todense())
+
+
+def _sparse_has_nan(other: DataArray) -> bool:
+    """Whether a sparse-backed array holds a NaN, stored or as fill value."""
+    import sparse
+
+    coo = sparse.as_coo(other.data)
+    if not np.issubdtype(coo.dtype, np.inexact):
+        return False
+    return bool(np.isnan(coo.fill_value)) or bool(np.isnan(coo.data).any())
+
+
+def _sparse_operand_to_matrix(
+    other: DataArray, n_contracted: int, n_new: int
+) -> scipy.sparse.csr_array:
+    """
+    Flatten a transposed, sparse-backed ``@`` constant to the
+    ``(n_contracted, n_new)`` CSR matrix without densifying it.
+
+    A non-zero fill value would make every implicit entry a coefficient, so
+    it is refused.
+    """
+    import sparse
+
+    coo = sparse.as_coo(other.data)
+    if coo.fill_value != 0:
+        raise ValueError(
+            f"A sparse `@` operand must have fill value 0, got "
+            f"{coo.fill_value!r}: every implicit entry would be a coefficient. "
+            f"Densify it with `.copy(data=arr.data.todense())` or rebuild it "
+            f"with `fill_value=0`."
+        )
+    coo = coo.reshape((n_contracted, n_new))
+    return scipy.sparse.csr_array(coo.to_scipy_sparse())
+
+
 def _matmul_operand_to_matrix(
     other: DataArray,
     contracted: Sequence[str],
@@ -509,18 +578,24 @@ def _matmul_operand_to_matrix(
     NaN, §8 on the labels of the shared (contracted) dims and §11 on auxiliary
     coordinates. The expression side is represented by its grid labels alone
     and never broadcasts.
+
+    A sparse-backed (pydata/sparse) ``other`` is flattened as a sparse array
+    and never densified.
     """
-    if other.isnull().any():
+    is_sparse = is_sparse_backed(other)
+    if _sparse_has_nan(other) if is_sparse else bool(other.isnull().any()):
         check_user_nan()
     reference = Dataset(coords={d: indexes[d] for d in contracted} | dict(aux_coords))
     mismatch = first_mismatched_dim(reference, other)
     if mismatch is not None:
         raise ValueError(_shared_dim_mismatch_message(*mismatch))
     enforce_aux_conflict([reference, other])
-    values = other.transpose(*contracted, *new_dims).values
+    other = other.transpose(*contracted, *new_dims)
     n_contracted = int(np.prod([len(indexes[d]) for d in contracted], dtype=np.int64))
     n_new = int(np.prod([other.sizes[d] for d in new_dims], dtype=np.int64))
-    return scipy.sparse.csr_array(values.reshape(n_contracted, n_new))
+    if is_sparse:
+        return _sparse_operand_to_matrix(other, n_contracted, n_new)
+    return scipy.sparse.csr_array(other.values.reshape(n_contracted, n_new))
 
 
 def _dims_for_positional_input(
