@@ -86,7 +86,7 @@ from linopy.io import (
     to_netcdf,
     to_xpress,
 )
-from linopy.matrices import MatrixAccessor
+from linopy.matrices import BOUND_ROW_DUAL_SOLVERS, MatrixAccessor, bound_row_duals
 from linopy.objective import Objective
 from linopy.piecewise import (
     add_piecewise_formulation,
@@ -1314,6 +1314,7 @@ class Model:
         mask: MaskLike | None = None,
         scaling: ConstantLike = 1,
         penalty: ConstantLike | None = None,
+        as_bound: bool = False,
     ) -> Constraint:
         """
         Assign a new, possibly multi-dimensional array of constraints to the
@@ -1361,6 +1362,11 @@ class Model:
             model.variables using the derived
             name f"{name}_slack_pos" (and f"{name}_slack_neg" for
             equality constraints).
+        as_bound : bool, optional
+            Lower the rows to variable bounds instead of matrix rows. Every
+            active row must hold exactly one variable term ``c * x``, which
+            tightens the bounds of ``x`` to ``rhs / c``. Duals are recovered
+            after the solve. The default is False. See :ref:`bound-rows`.
 
         Returns
         -------
@@ -1368,6 +1374,11 @@ class Model:
             The added constraint, its lhs on the model's store class
             (:attr:`store_cls`) where it converts.
         """
+        if as_bound and penalty is not None:
+            raise ValueError(
+                "as_bound=True cannot be combined with penalty: the slack term "
+                "would make the rows multi-term."
+            )
 
         name = self._resolve_constraint_name(name)
 
@@ -1424,9 +1435,15 @@ class Model:
             rhs,
             labels,
             row_scaling,
-            {**con.attrs, "label_range": label_range},
+            {
+                **con.attrs,
+                "label_range": label_range,
+                **({"as_bound": True} if as_bound else {}),
+            },
         )
         enforce_no_multiindex(constraint, context=f"constraint {name!r}")
+        if as_bound:
+            constraint.check_bound_rows()
 
         if self.chunk:
             constraint = constraint.chunk(self.chunk)
@@ -2558,7 +2575,7 @@ class Model:
         if len(result.solution.dual):
             dual = result.solution.dual
             for _, con in self.constraints.items():
-                if con.is_indicator:
+                if con.is_indicator or con.as_bound:
                     continue
                 start, end = con.range
                 coords = {dim: con.coords[dim] for dim in con.coord_dims}
@@ -2568,8 +2585,48 @@ class Model:
                     / self.objective.scaling
                 )
                 con.dual = xr.DataArray(values, coords, dims=con.coord_dims)
+            self._assign_bound_row_duals(result)
 
         return status_value, termination_condition
+
+    def _assign_bound_row_duals(self, result: Result) -> None:
+        """
+        Recover the duals of constraints lowered to bounds (``as_bound=True``).
+
+        They are not rows in the solver, so the solver reports no dual for
+        them; :func:`linopy.matrices.bound_row_duals` derives them from the
+        reduced costs. The derivation relies on the dual sign convention,
+        verified only for the solvers in ``BOUND_ROW_DUAL_SOLVERS``; other
+        solvers get NaN duals for these constraints and a warning. Mixed-integer
+        problems have no meaningful duals, so they get NaN without a warning.
+        """
+        folded = [con for con in self.constraints.data.values() if con.as_bound]
+        if not folded or result.solution is None:
+            return
+        values = np.full(self._cCounter, np.nan)
+        if "I" in self.type:
+            pass
+        elif result.solver_name in BOUND_ROW_DUAL_SOLVERS:
+            M = self.matrices
+            assert M.bound_rows is not None
+            values[M.bound_rows.labels] = bound_row_duals(
+                M, result.solution.primal, result.solution.dual
+            )
+        else:
+            warnings.warn(
+                "Duals of constraints lowered to bounds (as_bound=True) are only "
+                f"recovered for the solvers {sorted(BOUND_ROW_DUAL_SOLVERS)}, not "
+                f"for {result.solver_name!r}; they are set to NaN for "
+                f"{[con.name for con in folded]}.",
+                UserWarning,
+                stacklevel=3,
+            )
+        for con in folded:
+            start, end = con.range
+            coords = {dim: con.coords[dim] for dim in con.coord_dims}
+            con.dual = xr.DataArray(
+                values[start:end].reshape(con.shape), coords, dims=con.coord_dims
+            )
 
     def _mock_solve(
         self,

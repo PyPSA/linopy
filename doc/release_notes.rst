@@ -103,6 +103,7 @@ Version 1.0.0
 
 **Performance**
 
+* ``Model.add_constraints(..., as_bound=True)`` lowers a constraint whose rows each hold one variable term to column bounds instead of matrix rows, shrinking the matrix handed to the solver; it is opt-in. The duals of these rows are recovered after the solve for HiGHS, Gurobi, CPLEX, Xpress and COPT. See :doc:`bound-rows`.
 * Building a model is faster on the dense path: ``add_variables``, ``add_constraints``, arithmetic between variables and constants, ``where``, subtraction and ``merge`` skip xarray alignment and copies when the operands already share their coordinates. PyPSA's own ``create_model`` builds about twice as fast.
 * ``Model.from_spec`` builds the PyPSA spec about 4 to 5 times faster with about a third less peak memory: evaluated nodes are reused within a build, empty constraints are skipped before evaluation, and ``sum(..., by=...)`` on a dense expression groups in numpy.
 * ``Store.terms(active=None)`` returns the number of live terms per cell instead of a cell index per term, and drops the cells outside ``active``. ``Constraint.to_polars`` spreads labels with ``np.repeat`` and masks rows inside the store, so it no longer allocates an int64 index per nonzero or copies its frame to filter masked rows. (`#1058 <https://github.com/PyPSA/linopy/issues/1058>`__)

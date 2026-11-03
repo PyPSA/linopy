@@ -320,15 +320,22 @@ def objective_to_file(
         objective_write_quadratic_terms(f, quads, print_variable)
 
 
-def _binary_has_nondefault_bounds(var: Variable) -> bool:
+def _binary_has_nondefault_bounds(
+    var: Variable, folded: tuple[np.ndarray, np.ndarray] | None
+) -> bool:
     """
-    Whether a binary variable carries bounds other than the implied (0, 1).
+    Whether a binary variable carries bounds other than the implied (0, 1),
+    taken from the label-indexed ``folded`` bounds if given.
 
     Scans the raw bound values (a single vectorised pass each), so masked
     slots are tolerated: a false positive only routes the variable through
     the bounds loop, where masked labels are dropped before writing.
     """
-    return bool((var.lower.values != 0).any() or (var.upper.values != 1).any())
+    lower, upper = var.lower.values, var.upper.values
+    if folded is not None:
+        labels = var.labels.values[var.labels.values != -1]
+        lower, upper = folded[0][labels], folded[1][labels]
+    return bool((lower != 0).any() or (upper != 1).any())
 
 
 def bounds_to_file(
@@ -341,7 +348,13 @@ def bounds_to_file(
 ) -> None:
     """
     Write out variables of a model to a lp file.
+
+    Rows of constraints added with ``as_bound=True`` are folded into the
+    written bounds.
     """
+    from linopy.matrices import folded_bounds
+
+    folded = folded_bounds(m)
     names = (
         list(m.variables.continuous)
         + list(m.variables.integers)
@@ -349,7 +362,7 @@ def bounds_to_file(
         + [
             n
             for n in m.variables.binaries
-            if _binary_has_nondefault_bounds(m.variables[n])
+            if _binary_has_nondefault_bounds(m.variables[n], folded)
         ]
     )
     if not len(list(names)):
@@ -371,6 +384,12 @@ def bounds_to_file(
         var = m.variables[name]
         for var_slice in var.iterate_slices(slice_size):
             df = var_slice.to_polars()
+            if folded is not None and not df.is_empty():
+                labels = df["labels"].to_numpy()
+                df = df.with_columns(
+                    pl.Series("lower", folded[0][labels]),
+                    pl.Series("upper", folded[1][labels]),
+                )
             if variable_scaling is not None:
                 df = _scale_bounds_dataframe(df, variable_scaling)
 
@@ -579,7 +598,7 @@ def indicator_constraints_to_file(
     if not len(m.constraints.indicator):
         return
 
-    if not len(m.constraints.regular):
+    if not _row_constraint_names(m):
         f.write(b"\n\ns.t.\n\n")
 
     print_variable_scalar, _ = get_printers_scalar(
@@ -626,6 +645,15 @@ def indicator_constraints_to_file(
             f.write(line.encode())
 
 
+def _row_constraint_names(m: Model) -> list[str]:
+    """Names of the constraints written as rows: not indicator, not as_bound."""
+    return [
+        name
+        for name, con in m.constraints.items()
+        if not (con.is_indicator or con.as_bound)
+    ]
+
+
 def constraints_to_file(
     m: Model,
     f: BufferedWriter,
@@ -635,8 +663,8 @@ def constraints_to_file(
     slice_size: int = 2_000_000,
     explicit_coordinate_names: bool = False,
 ) -> None:
-    regular = m.constraints.regular
-    if not len(regular):
+    names = _row_constraint_names(m)
+    if not names:
         return
 
     print_variable, print_constraint = get_printers(
@@ -645,7 +673,6 @@ def constraints_to_file(
     scaled = variable_scaling is not None or constraint_scaling is not None
 
     f.write(b"\n\ns.t.\n\n")
-    names = list(regular)
     if progress:
         names = tqdm(
             names,
@@ -654,7 +681,7 @@ def constraints_to_file(
         )
 
     for name in names:
-        con = regular[name]
+        con = m.constraints[name]
         for df in map(Constraint.to_polars, con.iterate_slices(slice_size)):
             if df.height == 0:
                 continue

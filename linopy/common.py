@@ -822,11 +822,16 @@ class ConstraintLabelIndex:
 
     @cached_property
     def clabels(self) -> np.ndarray:
-        """Active constraint labels in build order, shape (n_active_cons,)."""
+        """
+        Active labels of the matrix rows in build order, shape (n_active_cons,).
+
+        Indicator constraints and constraints lowered to variable bounds
+        (``as_bound=True``) are not matrix rows and are left out.
+        """
         label_lists = [
             c.active_labels()
             for c in self._constraints.data.values()
-            if not c.is_indicator
+            if not (c.is_indicator or c.as_bound)
         ]
         dtype = self._constraints.model._dtypes["labels"]
         return np.concatenate([np.array([], dtype=dtype), *label_lists], dtype=dtype)

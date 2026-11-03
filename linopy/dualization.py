@@ -543,6 +543,11 @@ def dualize(
 
     m1 = m.copy()
     m_dual = Model()
+    # Rows lowered to bounds (as_bound=True) are ordinary rows of the primal;
+    # dualize them as such so that each gets its dual variable.
+    for con in m1.constraints.data.values():
+        con.attrs.pop("as_bound", None)
+    m1.constraints._invalidate_label_position_index()
 
     if not m1.variables:
         logger.warning("Primal model has no variables. Returning empty dual model.")
