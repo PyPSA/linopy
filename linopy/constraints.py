@@ -642,6 +642,38 @@ class Constraint:
         return self._binary_var is not None
 
     @property
+    def as_bound(self) -> bool:
+        """
+        Whether the rows are lowered to variable bounds instead of matrix rows.
+
+        Set with ``Model.add_constraints(..., as_bound=True)``. Every active
+        row then holds exactly one variable term ``c * x``, which tightens the
+        bounds of ``x`` to ``rhs / c`` when the model is lowered to matrices or
+        written to a file. Duals are recovered from the reduced cost of ``x``
+        after the solve, see :ref:`bound-rows`.
+        """
+        return bool(self._attrs.get("as_bound", False))
+
+    def check_bound_rows(self) -> None:
+        """
+        Raise unless every active row holds exactly one variable term with a
+        nonzero coefficient, as rows lowered to bounds must.
+        """
+        active = self.active_row_mask()
+        counts = self._lhs._store.terms(active)[0][active]
+        invalid = counts != 1
+        if invalid.any():
+            labels = self._label_values()[active][invalid]
+            raise ValueError(
+                f"Constraint {self.name!r} is lowered to variable bounds "
+                "(as_bound=True), which requires exactly one variable term with "
+                f"a nonzero coefficient per row, but {int(invalid.sum())} row(s) "
+                f"have {sorted(set(counts[invalid].tolist()))} terms, e.g. "
+                f"constraint label {int(labels[0])}. Merge duplicate terms or add "
+                "the constraint without as_bound=True."
+            )
+
+    @property
     def binary_var(self) -> DataArray | None:
         return self._binary_var
 
@@ -1131,6 +1163,13 @@ class Constraint:
                 "directly."
             )
 
+        if self.as_bound:
+            raise ValueError(
+                f"Constraint {self.name!r} is lowered to variable bounds "
+                "(as_bound=True) and cannot be softened: a slack term would make "
+                "its rows multi-term. Add it without as_bound=True to soften it."
+            )
+
         existing_slack = self.slack
         if existing_slack is not None:
             raise ValueError(
@@ -1479,6 +1518,14 @@ class Constraints(LabelContainer[Constraint]):
         Get the subset of constraints which are not indicator constraints.
         """
         return self[[n for n, c in self.items() if not c.is_indicator]]
+
+    @property
+    def as_bound(self) -> Constraints:
+        """
+        Get the subset of constraints which are lowered to variable bounds
+        (added with ``as_bound=True``) instead of matrix rows.
+        """
+        return self[[n for n, c in self.items() if c.as_bound]]
 
     def sanitize_zeros(self) -> None:
         """

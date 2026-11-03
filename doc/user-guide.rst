@@ -142,7 +142,8 @@ Where to go next
   portfolio build-out), :doc:`sudoku` (indexing with N-D coordinates),
   :doc:`migrating-from-pyomo`.
 - **Advanced features** — :doc:`sos-constraints`,
-  :doc:`piecewise-linear-constraints`, and the
+  :doc:`piecewise-linear-constraints`, :doc:`bound-rows` (single-variable
+  constraints lowered to variable bounds, with their duals), and the
   :doc:`testing-framework` for asserting structural properties of a
   model.
 - **Solving** — :doc:`solve-on-remote` (SSH), :doc:`gpu-acceleration`

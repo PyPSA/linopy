@@ -49,6 +49,7 @@ class RebuildReason(enum.Enum):
     SPARSITY = "coefficient sparsity changed"
     QUAD_OBJ = "quadratic objective changed"
     BACKEND_REJECTED = "backend raised UnsupportedUpdate"
+    BOUND_ROWS = "constraints lowered to bounds (as_bound=True)"
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,10 @@ def _coords_equal(
 
 
 def _structural_reason(base: StructuralKey, model: Model) -> RebuildReason | None:
+    # Rows folded into bounds are not tracked by the snapshot buffers, so a
+    # model holding them is rebuilt rather than updated in place.
+    if any(con.as_bound for con in model.constraints.data.values()):
+        return RebuildReason.BOUND_ROWS
     if base.var_container_names != tuple(
         model.variables
     ) or base.con_container_names != tuple(model.constraints):

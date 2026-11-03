@@ -25,6 +25,11 @@ if TYPE_CHECKING:
     from linopy.model import Model
 
 
+#: Solvers whose dual sign convention was verified against ordinary rows for
+#: recovering the duals of rows folded into bounds (``as_bound=True``).
+BOUND_ROW_DUAL_SOLVERS = frozenset({"highs", "gurobi"})
+
+
 class _RowBlock(NamedTuple):
     """
     Active rows of one constraint. ``positional`` returns their positional
@@ -129,6 +134,178 @@ def _stack(
     return A, b, sense
 
 
+@dataclass(frozen=True, eq=False)
+class BoundRows:
+    """
+    Constraint rows lowered to column bounds (``as_bound=True``).
+
+    Each folded row ``coeffs[k] * x[cols[k]] (sign) rhs`` tightened the
+    bounds of column ``cols[k]`` (a position aligned with ``vlabels``) to
+    ``rhs / coeffs[k]``. ``lower_row`` and ``upper_row`` hold, per column,
+    the label of the folded row that sets the lower / upper bound, or -1 where
+    the variable's own bound is tightest. Coefficients are in user units.
+    """
+
+    labels: ndarray
+    cols: ndarray
+    coeffs: ndarray
+    lower_row: ndarray
+    upper_row: ndarray
+
+    def take(self, cols: ndarray) -> BoundRows:
+        """The folded rows on the given column positions, remapped onto them."""
+        position = np.full(self.lower_row.size, -1, dtype=np.intp)
+        position[cols] = np.arange(cols.size)
+        keep = position[self.cols] >= 0
+        return BoundRows(
+            labels=self.labels[keep],
+            cols=position[self.cols[keep]],
+            coeffs=self.coeffs[keep],
+            lower_row=self.lower_row[cols],
+            upper_row=self.upper_row[cols],
+        )
+
+
+def _bound_row_terms(
+    con: Constraint, active: ndarray, label_index: VariableLabelIndex
+) -> tuple[ndarray, ndarray]:
+    """Column positions and coefficients of the single term of each active row."""
+    csr = con.lhs._store.positional_csr(label_index, active, con.name).copy()
+    csr.eliminate_zeros()
+    counts = np.diff(csr.indptr)
+    if (counts != 1).any():
+        con.check_bound_rows()
+        raise ValueError(
+            f"Constraint {con.name!r} is lowered to variable bounds "
+            "(as_bound=True), which requires exactly one variable term with a "
+            "nonzero coefficient per row."
+        )
+    return csr.indices.astype(np.intp), csr.data.astype(float)
+
+
+def _tightest(
+    cols: ndarray, values: ndarray, labels: ndarray, bound: ndarray, lower: bool
+) -> ndarray:
+    """
+    Tighten ``bound`` in place with ``values`` on ``cols``; return the label
+    of the row that sets each bound, -1 where the bound is unchanged.
+
+    The first row wins between rows with equal values; a row wins over an
+    equal bound of the variable itself, so its dual is reported.
+    """
+    binding = np.full(bound.size, -1, dtype=labels.dtype)
+    finite = np.isfinite(values)
+    cols, values, labels = cols[finite], values[finite], labels[finite]
+    if not cols.size:
+        return binding
+    order = np.lexsort((np.arange(cols.size), -values if lower else values, cols))
+    cols, values, labels = cols[order], values[order], labels[order]
+    first = np.ones(cols.size, dtype=bool)
+    first[1:] = cols[1:] != cols[:-1]
+    cols, values, labels = cols[first], values[first], labels[first]
+    tighter = values >= bound[cols] if lower else values <= bound[cols]
+    cols, values, labels = cols[tighter], values[tighter], labels[tighter]
+    bound[cols] = values
+    binding[cols] = labels
+    return binding
+
+
+def _fold_bound_rows(
+    m: Model, lb: ndarray, ub: ndarray, vtypes: ndarray
+) -> BoundRows | None:
+    """
+    Tighten ``lb`` and ``ub`` (user units, aligned with vlabels) in place with
+    the rows of constraints added with ``as_bound=True``.
+    """
+    cons = [c for c in m.constraints.data.values() if c.as_bound]
+    if not cons:
+        return None
+    label_index = m.variables.label_index
+    parts = []
+    for con in cons:
+        if con.is_indicator:
+            raise ValueError(
+                f"Indicator constraint {con.name!r} cannot be lowered to bounds."
+            )
+        active = con.active_row_mask()
+        cols, coeffs = _bound_row_terms(con, active, label_index)
+        parts.append(
+            (
+                con._label_values()[active],
+                cols,
+                coeffs,
+                con.rhs.values.ravel()[active].astype(float),
+                con.sign.values.ravel()[active].astype("U1"),
+            )
+        )
+    labels, cols, coeffs, rhs, sign = (
+        np.concatenate([p[i] for p in parts]) for i in range(5)
+    )
+    semi = vtypes[cols] == "S"
+    if semi.any():
+        raise ValueError(
+            "Constraints lowered to bounds (as_bound=True) cannot act on "
+            "semi-continuous variables, since a bound changes their semantics; "
+            f"see constraint label {int(labels[semi][0])}."
+        )
+    values = rhs / coeffs
+    negative = coeffs < 0
+    upper = ((sign == "<") & ~negative) | ((sign == ">") & negative)
+    lower = ((sign == ">") & ~negative) | ((sign == "<") & negative)
+    equal = sign == "="
+    lower |= equal
+    upper |= equal
+    lower_row = _tightest(cols[lower], values[lower], labels[lower], lb, True)
+    upper_row = _tightest(cols[upper], values[upper], labels[upper], ub, False)
+    return BoundRows(
+        labels=labels,
+        cols=cols,
+        coeffs=coeffs,
+        lower_row=lower_row,
+        upper_row=upper_row,
+    )
+
+
+def _label_take(values: ndarray, labels: ndarray) -> ndarray:
+    """``values[labels]``, NaN where a label lies beyond ``values``."""
+    out = np.full(labels.size, np.nan)
+    inside = labels < values.size
+    out[inside] = values[labels[inside]]
+    return out
+
+
+def bound_row_duals(M: Matrices, primal: ndarray, dual: ndarray) -> ndarray:
+    """
+    Duals of the rows folded into bounds, in user units, aligned with
+    ``M.bound_rows.labels``.
+
+    ``primal`` and ``dual`` are the label-indexed solver-unit arrays of a
+    :class:`~linopy.constants.Solution`. The reduced costs of the columns are
+    reconstructed from the duals of the remaining rows as
+    ``d = c + Q x - A^T y``, the stationarity condition under linopy's dual
+    sign convention. The row setting the active bound of a column then
+    carries ``d_j / coeff``, which is the dual the same row would get as an
+    ordinary constraint; every other folded row is not binding and gets 0.
+    """
+    rows = M.bound_rows
+    if rows is None:
+        return np.empty(0)
+    x = _label_take(primal, M.vlabels)
+    gradient = M.c.astype(float, copy=True)
+    if M.Q is not None:
+        gradient += M.Q @ x
+    if M.A is not None and M.A.shape[0]:
+        gradient -= M.A.T @ _label_take(dual, M.clabels)
+    reduced = gradient * M.var_scaling / M.objective_scaling
+    d = reduced[rows.cols]
+    direction = d if M.objective_sense == "min" else -d
+    at_lower = (direction > 0) & (rows.lower_row[rows.cols] == rows.labels)
+    at_upper = (direction < 0) & (rows.upper_row[rows.cols] == rows.labels)
+    result = np.where(at_lower | at_upper, d / rows.coeffs, 0.0)
+    result[np.isnan(d)] = np.nan
+    return result
+
+
 def _indicator_rows(con: Constraint, active: ndarray) -> tuple[ndarray, ndarray]:
     """Binary variable labels and triggering values of the active indicator rows."""
     if con.binary_var is None or con.binary_val is None:
@@ -150,6 +327,10 @@ class Matrices:
     solver-scaled units. ``con_scaling`` is the row scaling applied to ``A``,
     aligned with ``clabels``; consumers that report duals need it to invert the
     scaling on the way back.
+
+    Rows of constraints added with ``as_bound=True`` are not part of ``A`` and
+    ``clabels``; they are folded into ``lb`` and ``ub``, and ``bound_rows``
+    records which row sets which bound, see :class:`BoundRows`.
     """
 
     vlabels: ndarray
@@ -171,6 +352,7 @@ class Matrices:
     indicator_sense: ndarray
     indicator_binvar: ndarray
     indicator_binval: ndarray
+    bound_rows: BoundRows | None = None
 
     @property
     def type(self) -> str:
@@ -211,6 +393,7 @@ class Matrices:
             indicator_sense=self.indicator_sense,
             indicator_binvar=self.indicator_binvar,
             indicator_binval=self.indicator_binval,
+            bound_rows=None if self.bound_rows is None else self.bound_rows.take(cols),
         )
 
 
@@ -220,6 +403,7 @@ class _VarArrays(TypedDict):
     lb: ndarray
     ub: ndarray
     vtypes: ndarray
+    bound_rows: BoundRows | None
 
 
 class _ConArrays(TypedDict):
@@ -261,12 +445,34 @@ def _build_vars(m: Model) -> _VarArrays:
         ub[cols] = var.upper.values.ravel()[mask]
         pos = cols.stop
 
+    bound_rows = _fold_bound_rows(m, lb, ub, vtypes)
     if _non_unit(var_scaling) is not None:
         lb *= var_scaling
         ub *= var_scaling
     return _VarArrays(
-        vlabels=vlabels, var_scaling=var_scaling, lb=lb, ub=ub, vtypes=vtypes
+        vlabels=vlabels,
+        var_scaling=var_scaling,
+        lb=lb,
+        ub=ub,
+        vtypes=vtypes,
+        bound_rows=bound_rows,
     )
+
+
+def folded_bounds(m: Model) -> tuple[ndarray, ndarray] | None:
+    """
+    Label-indexed lower and upper bounds in user units with the rows of
+    ``as_bound=True`` constraints folded in, or None without such rows.
+    """
+    if not any(c.as_bound for c in m.constraints.data.values()):
+        return None
+    arrays = _build_vars(m)
+    scaling = arrays["var_scaling"]
+    size = m._xCounter
+    lower, upper = np.full(size, np.nan), np.full(size, np.nan)
+    lower[arrays["vlabels"]] = arrays["lb"] / scaling
+    upper[arrays["vlabels"]] = arrays["ub"] / scaling
+    return lower, upper
 
 
 def _build_cons(m: Model, col_scaling: ndarray | None) -> _ConArrays:
@@ -276,6 +482,8 @@ def _build_cons(m: Model, col_scaling: ndarray | None) -> _ConArrays:
     regular, indicator = [], []
     binvar, binval = [], []
     for c in m.constraints.data.values():
+        if c.as_bound:
+            continue
         active = c.active_row_mask()
         block = _row_block(c, active, label_index)
         if not c.is_indicator:
@@ -377,7 +585,7 @@ class MatrixAccessor(Matrices):
         dual_list = []
         has_dual = False
         for c in m.constraints.data.values():
-            if c.is_indicator:
+            if c.is_indicator or c.as_bound:
                 continue
             active = c.active_row_mask()
             if "dual" in c:
