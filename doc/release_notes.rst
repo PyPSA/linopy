@@ -107,6 +107,7 @@ Version 1.0.0
 * ``Model.from_spec`` builds the PyPSA spec about 4 to 5 times faster with about a third less peak memory: evaluated nodes are reused within a build, empty constraints are skipped before evaluation, and ``sum(..., by=...)`` on a dense expression groups in numpy.
 * ``Store.terms(active=None)`` returns the number of live terms per cell instead of a cell index per term, and drops the cells outside ``active``. ``Constraint.to_polars`` spreads labels with ``np.repeat`` and masks rows inside the store, so it no longer allocates an int64 index per nonzero or copies its frame to filter masked rows. (`#1058 <https://github.com/PyPSA/linopy/issues/1058>`__)
 * ``Model.assign_coords`` no longer relabels containers through a Python dict. It locates each container's labels with ``master.get_indexer(index)`` and takes the new values with ``new.take(positions)``: on a tz-aware ``DatetimeIndex``, the rolling-horizon case it is built for, the previous ``Index.map`` over a dict fell into pandas' object-to-datetime inference and cost milliseconds per container. Reassigning a dataset's coordinates also builds it once instead of twice. A model with ~30 containers on a 4380-label tz-aware axis reassigns in ~9 ms, down from ~810 ms.
+* HiGHS (direct API, ``to_highspy``): the model is passed in one row-wise ``passModel`` call, without converting the constraint matrix. When ``to_file(io_api="mps")`` writes an ``.lp`` file through HiGHS, empty trailing ``bin``/``gen``/``semi`` sections are removed so that other LP readers can parse it.
 
 **Bug fixes**
 
