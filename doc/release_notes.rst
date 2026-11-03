@@ -110,6 +110,7 @@ Version 1.0.0
 
 **Bug fixes**
 
+* ``add_constraints`` no longer raises on invalid infinite right-hand sides (``<= -inf`` or ``>= inf``) at positions excluded by ``mask``. (`#1116 <https://github.com/PyPSA/linopy/issues/1116>`__)
 * CPLEX: a solve ending as "optimal with unscaled infeasibilities" is now reported as ``imprecise`` and its solution is imported, instead of being discarded as unknown. (`#368 <https://github.com/PyPSA/linopy/issues/368>`__)
 * Mosek: setting ``log_fn`` no longer disables the console log; solver output is written to both stdout and the log file, consistent with HiGHS. (`#948 <https://github.com/PyPSA/linopy/issues/948>`__)
 * ``QuadraticExpression.groupby(...).map`` returns a ``QuadraticExpression`` instead of a ``LinearExpression`` wrapping quadratic data. (`#1064 <https://github.com/PyPSA/linopy/issues/1064>`__)

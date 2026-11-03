@@ -456,6 +456,10 @@ def test_invalid_infinite_rhs_raises(sparse: bool, masked: bool) -> None:
     rhs = c.load.where(valid, -np.inf)
     mask = valid if masked else None
     add = partial(c.m.add_constraints, name="bal", mask=mask)
+    if masked:
+        con = add(c.balance_lhs() <= rhs)
+        assert con.ncons == int(valid.sum()) * c.load.sizes["snapshot"]
+        return
     with pytest.raises(ValueError, match="incorrect infinite values"):
         add(c.balance_lhs() <= rhs)
 
