@@ -170,6 +170,13 @@ This package is published under MIT license.
 .. toctree::
    :hidden:
    :maxdepth: 2
+   :caption: Community
+
+   projects
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
    :caption: Reference
 
    api
