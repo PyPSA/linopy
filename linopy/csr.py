@@ -404,6 +404,30 @@ class CSRStore(Store):
         return cls(csr, np.where(present, 0.0, np.nan), grid, model)
 
     @classmethod
+    def from_coo(
+        cls,
+        grid: Grid,
+        rows: np.ndarray,
+        vars_: np.ndarray,
+        coeffs: np.ndarray,
+        const: np.ndarray | None,
+        model: Model,
+    ) -> CSRStore:
+        """
+        Build from COO triplets on ``grid``: entry ``k`` adds the term
+        ``coeffs[k] * x[vars_[k]]`` to the flat C-order cell ``rows[k]``.
+        The triplets are taken as validated (rows within the grid, no masked
+        label); a repeated ``(row, var)`` pair is stored per entry and adds
+        up, as everywhere in the CSR form. ``const`` is the flat per-cell
+        constant, NaN marking an absent cell; ``None`` gives 0 where a cell
+        holds a term and leaves the others absent.
+        """
+        csr = coo_to_csr(coeffs, rows, vars_, (grid.size, model._xCounter), model)
+        if const is None:
+            const = np.where(np.diff(csr.indptr) > 0, 0.0, np.nan)
+        return cls(csr, const, grid, model)
+
+    @classmethod
     def _from_scatter(
         cls,
         ds: Dataset,

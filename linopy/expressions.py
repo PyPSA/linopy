@@ -41,6 +41,7 @@ import scipy
 import xarray as xr
 import xarray.core.groupby
 from numpy import array, nan
+from numpy.typing import ArrayLike
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from scipy.sparse import csc_matrix
@@ -62,6 +63,8 @@ from types import EllipsisType, NotImplementedType
 
 from linopy import constraints, variables
 from linopy.alignment import (
+    _as_index,
+    _coords_to_dict,
     _matmul_operand_to_dataarray,
     _matmul_operand_to_matrix,
     as_constant,
@@ -134,6 +137,7 @@ from linopy.store import (
     expression_dataset,
     merge_datasets,
     merge_stores,
+    on_cells,
     pruned_terms,
     summed,
 )
@@ -3307,6 +3311,133 @@ class LinearExpression(BaseExpression):
         const_da = as_dataarray(constant)
         return LinearExpression(const_da, model)
 
+    @classmethod
+    def from_coo(
+        cls,
+        model: Model,
+        coords: Sequence[Sequence | pd.Index] | Mapping,
+        rows: ArrayLike,
+        vars: ArrayLike,
+        coeffs: ArrayLike,
+        const: ConstantLike | None = None,
+    ) -> LinearExpression:
+        """
+        Create a linear expression from COO triplets on a coordinate grid.
+
+        Each triplet ``(rows[k], vars[k], coeffs[k])`` adds the term
+        ``coeffs[k] * x[vars[k]]`` to the cell ``rows[k]`` of the grid
+        spanned by ``coords``, cells being numbered in C order (the last
+        dimension varying fastest, as by ``numpy.ravel_multi_index``). This
+        hands over a sparse structure, e.g. an incidence matrix times a
+        variable, without building it from ``sel``, ``groupby().sum()``,
+        ``merge`` or ``reindex`` steps.
+
+        A repeated ``(row, var)`` pair adds up, as a repeated variable does
+        in any linopy expression. A masked label (``-1``) contributes no
+        term. A cell without any term is absent, as after ``where``, unless
+        ``const`` is given, which makes every cell present.
+
+        The result is built on the model's store class
+        (:attr:`~linopy.model.Model.store_cls`): CSR-backed in a sparse
+        model (``Model(sparse=True)``), dense otherwise.
+
+        Parameters
+        ----------
+        model : linopy.Model
+            The model the variable labels belong to.
+        coords : list/dict/xarray.Coordinates
+            The coordinates of the result, as for
+            :meth:`~linopy.model.Model.add_variables`: a mapping of dimension
+            names to labels, or a sequence of (preferably named)
+            ``pandas.Index``; an unnamed entry ``i`` becomes ``dim_i``.
+        rows : array_like of int
+            Flat C-order cell position of each term, in
+            ``[0, prod(grid shape))``.
+        vars : array_like of int
+            Variable label of each term, e.g. taken from
+            ``Variable.labels``; ``-1`` skips the term.
+        coeffs : array_like of float
+            Finite coefficient of each term.
+        const : int/float/array_like, optional
+            The constant of every cell: a number, a ``DataArray`` lying on a
+            subset of the grid's dimensions with its coordinates, or an array
+            of the grid's shape or of its flat size. Must be finite.
+
+        Returns
+        -------
+        linopy.LinearExpression
+
+        Examples
+        --------
+        Sum two generators and a line into the balance of two buses, the
+        line leaving bus ``a`` and entering bus ``b``:
+
+        >>> import numpy as np
+        >>> import pandas as pd
+        >>> from linopy import LinearExpression, Model
+        >>> m = Model()
+        >>> time = pd.RangeIndex(2, name="time")
+        >>> bus = pd.Index(["a", "b"], name="bus")
+        >>> g = pd.Index(["g1", "g2"], name="gen")
+        >>> gen = m.add_variables(coords=[time, g], name="p")
+        >>> line = m.add_variables(coords=[time], name="line")
+        >>> gen_bus = np.array([0, 1])  # bus position of g1 and g2
+        >>> t = np.arange(2)[:, None]
+        >>> rows = np.concatenate(
+        ...     [(t * 2 + gen_bus).ravel(), (t * 2 + [0, 1]).ravel()]
+        ... )
+        >>> vars = np.concatenate(
+        ...     [gen.labels.values.ravel(), np.repeat(line.labels.values, 2)]
+        ... )
+        >>> coeffs = np.concatenate([np.ones(4), np.tile([-1.0, 1.0], 2)])
+        >>> balance = LinearExpression.from_coo(m, [time, bus], rows, vars, coeffs)
+        >>> balance
+        LinearExpression [time: 2, bus: 2]:
+        -----------------------------------
+        [0, a]: +1 p[0, g1] - 1 line[0]
+        [0, b]: +1 p[0, g2] + 1 line[0]
+        [1, a]: +1 p[1, g1] - 1 line[1]
+        [1, b]: +1 p[1, g2] + 1 line[1]
+        """
+        grid = _coo_grid(coords)
+        n_cells = grid.size
+        rows_, vars_, coeffs_ = (np.array(a).reshape(-1) for a in (rows, vars, coeffs))
+        if not rows_.size == vars_.size == coeffs_.size:
+            raise ValueError(
+                "`rows`, `vars` and `coeffs` must have the same length, got "
+                f"{rows_.size}, {vars_.size} and {coeffs_.size}."
+            )
+        for name, values in (("rows", rows_), ("vars", vars_)):
+            if values.size and values.dtype.kind not in "iu":
+                raise TypeError(
+                    f"`{name}` must hold integers, got dtype {values.dtype}."
+                )
+        if coeffs_.size and coeffs_.dtype.kind not in "biuf":
+            raise TypeError(
+                f"`coeffs` must hold real numbers, got dtype {coeffs_.dtype}."
+            )
+        coeffs_ = coeffs_.astype(float, copy=False)
+        if rows_.size and (rows_.min() < 0 or rows_.max() >= n_cells):
+            bad = rows_[(rows_ < 0) | (rows_ >= n_cells)]
+            raise IndexError(
+                f"`rows` must lie in [0, {n_cells}) for a grid of shape "
+                f"{grid.shape}, got e.g. {bad[:5].tolist()}."
+            )
+        if vars_.size and (vars_.min() < -1 or vars_.max() >= model._xCounter):
+            bad = vars_[(vars_ < -1) | (vars_ >= model._xCounter)]
+            raise ValueError(
+                "`vars` must be variable labels of the model (or -1 to skip a "
+                f"term), in [0, {model._xCounter}); got e.g. {bad[:5].tolist()}."
+            )
+        if not np.isfinite(coeffs_).all():
+            raise ValueError("`coeffs` must be finite.")
+        present = vars_ != -1
+        if not present.all():
+            rows_, vars_, coeffs_ = rows_[present], vars_[present], coeffs_[present]
+        const_ = None if const is None else _coo_const(const, grid)
+        store = model.store_cls.from_coo(grid, rows_, vars_, coeffs_, const_, model)
+        return cls._from_store(store, model)
+
 
 class QuadraticExpression(BaseExpression):
     """
@@ -3584,6 +3715,66 @@ def as_expression(
         except ValueError as e:
             raise ValueError(f"Cannot convert to LinearExpression: {e}") from e
         return LinearExpression(obj, model)
+
+
+def _coo_grid(coords: Sequence[Sequence | pd.Index] | Mapping) -> Grid:
+    """
+    The grid of :meth:`LinearExpression.from_coo`: ``coords`` normalized as
+    for ``add_variables``, an unnamed sequence entry ``i`` named ``dim_i``.
+    """
+    if isinstance(coords, Mapping | Coordinates):
+        entries = _coords_to_dict(coords)
+    else:
+        entries = {}
+        for i, c in enumerate(coords):
+            if isinstance(c, tuple):
+                entries.update(_coords_to_dict([c]))
+            elif isinstance(c, pd.Index | DataArray) and c.name is not None:
+                entries[c.name] = c
+            else:
+                entries[f"dim_{i}"] = c
+        if len(entries) != len(coords):
+            raise ValueError("`coords` must not repeat a dimension name.")
+    indexes = {}
+    for d, values in entries.items():
+        index = _as_index(values)
+        if isinstance(index, pd.MultiIndex):
+            raise ValueError(
+                f"`coords` dimension '{d}' is a MultiIndex, which is unsupported; "
+                "flatten it with `reset_index` first."
+            )
+        indexes[str(d)] = index.rename(str(d))
+    return Grid(indexes)
+
+
+def _coo_const(const: Any, grid: Grid) -> np.ndarray:
+    """The ``const`` of :meth:`LinearExpression.from_coo` as a flat array over ``grid``."""
+    if isinstance(const, DataArray) or np.ndim(const) == 0:
+        values = on_cells(const, grid.dims, grid.to_dataset())
+        if values is None:
+            raise ValueError(
+                "`const` must be a number or a DataArray lying on a subset of "
+                f"the dimensions {list(grid.dims)} with matching coordinates."
+            )
+    else:
+        values = np.asarray(const)
+        if values.dtype.kind not in "biuf" or values.shape not in (
+            grid.shape,
+            (grid.size,),
+        ):
+            raise ValueError(
+                f"`const` must be numeric with the grid shape {grid.shape} or "
+                f"its flat size {grid.size}, got {values.dtype} {values.shape}."
+            )
+    values = np.asarray(values, dtype=float)
+    flat = (
+        values.reshape(-1)
+        if values.shape == (grid.size,)
+        else np.broadcast_to(values, grid.shape).reshape(-1)
+    )
+    if not np.isfinite(flat).all():
+        raise ValueError("`const` must be finite.")
+    return flat.copy()
 
 
 def result_store_cls(store: Store, model: Model) -> type[Store]:
