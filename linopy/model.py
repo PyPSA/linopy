@@ -1377,7 +1377,6 @@ class Model:
             sign = maybe_replace_signs(as_dataarray(sign))
 
         con = self._constraint_from_lhs(lhs, sign, rhs, coords)
-        _check_infinities(con.sign, con.rhs, name)
 
         rhs = con.rhs
         rhs_nan = rhs.isnull()
@@ -1406,6 +1405,13 @@ class Model:
                 mask = broadcast_to_coords(mask, con.coords, label="mask").astype(bool)
             else:
                 mask = rhs.copy(deep=False, data=np.asarray(on_grid, dtype=bool))
+
+        _check_infinities(
+            con.sign,
+            con.rhs,
+            name,
+            None if mask is None else np.asarray(mask.transpose(*con.rhs.dims)),
+        )
 
         lhs = con.lhs
         self.check_force_dim_names(lhs)
