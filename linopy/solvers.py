@@ -1912,16 +1912,10 @@ class Highs(Solver[None]):
                 "Use io_api='lp' instead."
             )
 
-        # one passModel call with the cached row-wise matrix as is; HiGHS
-        # stores it column-wise, and converting it here would hold a second
-        # copy of A in Python without making the build faster
         A = M.A if M.A is not None else csr_array((0, len(M.vlabels)))
         A = A.tocsr()
-        # integrality must be a full-length array (an empty one is misread):
-        # 0 continuous, 1 binary/integer, 2 semi-continuous
         integrality = (M.vtypes != "C").astype(np.int32)
         integrality[M.vtypes == "S"] = 2
-        # compare the 1-char sense as integer codes, not unicode strings
         codes = M.sense.astype("U1", copy=False).view(np.uint32)
         sense = (
             highspy.ObjSense.kMaximize
