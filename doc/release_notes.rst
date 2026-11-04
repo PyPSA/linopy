@@ -42,6 +42,7 @@ Version 1.0.0
 * Cells with a NaN constant now drop their terms when a ``LinearExpression`` or ``QuadraticExpression`` is built from a dataset or its ``vars`` or ``coeffs`` are assigned, so neither a dataset with terms under a NaN constant nor a ``vars`` assignment can revive an absent cell. (`#1045 <https://github.com/PyPSA/linopy/issues/1045>`__)
 * ``Solver.apply_update`` takes ``(diff, n_vars, n_cons)``, the number of active variables and constraints, instead of the variable and constraint label indexes.
 * ``expand_dims`` on an expression now puts the new dim first in ``coord_dims`` and in the dims of its dataset, matching the layout of its arrays. Before, it came after the existing dims. Selecting by dim name is unaffected. (`#1078 <https://github.com/PyPSA/linopy/pull/1078>`__)
+* ``Model.to_file`` and ``Model.solve`` raise ``ValueError`` when the problem file extension does not match ``io_api`` (``.lp`` for ``"lp"``/``"lp-polars"``, ``.mps`` for ``"mps"``). Before, ``io_api="mps"`` with a ``.lp`` path wrote an LP file through HiGHS, since HiGHS picks the format from the extension.
 
 **Breaking Changes: constraints on stores**
 
@@ -107,6 +108,7 @@ Version 1.0.0
 * ``Model.from_spec`` builds the PyPSA spec about 4 to 5 times faster with about a third less peak memory: evaluated nodes are reused within a build, empty constraints are skipped before evaluation, and ``sum(..., by=...)`` on a dense expression groups in numpy.
 * ``Store.terms(active=None)`` returns the number of live terms per cell instead of a cell index per term, and drops the cells outside ``active``. ``Constraint.to_polars`` spreads labels with ``np.repeat`` and masks rows inside the store, so it no longer allocates an int64 index per nonzero or copies its frame to filter masked rows. (`#1058 <https://github.com/PyPSA/linopy/issues/1058>`__)
 * ``Model.assign_coords`` no longer relabels containers through a Python dict. It locates each container's labels with ``master.get_indexer(index)`` and takes the new values with ``new.take(positions)``: on a tz-aware ``DatetimeIndex``, the rolling-horizon case it is built for, the previous ``Index.map`` over a dict fell into pandas' object-to-datetime inference and cost milliseconds per container. Reassigning a dataset's coordinates also builds it once instead of twice. A model with ~30 containers on a 4380-label tz-aware axis reassigns in ~9 ms, down from ~810 ms.
+* HiGHS (direct API, ``to_highspy``): the model is passed in one row-wise ``passModel`` call, without converting the constraint matrix.
 
 **Bug fixes**
 
