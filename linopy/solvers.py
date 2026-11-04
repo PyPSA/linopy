@@ -2224,7 +2224,80 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         names: Printers | None,
         sos: list[SosSet],
     ) -> gurobipy.Model:
-        """Build a gurobipy.Model from the matrices ``M``."""
+        """
+        Build a gurobipy.Model from the matrices ``M``.
+
+        Columns, linear rows and objective go in one column-wise
+        ``gurobipy.loadModel`` call; names are set afterwards with one
+        whole-model ``setAttr`` each. SOS and indicator constraints, which
+        ``loadModel`` cannot take, are added over the model's ``Var`` list.
+        Without an ``env`` (``loadModel`` requires one) or on gurobipy < 12,
+        the model is built with ``addMVar``/``addMConstr`` instead.
+        """
+        if env is None or not hasattr(gurobipy, "loadModel"):
+            return Gurobi._build_solver_model_mvar(M, env, names=names, sos=sos)
+
+        n_vars = len(M.vlabels)
+        A = M.A
+        n_cons = 0 if A is None else A.shape[0]
+        constr: dict[str, Any] = {}
+        if n_cons:
+            assert A is not None
+            # loadModel reads the matrix by column
+            A = A.tocsc()
+            constr = {
+                "constr_csc": (A.data, A.indices, A.indptr),
+                # bytes, which loadModel does not convert one char at a time
+                "sense": M.sense.astype("S1"),
+                "rhs": M.b,
+            }
+        qobj = None
+        if M.Q is not None and M.Q.nnz:
+            # Gurobi sums the terms q * x_i * x_j, so fold 0.5 x'Qx into the
+            # upper triangle
+            U = (triu(M.Q) + tril(M.Q, -1).T).tocoo()
+            qobj = (0.5 * U.data, (U.row, U.col))
+        discrete = (M.vtypes != "C").any()
+
+        gm = gurobipy.loadModel(
+            env=env,
+            numvars=n_vars,
+            numconstrs=n_cons,
+            modelsense=-1 if M.objective_sense == "max" else 1,
+            obj=M.c,
+            lb=M.lb,
+            ub=M.ub,
+            vtype=M.vtypes if discrete else None,
+            qobj_coo=qobj,
+            **constr,
+        )
+        # Gurobi holds its own copy now; drop the transient CSC before naming
+        del A, constr, qobj
+        try:
+            if names is not None:
+                print_variables, print_constraints = names
+                if n_vars:
+                    gm.setAttr("VarName", print_variables(M.vlabels))
+                if n_cons:
+                    gm.setAttr("ConstrName", print_constraints(M.clabels))
+            if sos or M.indicator_A is not None:
+                gm.update()
+                Gurobi._add_sos_and_indicators(gm, gm.getVars(), M, sos)
+            gm.update()
+        except BaseException:
+            gm.dispose()
+            raise
+        return gm
+
+    @staticmethod
+    def _build_solver_model_mvar(
+        M: Matrices,
+        env: gurobipy.Env | None = None,
+        *,
+        names: Printers | None,
+        sos: list[SosSet],
+    ) -> gurobipy.Model:
+        """Build via ``addMVar``/``addMConstr``, for gurobipy without ``loadModel``."""
         gm = gurobipy.Model(env=env)
 
         kwargs: dict[str, Any] = {}
@@ -2248,8 +2321,19 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
             if names is not None:
                 c.setAttr("ConstrName", print_constraints(M.clabels))
 
+        Gurobi._add_sos_and_indicators(gm, x.tolist(), M, sos)
+        gm.update()
+        return gm
+
+    @staticmethod
+    def _add_sos_and_indicators(
+        gm: gurobipy.Model, x_list: list[Any], M: Matrices, sos: list[SosSet]
+    ) -> None:
+        """Add the SOS and indicator constraints over the model's variables."""
         for sos_type, positions, weights in sos:
-            gm.addSOS(sos_type, x[positions.tolist()].tolist(), weights.tolist())
+            gm.addSOS(
+                sos_type, [x_list[i] for i in positions.tolist()], weights.tolist()
+            )
 
         if M.indicator_A is not None:
             sense_map = {
@@ -2257,7 +2341,6 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                 ">": gurobipy.GRB.GREATER_EQUAL,
                 "=": gurobipy.GRB.EQUAL,
             }
-            x_list = x.tolist()
             A = M.indicator_A
             for i in range(A.shape[0]):
                 lhs = gurobipy.LinExpr()
@@ -2271,9 +2354,6 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
                     sense_map[str(M.indicator_sense[i])],
                     float(M.indicator_b[i]),
                 )
-
-        gm.update()
-        return gm
 
     _GUROBI_VTYPE_MAP: ClassVar[dict[VarKind, str]] = {
         VarKind.CONTINUOUS: "C",
@@ -2500,27 +2580,28 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         def get_solver_solution() -> Solution:
             objective = m.ObjVal
 
+            # one bulk getAttr per vector rather than a property read per element
             vars_ = m.getVars()
-            sol = np.array([v.X for v in vars_], dtype=float)
+            sol = np.array(m.getAttr("X", vars_), dtype=float)
             if from_file:
                 sol = _solution_from_names(
-                    sol, [v.VarName for v in vars_], self._n_vars
+                    sol, m.getAttr("VarName", vars_), self._n_vars
                 )
             else:
                 sol = _solution_from_labels(sol, self._vlabels, self._n_vars)
 
             try:
                 constrs = m.getConstrs()
-                dual = np.array([c.Pi for c in constrs], dtype=float)
+                dual = np.array(m.getAttr("Pi", constrs), dtype=float)
                 if from_file:
                     dual = _solution_from_names(
                         dual,
-                        [c.ConstrName for c in constrs],
+                        m.getAttr("ConstrName", constrs),
                         self._n_cons,
                     )
                 else:
                     dual = _solution_from_labels(dual, self._clabels, self._n_cons)
-            except AttributeError:
+            except (AttributeError, gurobipy.GurobiError):
                 logger.warning("Dual values of MILP couldn't be parsed")
                 dual = np.array([], dtype=float)
 
