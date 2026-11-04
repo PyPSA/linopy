@@ -39,4 +39,4 @@ repos:
     -   id: nbstripout
         args:
           - --extra-keys=cell.metadata.ExecuteTime cell.metadata.execution
-        exclude: examples/solve-on-remote.ipynb
+        exclude: doc/user-guide/solve-on-remote.ipynb

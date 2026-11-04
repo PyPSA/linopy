@@ -142,14 +142,14 @@ def assert_conequal(a: Constraint, b: Constraint, strict: bool = True) -> None:
 
     Parameters
     ----------
-        a: Constraint
-            The first constraint.
-        b: Constraint
-            The second constraint.
-        strict: bool
-            Whether to compare the constraints strictly. If not, only compare
-            mathematically relevant parts: the lhs by :func:`assert_equivalent`,
-            independently of its store, and the sign and rhs.
+    a : Constraint
+        The first constraint.
+    b : Constraint
+        The second constraint.
+    strict : bool
+        Whether to compare the constraints strictly. If not, only compare
+        mathematically relevant parts: the lhs by :func:`assert_equivalent`,
+        independently of its store, and the sign and rhs.
     """
     if strict:
         assert_equal(_con_unwrap(a), _con_unwrap(b))

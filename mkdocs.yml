@@ -1,0 +1,267 @@
+site_name: linopy
+site_description: Linear optimization with N-D labeled variables
+site_url: !ENV [READTHEDOCS_CANONICAL_URL, "https://linopy.readthedocs.io/en/latest/"]
+repo_url: https://github.com/PyPSA/linopy
+repo_name: PyPSA/linopy
+edit_uri: edit/master/doc/
+docs_dir: doc
+copyright: >-
+  &copy; Copyright 2021-2026 Fabian Hofmann, Felix Bumann | MIT License
+
+# The layout follows the PyPSA documentation (https://docs.pypsa.org).
+# Only features supported by Zensical (https://zensical.org) are used, apart
+# from mkdocs-jupyter, so the site can move to Zensical once it renders notebooks.
+nav:
+- Home:
+  - Home: index.md
+  - Overview:
+    - Features: home/features.md
+    - Release Notes: release-notes.md
+  - Getting Started:
+    - Installation: home/installation.md
+    - home/create-a-model.ipynb
+    - home/create-a-model-with-coordinates.ipynb
+  - Reference:
+    - Users: home/projects.md
+    - Citing: home/citing.md
+    - License: home/license.md
+
+- User Guide:
+  - Overview: user-guide/overview.md
+  - Migrating to v1: user-guide/migrating-to-v1.md
+  - Creating Models:
+    - user-guide/creating-variables.ipynb
+    - user-guide/creating-expressions.ipynb
+    - user-guide/creating-constraints.ipynb
+    - user-guide/coordinate-alignment.ipynb
+    - user-guide/sparse-models.ipynb
+    - user-guide/long-form-inputs.ipynb
+  - Modifying Models:
+    - user-guide/manipulating-models.ipynb
+    - Restricting a Model: user-guide/restrict.md
+  - Models from Specs:
+    - user-guide/building-models-from-specs.ipynb
+    - Spec Data: user-guide/spec-data.md
+  - Solving:
+    - user-guide/using-solvers.ipynb
+    - user-guide/solve-on-remote.ipynb
+    - GPU Acceleration: user-guide/gpu-acceleration.md
+    - user-guide/numerical-scaling.ipynb
+  - Advanced Formulations:
+    - SOS Constraints: user-guide/sos-constraints.md
+    - Piecewise Linear Constraints: user-guide/piecewise-linear-constraints.md
+    - user-guide/piecewise-linear-constraints-tutorial.ipynb
+    - user-guide/piecewise-inequality-bounds-tutorial.ipynb
+    - user-guide/testing-framework.ipynb
+  - Troubleshooting:
+    - user-guide/infeasible-model.ipynb
+    - Gurobi Double Logging: user-guide/gurobi-double-logging.md
+  - Coming from Other Tools:
+    - Syntax Comparison: user-guide/syntax.md
+    - Benchmarks: user-guide/benchmark.md
+    - user-guide/migrating-from-pyomo.ipynb
+  - Design & Internals:
+    - Arithmetic Convention: user-guide/design/convention.md
+    - Design Goals: user-guide/design/goals.md
+
+- Examples:
+  - Overview: examples/examples.md
+  - examples/transport-tutorial.ipynb
+  - examples/energy-resource-build.ipynb
+  - examples/sudoku.ipynb
+
+- API Reference:
+  - Overview: api/index.md
+  - Model: api/model.md
+  - Variables: api/variables.md
+  - Expressions: api/expressions.md
+  - Constraints: api/constraints.md
+  - Objective: api/objective.md
+  - Piecewise: api/piecewise.md
+  - Solvers: api/solvers.md
+  - Other:
+    - Utilities: api/utilities.md
+    - Testing: api/testing.md
+    - Warnings and Errors: api/warnings.md
+
+- Contributing:
+  - Instructions: contributing/contributing.md
+
+theme:
+  name: material
+  custom_dir: doc/assets/overrides
+  logo: assets/logo/logo-icon-white.svg
+  favicon: assets/logo/logo-icon.svg
+  font:
+    text: Overpass
+  features:
+  - navigation.tabs
+  - navigation.tabs.sticky
+  - navigation.sections
+  - navigation.tracking
+  - navigation.indexes
+  - navigation.top
+  - header.autohide
+  - content.action.edit
+  - content.action.view
+  - content.code.copy
+  - toc.follow
+  - search.suggest
+  - search.highlight
+  - search.share
+  palette:
+  - media: "(prefers-color-scheme: light)"
+    scheme: default
+    primary: custom
+    accent: custom
+    toggle:
+      icon: material/weather-sunny
+      name: Switch to dark mode
+  - media: "(prefers-color-scheme: dark)"
+    scheme: slate
+    primary: custom
+    accent: custom
+    toggle:
+      icon: material/weather-night
+      name: Switch to light mode
+
+extra_css:
+- assets/stylesheets/extra.css
+
+extra_javascript:
+- assets/javascripts/readthedocs.js
+- assets/javascripts/mathjax.js
+- https://unpkg.com/mathjax@3.2.2/es5/tex-mml-chtml.js
+
+markdown_extensions:
+- abbr
+- admonition
+- attr_list
+- footnotes
+- md_in_html
+- tables
+- toc:
+    title: On this page
+    permalink: true
+    toc_depth: 3
+- pymdownx.arithmatex:
+    generic: true
+- pymdownx.details
+- pymdownx.emoji:
+    emoji_index: !!python/name:material.extensions.emoji.twemoji
+    emoji_generator: !!python/name:material.extensions.emoji.to_svg
+- pymdownx.highlight:
+    anchor_linenums: true
+- pymdownx.inlinehilite
+- pymdownx.superfences
+- pymdownx.tabbed:
+    alternate_style: true
+
+plugins:
+- search
+- autorefs
+- mkdocstrings:
+    default_handler: python
+    handlers:
+      python:
+        inventories:
+        - https://docs.python.org/3/objects.inv
+        - https://numpy.org/doc/stable/objects.inv
+        - https://pandas.pydata.org/docs/objects.inv
+        - https://docs.xarray.dev/en/stable/objects.inv
+        - https://docs.scipy.org/doc/scipy/objects.inv
+        options:
+          docstring_style: numpy
+          docstring_options:
+            ignore_init_summary: true
+            warn_missing_types: false
+            warn_unknown_params: false
+          docstring_section_style: list
+          filters:
+          - "!^_[^_]"
+          - "!^__"
+          heading_level: 2
+          members_order: source
+          merge_init_into_class: true
+          separate_signature: true
+          show_root_heading: true
+          show_root_full_path: false
+          show_root_toc_entry: true
+          show_source: false
+          show_signature_annotations: false
+          show_symbol_type_heading: true
+          show_symbol_type_toc: true
+          show_bases: true
+          summary: true
+- mkdocs-jupyter:
+    include: ["*.ipynb"]
+    ignore: ["*.md"]
+    execute: !ENV [LINOPY_DOCS_EXECUTE, true]
+    execute_ignore:
+    - user-guide/solve-on-remote.ipynb
+    allow_errors: false
+    include_source: true
+    markdown_cell_processor: mkdocs
+    remove_tag_config:
+      remove_input_tags:
+      - hide-input
+      remove_cell_tags:
+      - hide-cell
+- redirects:
+    redirect_maps:
+      # pages of the former Sphinx documentation
+      benchmark.md: user-guide/benchmark.md
+      building-models-from-specs.md: user-guide/building-models-from-specs.ipynb
+      contributing.md: contributing/contributing.md
+      coordinate-alignment.md: user-guide/coordinate-alignment.ipynb
+      create-a-model.md: home/create-a-model.ipynb
+      create-a-model-with-coordinates.md: home/create-a-model-with-coordinates.ipynb
+      creating-constraints.md: user-guide/creating-constraints.ipynb
+      creating-expressions.md: user-guide/creating-expressions.ipynb
+      creating-variables.md: user-guide/creating-variables.ipynb
+      design/convention.md: user-guide/design/convention.md
+      design/goals.md: user-guide/design/goals.md
+      energy-resource-build.md: examples/energy-resource-build.ipynb
+      gpu-acceleration.md: user-guide/gpu-acceleration.md
+      gurobi-double-logging.md: user-guide/gurobi-double-logging.md
+      infeasible-model.md: user-guide/infeasible-model.ipynb
+      long-form-inputs.md: user-guide/long-form-inputs.ipynb
+      manipulating-models.md: user-guide/manipulating-models.ipynb
+      migrating-from-pyomo.md: user-guide/migrating-from-pyomo.ipynb
+      migrating-to-v1.md: user-guide/migrating-to-v1.md
+      numerical-scaling.md: user-guide/numerical-scaling.ipynb
+      piecewise-inequality-bounds-tutorial.md: user-guide/piecewise-inequality-bounds-tutorial.ipynb
+      piecewise-linear-constraints.md: user-guide/piecewise-linear-constraints.md
+      piecewise-linear-constraints-tutorial.md: user-guide/piecewise-linear-constraints-tutorial.ipynb
+      prerequisites.md: home/installation.md
+      projects.md: home/projects.md
+      release_notes.md: release-notes.md
+      restrict.md: user-guide/restrict.md
+      solve-on-remote.md: user-guide/solve-on-remote.ipynb
+      sos-constraints.md: user-guide/sos-constraints.md
+      sparse-models.md: user-guide/sparse-models.ipynb
+      spec-data.md: user-guide/spec-data.md
+      sudoku.md: examples/sudoku.ipynb
+      syntax.md: user-guide/syntax.md
+      testing-framework.md: user-guide/testing-framework.ipynb
+      transport-tutorial.md: examples/transport-tutorial.ipynb
+      user-guide.md: user-guide/overview.md
+      using-solvers.md: user-guide/using-solvers.ipynb
+
+extra:
+  social:
+  - icon: fontawesome/brands/github
+    link: https://github.com/PyPSA/linopy
+  - icon: fontawesome/brands/python
+    link: https://pypi.org/project/linopy/
+
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+    absolute_links: warn
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: info
+    unrecognized_links: warn
