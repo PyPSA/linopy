@@ -800,6 +800,13 @@ def to_file(
     if io_api is None:
         io_api = fn.suffix[1:]
 
+    expected_suffix = {"lp": ".lp", "lp-polars": ".lp", "mps": ".mps"}.get(io_api)
+    if expected_suffix is not None and fn.suffix.lower() != expected_suffix:
+        raise ValueError(
+            f"File '{fn}' does not match io_api='{io_api}': expected a "
+            f"'{expected_suffix}' file. Use a matching extension or io_api."
+        )
+
     if progress is None:
         progress = m._xCounter > 10_000
 

@@ -1912,28 +1912,34 @@ class Highs(Solver[None]):
                 "Use io_api='lp' instead."
             )
 
+        A = M.A if M.A is not None else csr_array((0, len(M.vlabels)))
+        A = A.tocsr()
+        integrality = (M.vtypes != "C").astype(np.int32)
+        integrality[M.vtypes == "S"] = 2
+        codes = M.sense.astype("U1", copy=False).view(np.uint32)
+        sense = (
+            highspy.ObjSense.kMaximize
+            if M.objective_sense == "max"
+            else highspy.ObjSense.kMinimize
+        )
         h = highspy.Highs()
-        h.addVars(len(M.vlabels), M.lb, M.ub)
-        vtypes = M.vtypes
-        int_mask = vtypes != "C"
-        if int_mask.any():
-            integrality_map = {"B": 1, "I": 1, "S": 2}
-            labels = np.flatnonzero(int_mask)
-            integrality = np.array(
-                [integrality_map[v] for v in vtypes[int_mask]], dtype=np.uint8
-            )
-            h.changeColsIntegrality(len(labels), labels, integrality)
-
-        c = M.c
-        h.changeColsCost(len(c), np.arange(len(c), dtype=np.int32), c)
-
-        A = M.A
-        if A is not None:
-            A = A.tocsr()
-            num_cons = A.shape[0]
-            lower = np.where(M.sense != "<", M.b, -np.inf)
-            upper = np.where(M.sense != ">", M.b, np.inf)
-            h.addRows(num_cons, lower, upper, A.nnz, A.indptr, A.indices, A.data)
+        h.passModel(
+            A.shape[1],
+            A.shape[0],
+            A.nnz,
+            highspy.MatrixFormat.kRowwise.value,
+            sense.value,
+            0.0,
+            M.c,
+            M.lb,
+            M.ub,
+            np.where(codes != ord("<"), M.b, -np.inf),
+            np.where(codes != ord(">"), M.b, np.inf),
+            A.indptr,
+            A.indices,
+            A.data,
+            integrality,
+        )
 
         if names is not None:
             print_variables, print_constraints = names
@@ -1948,9 +1954,6 @@ class Highs(Solver[None]):
             Q = triu(Q).tocsr()
             num_vars = Q.shape[0]
             h.passHessian(num_vars, Q.nnz, 1, Q.indptr, Q.indices, Q.data)
-
-        if M.objective_sense == "max":
-            h.changeObjectiveSense(highspy.ObjSense.kMaximize)
 
         return h
 
