@@ -35,7 +35,7 @@ jobs:
     - name: Execute notebooks
       run: |
         EXIT_CODE=0
-        for notebook in examples/*.ipynb; do
+        for notebook in doc/*/*.ipynb; do
           name=$(basename "$notebook")
 
           # Skip notebooks that require credentials or special setup
