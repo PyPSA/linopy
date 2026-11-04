@@ -17,6 +17,7 @@ DataArrays conforming to a model's coordinates):
 
 from __future__ import annotations
 
+import sys
 from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from functools import partial
@@ -496,6 +497,20 @@ def _matmul_operand_to_dataarray(
     return as_dataarray(other, coords=coords, dims=dims)
 
 
+def is_sparse_backed(arr: Any) -> bool:
+    """
+    Whether ``arr`` is a DataArray holding a `pydata/sparse
+    <https://sparse.pydata.org>`_ array (e.g. ``sparse.COO``).
+
+    ``sparse`` is an optional dependency and is never imported here: an array
+    can only be one if the user already imported the package.
+    """
+    sparse = sys.modules.get("sparse")
+    if sparse is None or not isinstance(arr, DataArray):
+        return False
+    return isinstance(arr.variable._data, sparse.SparseArray)
+
+
 def _matmul_operand_to_matrix(
     other: DataArray,
     contracted: Sequence[str],
@@ -509,18 +524,39 @@ def _matmul_operand_to_matrix(
     NaN, §8 on the labels of the shared (contracted) dims and §11 on auxiliary
     coordinates. The expression side is represented by its grid labels alone
     and never broadcasts.
+
+    A sparse-backed (pydata/sparse) ``other`` is flattened as a sparse array
+    and never densified.
     """
-    if other.isnull().any():
+    coo = None
+    if is_sparse_backed(other):
+        import sparse
+
+        coo = sparse.as_coo(other.data)
+    if coo is None:
+        has_nan = other.isnull().any()
+    else:
+        has_nan = np.isnan(coo.fill_value) or np.isnan(coo.data).any()
+    if has_nan:
         check_user_nan()
     reference = Dataset(coords={d: indexes[d] for d in contracted} | dict(aux_coords))
     mismatch = first_mismatched_dim(reference, other)
     if mismatch is not None:
         raise ValueError(_shared_dim_mismatch_message(*mismatch))
     enforce_aux_conflict([reference, other])
-    values = other.transpose(*contracted, *new_dims).values
+    other = other.transpose(*contracted, *new_dims)
     n_contracted = int(np.prod([len(indexes[d]) for d in contracted], dtype=np.int64))
     n_new = int(np.prod([other.sizes[d] for d in new_dims], dtype=np.int64))
-    return scipy.sparse.csr_array(values.reshape(n_contracted, n_new))
+    if coo is None:
+        return scipy.sparse.csr_array(other.values.reshape(n_contracted, n_new))
+    if coo.fill_value != 0:
+        raise ValueError(
+            f"A sparse `@` operand must have fill value 0, got "
+            f"{coo.fill_value!r}: every implicit entry would be a coefficient. "
+            f"Densify it with `.copy(data=arr.data.todense())` or rebuild it "
+            f"with `fill_value=0`."
+        )
+    return sparse.as_coo(other.data).reshape((n_contracted, n_new)).tocsr()
 
 
 def _dims_for_positional_input(

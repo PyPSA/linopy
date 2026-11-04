@@ -67,6 +67,7 @@ from linopy.alignment import (
     as_constant,
     as_dataarray,
     broadcast_to_coords,
+    is_sparse_backed,
 )
 from linopy.common import (
     LocIndexer,
@@ -105,6 +106,7 @@ from linopy.constants import (
     RELATION_DIM,
     STACKED_TERM_DIM,
     TERM_DIM,
+    PerformanceWarning,
 )
 from linopy.csr import CSRStore, Grid, _densify_notice
 from linopy.long import Relation, _positions
@@ -124,6 +126,7 @@ from linopy.semantics import (
     is_nan_scalar,
     join_fill,
     reindex_like_if_needed,
+    warn_outside_linopy,
 )
 from linopy.store import (
     FILL_VALUE,
@@ -911,6 +914,22 @@ def _check_full_const(value: Any, like: DataArray) -> None:
         )
 
 
+def _densified_operand(other: DataArray, reason: str) -> DataArray:
+    """
+    ``other``, a pydata/sparse-backed operand, densified with a
+    :class:`~linopy.constants.PerformanceWarning` naming ``reason``.
+
+    Unlike the conversion notice, the warning is on by default in a dense
+    model too, since a pydata/sparse operand is always passed on purpose;
+    only ``options["warn_on_densify"] = False`` silences it.
+    """
+    if options["warn_on_densify"] is not False:
+        warn_outside_linopy(
+            f"Sparse (pydata/sparse) operand densified: {reason}.", PerformanceWarning
+        )
+    return other.copy(data=other.data.todense())
+
+
 class BaseExpression(ABC):
     __slots__ = ("_model",)
     __array_ufunc__ = None
@@ -1488,6 +1507,9 @@ class BaseExpression(ABC):
         sparse contraction; :class:`QuadraticExpression` always takes
         the dense path. The result is CSR-backed for a sparse model
         (``Model(sparse=True)``) or a CSR-backed input.
+
+        Accepts a pydata/sparse-backed DataArray; see
+        :meth:`LinearExpression.__matmul__`.
         """
         return self.__matmul__(other)
 
@@ -2801,17 +2823,31 @@ class LinearExpression(BaseExpression):
         zeros pruned -- so its term count may differ from the dense path's
         while the values agree. Returns a CSR-backed result when ``self`` is
         CSR-backed or the model is sparse.
+
+        ``other`` may be a sparse-backed :class:`xarray.DataArray` whose data
+        is a `pydata/sparse <https://sparse.pydata.org>`_ array (e.g.
+        ``sparse.COO``, fill value 0), labelled like a dense operand. It
+        takes the same sparse product without ever being densified, so e.g.
+        a large incidence matrix costs memory in its non-zeros only. Where
+        the sparse product does not apply (see :meth:`_sparse_matmul`), the
+        operand is densified with a ``PerformanceWarning``. Unlike the other
+        densify notices it is on by default in a dense model too; only
+        ``linopy.options["warn_on_densify"] = False`` silences it.
         """
         other = as_constant(other)
         other_is_const = not isinstance(other, LinearExpression | variables.Variable)
         expr: LinearExpression = self
+        reason = "matmul"
         if other_is_const and type(self) is LinearExpression:
             sparse = self._sparse_matmul(other)
             if not isinstance(sparse, str):
                 return sparse
+            reason = sparse
             expr = self._fallback(sparse)
         if other_is_const:
             other = _matmul_operand_to_dataarray(other, expr.coords, expr.coord_dims)
+            if is_sparse_backed(other):
+                other = _densified_operand(other, reason)
 
         common_dims = list(set(expr.coord_dims).intersection(other.dims))
         res = (expr * other).sum(dim=common_dims)
@@ -3433,6 +3469,8 @@ class QuadraticExpression(BaseExpression):
             )
 
         other = _matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
+        if is_sparse_backed(other):
+            other = _densified_operand(other, "matmul on a quadratic expression")
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
 
