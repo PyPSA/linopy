@@ -42,6 +42,7 @@ Version 1.0.0
 * Cells with a NaN constant now drop their terms when a ``LinearExpression`` or ``QuadraticExpression`` is built from a dataset or its ``vars`` or ``coeffs`` are assigned, so neither a dataset with terms under a NaN constant nor a ``vars`` assignment can revive an absent cell. (`#1045 <https://github.com/PyPSA/linopy/issues/1045>`__)
 * ``Solver.apply_update`` takes ``(diff, n_vars, n_cons)``, the number of active variables and constraints, instead of the variable and constraint label indexes.
 * ``expand_dims`` on an expression now puts the new dim first in ``coord_dims`` and in the dims of its dataset, matching the layout of its arrays. Before, it came after the existing dims. Selecting by dim name is unaffected. (`#1078 <https://github.com/PyPSA/linopy/pull/1078>`__)
+* ``Model.to_file`` and ``Model.solve`` raise ``ValueError`` when the problem file extension does not match ``io_api`` (``.lp`` for ``"lp"``/``"lp-polars"``, ``.mps`` for ``"mps"``). Before, ``io_api="mps"`` with a ``.lp`` path wrote an LP file through HiGHS, since HiGHS picks the format from the extension.
 
 **Breaking Changes: constraints on stores**
 
@@ -106,11 +107,14 @@ Version 1.0.0
 * Building a model is faster on the dense path: ``add_variables``, ``add_constraints``, arithmetic between variables and constants, ``where``, subtraction and ``merge`` skip xarray alignment and copies when the operands already share their coordinates. PyPSA's own ``create_model`` builds about twice as fast.
 * ``Model.from_spec`` builds the PyPSA spec about 4 to 5 times faster with about a third less peak memory: evaluated nodes are reused within a build, empty constraints are skipped before evaluation, and ``sum(..., by=...)`` on a dense expression groups in numpy.
 * ``Store.terms(active=None)`` returns the number of live terms per cell instead of a cell index per term, and drops the cells outside ``active``. ``Constraint.to_polars`` spreads labels with ``np.repeat`` and masks rows inside the store, so it no longer allocates an int64 index per nonzero or copies its frame to filter masked rows. (`#1058 <https://github.com/PyPSA/linopy/issues/1058>`__)
+* Gurobi (direct API, ``to_gurobipy``): the model is loaded in one column-wise ``gurobipy.loadModel`` call instead of ``addMVar``/``addMConstr``/``setObjective`` (gurobipy >= 12; older versions keep the previous path), and the solution and duals are read back with one bulk ``getAttr`` each instead of a property read per variable and constraint. On a 1M-variable, 3M-nonzero LP the build takes ~0.43 s instead of ~1.8 s and its peak memory falls from ~655 MB to ~150 MB.
 * ``Model.assign_coords`` no longer relabels containers through a Python dict. It locates each container's labels with ``master.get_indexer(index)`` and takes the new values with ``new.take(positions)``: on a tz-aware ``DatetimeIndex``, the rolling-horizon case it is built for, the previous ``Index.map`` over a dict fell into pandas' object-to-datetime inference and cost milliseconds per container. Reassigning a dataset's coordinates also builds it once instead of twice. A model with ~30 containers on a 4380-label tz-aware axis reassigns in ~9 ms, down from ~810 ms.
+* HiGHS (direct API, ``to_highspy``): the model is passed in one row-wise ``passModel`` call, without converting the constraint matrix.
 * ``.sel`` on a ``Variable``, ``LinearExpression``, ``QuadraticExpression`` or ``Constraint`` leaves out indexers that select every label of their dimension in order: ``slice(None)``, or a label list, array or ``pd.Index`` (not a boolean mask) equal to the dimension's index, given without ``method``. If every indexer is such, it returns a shallow copy sharing the data, without indexing or densifying a sparse expression; the arrays of that copy are shared with the original, so writing into them in place changes both. A CSR-backed expression whose selection keeps every row in place, e.g. ``isel(dim=slice(None))``, keeps its store instead of gathering the rows. In PyPSA's ``create_model(sparse=True)`` such selections took about 10% of the build.
 
 **Bug fixes**
 
+* ``add_constraints`` no longer raises on invalid infinite right-hand sides (``<= -inf`` or ``>= inf``) at positions excluded by ``mask``. (`#1116 <https://github.com/PyPSA/linopy/issues/1116>`__)
 * CPLEX: a solve ending as "optimal with unscaled infeasibilities" is now reported as ``imprecise`` and its solution is imported, instead of being discarded as unknown. (`#368 <https://github.com/PyPSA/linopy/issues/368>`__)
 * Mosek: setting ``log_fn`` no longer disables the console log; solver output is written to both stdout and the log file, consistent with HiGHS. (`#948 <https://github.com/PyPSA/linopy/issues/948>`__)
 * ``QuadraticExpression.groupby(...).map`` returns a ``QuadraticExpression`` instead of a ``LinearExpression`` wrapping quadratic data. (`#1064 <https://github.com/PyPSA/linopy/issues/1064>`__)
@@ -132,6 +136,13 @@ Version 1.0.0
 * :meth:`linopy.Model.restrict` cuts a subproblem out of a model, e.g. a time slice for rolling-horizon optimization. ``m.restrict(snapshot=window, fix=...)`` returns a :class:`~linopy.restrict.WindowModel`; terms on variables outside the window move to the right-hand side at their ``fix`` values. ``window.advance(...)`` moves the window and ``window.solve()`` updates the solver model in place where possible, without a warm start unless ``warm_start=True``. ``solution`` and ``dual`` are dictionaries of ``DataArray``; check ``window.status`` after solving. See the new :doc:`restrict` guide. (https://github.com/PyPSA/linopy/issues/768)
 * The ``Variable`` methods that wrap an ``xarray.Dataset`` method, such as ``sel``, ``isel``, ``shift``, ``rename`` and ``stack``, now carry the wrapped method's parameters and return ``Variable`` for type checkers and IDEs, instead of an untyped ``Callable``. (`#1029 <https://github.com/PyPSA/linopy/pull/1029>`__)
 * Added ``Solver.from_file(name, problem_fn, options=...)`` for solving existing LP/MPS files without constructing a linopy model or using deprecated solve methods. The input file is not rewritten or deleted by the new constructor. (`#996 <https://github.com/PyPSA/linopy/pull/996>`__)
+* New ``LinearExpression.from_coo(model, coords, rows, vars, coeffs)`` builds a linear expression from COO triplets (flat cell position, variable label, coefficient) on a coordinate grid; it equals one term per triplet summed by ``groupby(rows).sum()`` and reindexed to the grid.
+
+.. note::
+
+   The following content was generated by AI.
+
+* ``@``/``dot`` accept a labelled ``xarray.DataArray`` backed by a `pydata/sparse <https://sparse.pydata.org>`__ array (fill value 0) and contract it without densifying. Where no sparse path exists (e.g. ``QuadraticExpression``), it is densified with a ``PerformanceWarning`` (``Sparse (pydata/sparse) operand densified: <reason>``). Unlike the CSR densify notice, it is on by default in a dense model too, since a sparse operand is always passed on purpose; ``warn_on_densify=False`` silences it. ``sparse`` stays an optional dependency.
 
 **Internal**
 

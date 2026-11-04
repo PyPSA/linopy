@@ -639,7 +639,8 @@ class Model:
     def store_cls(self) -> type[Store]:
         """
         The store class the construction seam builds on: ``to_linexpr``,
-        ``groupby(...).sum()``, ``@`` and the netcdf reader yield a
+        ``LinearExpression.from_coo``, ``groupby(...).sum()``, ``@`` and the
+        netcdf reader yield a
         :class:`~linopy.csr.CSRStore` in a sparse model and a
         :class:`~linopy.store.DenseStore` otherwise. Quadratic products,
         ``rolling``, ``cumsum`` and the ``LinearExpression`` constructor
@@ -1377,7 +1378,6 @@ class Model:
             sign = maybe_replace_signs(as_dataarray(sign))
 
         con = self._constraint_from_lhs(lhs, sign, rhs, coords)
-        _check_infinities(con.sign, con.rhs, name)
 
         rhs = con.rhs
         rhs_nan = rhs.isnull()
@@ -1406,6 +1406,13 @@ class Model:
                 mask = broadcast_to_coords(mask, con.coords, label="mask").astype(bool)
             else:
                 mask = rhs.copy(deep=False, data=np.asarray(on_grid, dtype=bool))
+
+        _check_infinities(
+            con.sign,
+            con.rhs,
+            name,
+            None if mask is None else np.asarray(mask.transpose(*con.rhs.dims)),
+        )
 
         lhs = con.lhs
         self.check_force_dim_names(lhs)

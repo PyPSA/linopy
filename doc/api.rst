@@ -332,6 +332,7 @@ Construction
    :toctree: generated/
 
    expressions.LinearExpression.from_tuples
+   expressions.LinearExpression.from_coo
    expressions.merge
 
 
@@ -714,7 +715,9 @@ Utilities
   converted to sparse for a merge with a sparse one. ``None`` (default)
   warns in a sparse model, ``True`` always warns, ``False`` never warns.
   Only implicit conversions warn; ``Constraint.to_dense()`` and
-  ``Constraint.to_sparse()`` never do. See :doc:`sparse-models`.
+  ``Constraint.to_sparse()`` never do. A pydata/sparse ``@`` operand that
+  has to be densified warns under ``None`` in a dense model too; only
+  ``False`` silences it. See :doc:`sparse-models`.
 
 
 Testing

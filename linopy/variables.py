@@ -574,6 +574,9 @@ class Variable:
     ) -> LinearExpression | QuadraticExpression:
         """
         Matrix multiplication of variables with a coefficient.
+
+        Accepts a pydata/sparse-backed DataArray; see
+        :meth:`linopy.expressions.LinearExpression.__matmul__`.
         """
         return self.to_linexpr() @ other
 
@@ -816,10 +819,15 @@ class Variable:
         """
         return self.__pow__(other)
 
-    def dot(self, other: ndarray | Variable) -> QuadraticExpression | LinearExpression:
+    def dot(
+        self, other: ConstantLike | VariableLike | ExpressionLike
+    ) -> QuadraticExpression | LinearExpression:
         """
         Generalized dot product for linopy and compatible objects. Like np.einsum if performs a
         multiplaction of the two objects with a subsequent summation over common dimensions.
+
+        Accepts a pydata/sparse-backed DataArray; see
+        :meth:`linopy.expressions.LinearExpression.__matmul__`.
         """
         return self.__matmul__(other)
 

@@ -604,6 +604,10 @@ def test_duplicated_variables(
     assert all(np.isclose(model_with_duplicated_variables.solution["x"], 5, rtol=tol))
 
 
+def _problem_name(io_api: str) -> str:
+    return "problem.mps" if io_api == "mps" else "problem.lp"
+
+
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_set_files(
     tmp_path: Any,
@@ -617,7 +621,7 @@ def test_set_files(
             solver,
             io_api=io_api,
             explicit_coordinate_names=explicit_coordinate_names,
-            problem_fn=tmp_path / "problem.lp",
+            problem_fn=tmp_path / _problem_name(io_api),
             solution_fn=tmp_path / "solution.sol",
             log_fn=tmp_path / "logging.log",
             keep_files=False,
@@ -638,14 +642,14 @@ def test_set_files_and_keep_files(
             solver,
             io_api=io_api,
             explicit_coordinate_names=explicit_coordinate_names,
-            problem_fn=tmp_path / "problem.lp",
+            problem_fn=tmp_path / _problem_name(io_api),
             solution_fn=tmp_path / "solution.sol",
             log_fn=tmp_path / "logging.log",
             keep_files=True,
         )
         assert status == "ok"
         if io_api != "direct" and solver != "xpress":
-            assert (tmp_path / "problem.lp").exists()
+            assert (tmp_path / _problem_name(io_api)).exists()
             assert (tmp_path / "solution.sol").exists()
         assert (tmp_path / "logging.log").exists()
 
