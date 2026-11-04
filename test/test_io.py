@@ -23,11 +23,7 @@ from linopy import LESS_EQUAL, Model, available_solvers, licensed_solvers, read_
 from linopy.constants import FACTOR_DIM
 from linopy.constraints import Constraint
 from linopy.expressions import LinearExpression, QuadraticExpression
-from linopy.io import (
-    CONTAINER_ORDER_ATTR,
-    _strip_empty_highs_lp_sections,
-    signed_number,
-)
+from linopy.io import CONTAINER_ORDER_ATTR, signed_number
 from linopy.store import STORE_KIND_ATTR
 from linopy.testing import (
     assert_conequal,
@@ -862,59 +858,16 @@ def test_highs_direct_known_optimum(
     assert m.objective.value == pytest.approx(expected)
 
 
-def _highs_lp_tail(fn: Path) -> list[str]:
-    text = fn.read_text()
-    return text[text.index("\nbounds\n") :].split()
-
-
-@pytest.mark.skipif("highs" not in licensed_solvers, reason="Highspy not installed")
 @pytest.mark.parametrize(
-    "kind,expected",
-    [
-        ("lp", ["bounds", "x0", "<=", "5", "end"]),
-        ("binary", ["bounds", "x0", "<=", "1", "bin", "x0", "end"]),
-    ],
+    "io_api,fn",
+    [("mps", "problem.lp"), ("lp", "problem.mps"), ("lp-polars", "problem.mps")],
 )
-def test_to_file_mps_api_lp_suffix_drops_empty_sections(
-    tmp_path: Path, kind: str, expected: list[str]
+def test_to_file_rejects_mismatched_extension(
+    model: Model, tmp_path: Path, io_api: str, fn: str
 ) -> None:
-    # HiGHS writes empty bin/gen/semi headers for any integrality array,
-    # which CBC, GLPK and COPT misread; to_file strips the trailing ones
-    m = Model()
-    if kind == "lp":
-        x = m.add_variables(lower=0, upper=5, name="x")
-    else:
-        x = m.add_variables(binary=True, name="x")
-    m.add_constraints(x >= 1)
-    m.add_objective(1 * x)
-    fn = m.to_file(tmp_path / "problem.lp", io_api="mps")
-    assert _highs_lp_tail(fn) == expected
-
-
-@pytest.mark.parametrize(
-    "content,expected",
-    [
-        (b"bounds\n x0 <= 5\nbin\ngen\nsemi\nend\n", b"bounds\n x0 <= 5\nend\n"),
-        (b"bounds\nbin\n x0\ngen\nsemi\nend\n", b"bounds\nbin\n x0\nend\n"),
-        (b"bounds\nsemi\n x0\nend\n", b"bounds\nsemi\n x0\nend\n"),
-        (b"bounds\n x0 <= 5\nbin\ngen\nsemi\n", b"bounds\n x0 <= 5\nbin\ngen\nsemi\n"),
-    ],
-)
-def test_strip_empty_highs_lp_sections(
-    tmp_path: Path, content: bytes, expected: bytes
-) -> None:
-    fn = tmp_path / "problem.lp"
-    fn.write_bytes(content)
-    _strip_empty_highs_lp_sections(fn)
-    assert fn.read_bytes() == expected
-
-
-def test_strip_empty_highs_lp_sections_large_file(tmp_path: Path) -> None:
-    body = b"".join(b" x%d <= 5\n" % i for i in range(5000))
-    fn = tmp_path / "problem.lp"
-    fn.write_bytes(b"bounds\n" + body + b"bin\ngen\nsemi\nend\n")
-    _strip_empty_highs_lp_sections(fn, chunk=64)
-    assert fn.read_bytes() == b"bounds\n" + body + b"end\n"
+    with pytest.raises(ValueError, match="does not match io_api"):
+        model.to_file(tmp_path / fn, io_api=io_api)
+    assert not (tmp_path / fn).exists()
 
 
 def test_to_blocks(tmp_path: Path) -> None:

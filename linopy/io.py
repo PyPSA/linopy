@@ -778,41 +778,6 @@ def to_lp_file(
         logger.info(f" Writing time: {round(time.time() - start, 2)}s")
 
 
-_HIGHS_LP_SECTIONS = {b"bin", b"gen", b"semi"}
-
-
-def _strip_empty_highs_lp_sections(fn: Path, chunk: int = 4096) -> None:
-    """
-    Remove empty ``bin``/``gen``/``semi`` sections at the end of an LP file
-    written by HiGHS.
-
-    HiGHS writes these section headers whenever the model has an integrality
-    array, even if no column belongs to them. HiGHS reads them back fine, but
-    other LP readers (CBC, GLPK, COPT) take the headers for names. Only the
-    trailing run of headers before ``end`` is rewritten, so the cost does not
-    grow with the file size.
-    """
-    with open(fn, "r+b") as f:
-        size = f.seek(0, 2)
-        start = max(0, size - chunk)
-        f.seek(start)
-        lines = f.read().split(b"\n")
-        if lines and lines[-1] == b"":
-            lines.pop()
-        if not lines or lines[-1] != b"end":
-            return
-        i = len(lines) - 1
-        while i > 0 and lines[i - 1] in _HIGHS_LP_SECTIONS:
-            i -= 1
-        # the run must start on a line boundary inside the chunk
-        if i == len(lines) - 1 or (i == 0 and start > 0):
-            return
-        offset = start + sum(len(line) + 1 for line in lines[:i])
-        f.seek(offset)
-        f.write(b"end\n")
-        f.truncate()
-
-
 def to_file(
     m: Model,
     fn: Path | str | None,
@@ -834,6 +799,15 @@ def to_file(
 
     if io_api is None:
         io_api = fn.suffix[1:]
+
+    expected_suffix = {"lp": ".lp", "lp-polars": ".lp", "mps": ".mps"}.get(io_api)
+    if expected_suffix is not None and fn.suffix.lower() != expected_suffix:
+        # the MPS path writes through HiGHS, which picks the format from the
+        # extension, so a mismatch would silently produce the other format
+        raise ValueError(
+            f"File '{fn}' does not match io_api='{io_api}': expected a "
+            f"'{expected_suffix}' file. Use a matching extension or io_api."
+        )
 
     if progress is None:
         progress = m._xCounter > 10_000
@@ -864,8 +838,6 @@ def to_file(
             sos=list(solvers._iter_sos_sets(m)),
         )
         h.writeModel(str(fn))
-        if fn.suffix == ".lp":
-            _strip_empty_highs_lp_sections(fn)
     else:
         raise ValueError(
             f"Invalid io_api '{io_api}'. Choose from 'lp', 'lp-polars' or 'mps'."
