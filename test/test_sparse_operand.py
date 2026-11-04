@@ -172,11 +172,27 @@ FALLBACKS: dict[str, Any] = {
 
 
 @pytest.mark.filterwarnings("ignore:Sparse \\(CSR\\) backing densified")
+@pytest.mark.parametrize("setting", [None, True], ids=["default", "on"])
 @pytest.mark.parametrize("case", list(FALLBACKS))
-def test_dense_fallback_densifies_operand_with_notice(x: Variable, case: str) -> None:
+def test_dense_fallback_densifies_operand_with_notice(
+    x: Variable, case: str, setting: bool | None
+) -> None:
+    # The default warns in a dense model too, unlike the CSR densify notice.
     expr, dense, match = FALLBACKS[case](x)
     with linopy.options as opts, pytest.warns(linopy.PerformanceWarning, match=match):
-        opts.set_value(warn_on_densify=True)
+        opts.set_value(warn_on_densify=setting)
         res = expr @ to_sparse(dense)
     quad = isinstance(res, QuadraticExpression)
     (assert_quadequal if quad else assert_equivalent)(res, expr @ dense)
+
+
+@pytest.mark.parametrize("case", list(FALLBACKS))
+def test_dense_fallback_notice_can_be_silenced(x: Variable, case: str) -> None:
+    expr, dense, _ = FALLBACKS[case](x)
+    with linopy.options as opts, warnings.catch_warnings():
+        opts.set_value(warn_on_densify=False)
+        warnings.simplefilter("error", linopy.PerformanceWarning)
+        res = expr @ to_sparse(dense)
+        want = expr @ dense
+    quad = isinstance(res, QuadraticExpression)
+    (assert_quadequal if quad else assert_equivalent)(res, want)
