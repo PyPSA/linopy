@@ -6,13 +6,13 @@ linopy/__pycache__
 test/__pycache__
 linopy.egg-info
 dev-scripts/
-examples/.ipynb_checkpoints/
+.ipynb_checkpoints/
 linopy/version.py
 dist/
 build/
-doc/_build
-doc/generated
-doc/api
+# documentation build (mkdocs) and notebook cache (mkdocs-jupyter)
+site/
+.cache/
 .vscode
 .idea
 Highs.log

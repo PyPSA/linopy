@@ -22,7 +22,7 @@
 
 **linopy** is designed to be fast and efficient. The following benchmark compares the performance of **linopy** with the alternative popular optimization packages.
 
-![Performance Benchmark](doc/benchmark_resource-overhead.png)
+![Performance Benchmark](doc/user-guide/benchmark_resource-overhead.png)
 
 
 ## Main features
