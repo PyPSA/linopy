@@ -135,6 +135,7 @@ Version 1.0.0
 * :meth:`linopy.Model.restrict` cuts a subproblem out of a model, e.g. a time slice for rolling-horizon optimization. ``m.restrict(snapshot=window, fix=...)`` returns a :class:`~linopy.restrict.WindowModel`; terms on variables outside the window move to the right-hand side at their ``fix`` values. ``window.advance(...)`` moves the window and ``window.solve()`` updates the solver model in place where possible, without a warm start unless ``warm_start=True``. ``solution`` and ``dual`` are dictionaries of ``DataArray``; check ``window.status`` after solving. See the new :doc:`restrict` guide. (https://github.com/PyPSA/linopy/issues/768)
 * The ``Variable`` methods that wrap an ``xarray.Dataset`` method, such as ``sel``, ``isel``, ``shift``, ``rename`` and ``stack``, now carry the wrapped method's parameters and return ``Variable`` for type checkers and IDEs, instead of an untyped ``Callable``. (`#1029 <https://github.com/PyPSA/linopy/pull/1029>`__)
 * Added ``Solver.from_file(name, problem_fn, options=...)`` for solving existing LP/MPS files without constructing a linopy model or using deprecated solve methods. The input file is not rewritten or deleted by the new constructor. (`#996 <https://github.com/PyPSA/linopy/pull/996>`__)
+* New ``LinearExpression.from_coo(model, coords, rows, vars, coeffs)`` builds a linear expression from COO triplets (flat cell position, variable label, coefficient) on a coordinate grid; it equals one term per triplet summed by ``groupby(rows).sum()`` and reindexed to the grid.
 
 .. note::
 

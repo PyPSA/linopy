@@ -332,6 +332,7 @@ Construction
    :toctree: generated/
 
    expressions.LinearExpression.from_tuples
+   expressions.LinearExpression.from_coo
    expressions.merge
 
 

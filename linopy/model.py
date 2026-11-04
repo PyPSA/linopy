@@ -639,7 +639,8 @@ class Model:
     def store_cls(self) -> type[Store]:
         """
         The store class the construction seam builds on: ``to_linexpr``,
-        ``groupby(...).sum()``, ``@`` and the netcdf reader yield a
+        ``LinearExpression.from_coo``, ``groupby(...).sum()``, ``@`` and the
+        netcdf reader yield a
         :class:`~linopy.csr.CSRStore` in a sparse model and a
         :class:`~linopy.store.DenseStore` otherwise. Quadratic products,
         ``rolling``, ``cumsum`` and the ``LinearExpression`` constructor
