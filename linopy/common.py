@@ -1136,10 +1136,10 @@ def is_full_indexer(index: pd.Index | None, labels: Any) -> bool:
     )
 
 
-SelT = TypeVar("SelT", bound=Callable[..., Any])
+SelectT = TypeVar("SelectT", bound=Callable[..., Any])
 
 
-def skip_full_indexers(sel: SelT) -> SelT:
+def skip_full_indexers(sel: SelectT) -> SelectT:
     """
     Wrap the ``sel`` method ``sel`` to leave out the indexers that select
     every label of their dimension in order, see :func:`is_full_indexer`.
