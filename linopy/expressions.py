@@ -88,7 +88,7 @@ from linopy.common import (
     maybe_group_terms_polars,
     reassign_coords,
     save_join,
-    selects_everything,
+    skip_full_indexers,
     to_dataframe,
     to_polars,
     validate_coords_reassignment,
@@ -2149,17 +2149,7 @@ class BaseExpression(ABC):
 
     ffill = exprwrap(Dataset.ffill)
 
-    _sel = exprwrap(Dataset.sel)
-
-    def sel(self, *args: Any, **kwargs: Any) -> Self:
-        """As ``Dataset.sel``; selecting every label in order gives a shallow copy."""
-        if selects_everything(self._label_indexes(), args, kwargs):
-            return self._shallow_copy()
-        return self._sel(*args, **kwargs)
-
-    def _label_indexes(self) -> Mapping[Any, pd.Index]:
-        """The indexes :meth:`sel` selects on."""
-        return self.indexes
+    sel = skip_full_indexers(exprwrap(Dataset.sel))
 
     @abstractmethod
     def _shallow_copy(self) -> Self:
@@ -2481,18 +2471,13 @@ class LinearExpression(BaseExpression):
             return method(self._fallback(store))
         return type(self)._from_store(store, self._model)
 
-    def _sel(self, *args: Any, **kwargs: Any) -> Self:
+    @skip_full_indexers
+    def sel(self, *args: Any, **kwargs: Any) -> Self:
         """
         Select by label as ``Dataset.sel``. For a CSR-backed expression,
         returns a CSR-backed result when the selection stays on the grid.
         """
-        return self._gathered("sel", super()._sel, *args, **kwargs)
-
-    def _label_indexes(self) -> Mapping[Any, pd.Index]:
-        store = self._store
-        if isinstance(store, DenseStore):
-            return store.ds.indexes
-        return store.grid.indexes
+        return self._gathered("sel", super().sel, *args, **kwargs)
 
     def _shallow_copy(self) -> Self:
         store = self._store

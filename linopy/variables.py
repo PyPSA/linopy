@@ -51,7 +51,7 @@ from linopy.common import (
     iterate_slices,
     reassign_coords,
     save_join,
-    selects_everything,
+    skip_full_indexers,
     to_dataframe,
     to_polars,
 )
@@ -1495,13 +1495,7 @@ class Variable:
 
     expand_dims = varwrap(Dataset.expand_dims)  # type: ignore[arg-type]
 
-    _sel = varwrap(Dataset.sel)  # type: ignore[arg-type]
-
-    def sel(self, *args: Any, **kwargs: Any) -> Variable:
-        """As ``Dataset.sel``; selecting every label in order gives a shallow copy."""
-        if selects_everything(self.data.indexes, args, kwargs):
-            return self._shallow_copy()
-        return self._sel(*args, **kwargs)
+    sel = skip_full_indexers(varwrap(Dataset.sel))  # type: ignore[arg-type]
 
     def _shallow_copy(self) -> Variable:
         """A new Variable on the same model sharing this one's arrays."""

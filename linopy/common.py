@@ -1105,57 +1105,96 @@ LocT = TypeVar(
 )
 
 
-_SEL_DEFAULTS = {"method": None, "tolerance": None, "drop": False}
-
-
-def selects_everything(
-    indexes: Mapping[Any, pd.Index], args: tuple, kwargs: dict[str, Any]
-) -> bool:
+def is_full_indexer(index: pd.Index | None, labels: Any) -> bool:
     """
-    Whether ``sel(*args, **kwargs)`` provably selects every label in order.
+    Whether label-based ``labels`` select every label of ``index`` in order.
 
-    True only if every indexer is a non-boolean label list, one-dimensional
-    array or ``pd.Index`` (unnamed or named after the dimension) on a
-    dimension whose unique, non-multi ``indexes`` entry equals it, and ``method``,
-    ``tolerance`` and ``drop`` keep their defaults. Such a ``sel`` returns
-    the object as is, so callers may skip it. Scalars, slices, DataArrays
-    and anything else are left to ``sel``.
+    True for ``slice(None)``, and for a non-boolean label list, one-dimensional
+    array or ``pd.Index`` (unnamed or named after the dimension) equal to a
+    unique, non-multi ``index``. Anything else, such as scalars, other slices
+    or DataArrays, is left to ``sel``.
     """
-    if len(args) > 1:
+    if index is None or isinstance(index, pd.MultiIndex):
         return False
-    kwargs = dict(kwargs)
-    for option, default in _SEL_DEFAULTS.items():
-        if option in kwargs and kwargs.pop(option) is not default:
+    if isinstance(labels, slice):
+        return labels == slice(None)
+    if isinstance(labels, pd.Index):
+        if labels.name is not None and labels.name != index.name:
             return False
-    indexers = args[0] if args else kwargs.pop("indexers", None)
-    if indexers is None:
-        indexers = kwargs
-    elif kwargs or not isinstance(indexers, Mapping):
+    elif isinstance(labels, np.ndarray):
+        if labels.ndim != 1:
+            return False
+    elif not isinstance(labels, list):
         return False
-    if not indexers:
+    if len(labels) != len(index) or not index.is_unique:
         return False
-    for dim, labels in indexers.items():
-        idx = indexes.get(dim)
-        if idx is None or isinstance(idx, pd.MultiIndex) or not idx.is_unique:
-            return False
-        if isinstance(labels, pd.Index):
-            if labels.name is not None and labels.name != dim:
-                return False
-        elif isinstance(labels, np.ndarray):
-            if labels.ndim != 1:
-                return False
-        elif not isinstance(labels, list):
-            return False
-        if len(labels) != len(idx):
-            return False
-        candidate = labels if isinstance(labels, pd.Index) else pd.Index(labels)
+    labels = labels if isinstance(labels, pd.Index) else pd.Index(labels)
+    return (
+        labels.dtype.kind != "b"
+        and not isinstance(labels, pd.MultiIndex)
+        and index.equals(labels)
+    )
+
+
+SelT = TypeVar("SelT", bound=Callable[..., Any])
+
+
+def skip_full_indexers(sel: SelT) -> SelT:
+    """
+    Wrap the ``sel`` method ``sel`` to leave out the indexers that select
+    every label of their dimension in order, see :func:`is_full_indexer`.
+
+    Such an indexer selects the same cells as no indexer, but xarray turns
+    it into an integer array and copies every array of the object along that
+    dimension. If every indexer is full, the result is ``obj._shallow_copy()``,
+    a new object sharing the arrays of ``obj``. Selections with ``method``
+    are passed on as given.
+    """
+
+    @wraps(sel)
+    def wrapper(
+        obj: Any,
+        indexers: Mapping[Any, Any] | None = None,
+        method: str | None = None,
+        tolerance: Any = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> Any:
+        given = indexers_kwargs if indexers is None else indexers
         if (
-            candidate.dtype.kind == "b"
-            or isinstance(candidate, pd.MultiIndex)
-            or not idx.equals(candidate)
+            method is None
+            and isinstance(given, Mapping)
+            and given
+            and (indexers is None or not indexers_kwargs)
         ):
-            return False
-    return True
+            kept = _without_full(obj.indexes, given)
+            if not kept:
+                return obj._shallow_copy()
+            if indexers is None:
+                indexers_kwargs = kept
+            else:
+                indexers = kept
+        return sel(
+            obj,
+            indexers,
+            method=method,
+            tolerance=tolerance,
+            drop=drop,
+            **indexers_kwargs,
+        )
+
+    return wrapper  # type: ignore[return-value]
+
+
+def _without_full(
+    indexes: Mapping[Any, pd.Index], indexers: Mapping[Any, Any]
+) -> dict[Any, Any]:
+    """``indexers`` without the full indexers, see :func:`is_full_indexer`."""
+    return {
+        dim: labels
+        for dim, labels in indexers.items()
+        if not is_full_indexer(indexes.get(dim), labels)
+    }
 
 
 class LocIndexer(Generic[LocT]):
