@@ -41,6 +41,7 @@ import scipy
 import xarray as xr
 import xarray.core.groupby
 from numpy import array, nan
+from numpy.typing import ArrayLike
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from scipy.sparse import csc_matrix
@@ -62,11 +63,14 @@ from types import EllipsisType, NotImplementedType
 
 from linopy import constraints, variables
 from linopy.alignment import (
+    _as_index,
+    _coords_to_dict,
     _matmul_operand_to_dataarray,
     _matmul_operand_to_matrix,
     as_constant,
     as_dataarray,
     broadcast_to_coords,
+    is_sparse_backed,
 )
 from linopy.common import (
     LocIndexer,
@@ -105,6 +109,7 @@ from linopy.constants import (
     RELATION_DIM,
     STACKED_TERM_DIM,
     TERM_DIM,
+    PerformanceWarning,
 )
 from linopy.csr import CSRStore, Grid, _densify_notice
 from linopy.long import Relation, _positions
@@ -124,6 +129,7 @@ from linopy.semantics import (
     is_nan_scalar,
     join_fill,
     reindex_like_if_needed,
+    warn_outside_linopy,
 )
 from linopy.store import (
     FILL_VALUE,
@@ -911,6 +917,22 @@ def _check_full_const(value: Any, like: DataArray) -> None:
         )
 
 
+def _densified_operand(other: DataArray, reason: str) -> DataArray:
+    """
+    ``other``, a pydata/sparse-backed operand, densified with a
+    :class:`~linopy.constants.PerformanceWarning` naming ``reason``.
+
+    Unlike the conversion notice, the warning is on by default in a dense
+    model too, since a pydata/sparse operand is always passed on purpose;
+    only ``options["warn_on_densify"] = False`` silences it.
+    """
+    if options["warn_on_densify"] is not False:
+        warn_outside_linopy(
+            f"Sparse (pydata/sparse) operand densified: {reason}.", PerformanceWarning
+        )
+    return other.copy(data=other.data.todense())
+
+
 class BaseExpression(ABC):
     __slots__ = ("_model",)
     __array_ufunc__ = None
@@ -1488,6 +1510,9 @@ class BaseExpression(ABC):
         sparse contraction; :class:`QuadraticExpression` always takes
         the dense path. The result is CSR-backed for a sparse model
         (``Model(sparse=True)``) or a CSR-backed input.
+
+        Accepts a pydata/sparse-backed DataArray; see
+        :meth:`LinearExpression.__matmul__`.
         """
         return self.__matmul__(other)
 
@@ -2801,17 +2826,31 @@ class LinearExpression(BaseExpression):
         zeros pruned -- so its term count may differ from the dense path's
         while the values agree. Returns a CSR-backed result when ``self`` is
         CSR-backed or the model is sparse.
+
+        ``other`` may be a sparse-backed :class:`xarray.DataArray` whose data
+        is a `pydata/sparse <https://sparse.pydata.org>`_ array (e.g.
+        ``sparse.COO``, fill value 0), labelled like a dense operand. It
+        takes the same sparse product without ever being densified, so e.g.
+        a large incidence matrix costs memory in its non-zeros only. Where
+        the sparse product does not apply (see :meth:`_sparse_matmul`), the
+        operand is densified with a ``PerformanceWarning``. Unlike the other
+        densify notices it is on by default in a dense model too; only
+        ``linopy.options["warn_on_densify"] = False`` silences it.
         """
         other = as_constant(other)
         other_is_const = not isinstance(other, LinearExpression | variables.Variable)
         expr: LinearExpression = self
+        reason = "matmul"
         if other_is_const and type(self) is LinearExpression:
             sparse = self._sparse_matmul(other)
             if not isinstance(sparse, str):
                 return sparse
+            reason = sparse
             expr = self._fallback(sparse)
         if other_is_const:
             other = _matmul_operand_to_dataarray(other, expr.coords, expr.coord_dims)
+            if is_sparse_backed(other):
+                other = _densified_operand(other, reason)
 
         common_dims = list(set(expr.coord_dims).intersection(other.dims))
         res = (expr * other).sum(dim=common_dims)
@@ -3307,6 +3346,123 @@ class LinearExpression(BaseExpression):
         const_da = as_dataarray(constant)
         return LinearExpression(const_da, model)
 
+    @classmethod
+    def from_coo(
+        cls,
+        model: Model,
+        coords: Sequence[Sequence | pd.Index] | Mapping,
+        rows: ArrayLike,
+        vars: ArrayLike,
+        coeffs: ArrayLike,
+    ) -> LinearExpression:
+        """
+        Create a linear expression from COO triplets on a coordinate grid.
+
+        Each triplet ``(rows[k], vars[k], coeffs[k])`` adds the term
+        ``coeffs[k] * x[vars[k]]`` to the cell ``rows[k]`` of the grid
+        spanned by ``coords``, cells being numbered in C order (the last
+        dimension varying fastest, as by ``numpy.ravel_multi_index``), e.g.
+        an incidence matrix times a variable.
+
+        The result equals one term per triplet summed by
+        ``groupby(rows).sum()`` and reindexed to the grid: cells no triplet
+        addresses are absent, cells addressed only by masked labels (``-1``)
+        are present with value 0.
+
+        The result is built on the model's store class
+        (:attr:`~linopy.model.Model.store_cls`): CSR-backed in a sparse
+        model (``Model(sparse=True)``), dense otherwise.
+
+        Parameters
+        ----------
+        model : linopy.Model
+            The model the variable labels belong to.
+        coords : list/dict/xarray.Coordinates
+            The coordinates of the result: a mapping of dimension names to
+            labels, or a sequence of named ``pandas.Index`` or
+            ``(name, values)`` tuples. Every dimension must be named.
+        rows : array_like of int
+            Flat C-order cell position of each term, in
+            ``[0, prod(grid shape))``.
+        vars : array_like of int
+            Variable label of each term, e.g. taken from
+            ``Variable.labels``; ``-1`` masks the term.
+        coeffs : array_like of float
+            Coefficient of each term; NaN raises unless ``vars`` is ``-1``.
+
+        Returns
+        -------
+        linopy.LinearExpression
+
+        Examples
+        --------
+        Sum two generators and a line into the balance of two buses, the
+        line leaving bus ``a`` and entering bus ``b``:
+
+        >>> import numpy as np
+        >>> import pandas as pd
+        >>> from linopy import LinearExpression, Model
+        >>> m = Model()
+        >>> time = pd.RangeIndex(2, name="time")
+        >>> bus = pd.Index(["a", "b"], name="bus")
+        >>> g = pd.Index(["g1", "g2"], name="gen")
+        >>> gen = m.add_variables(coords=[time, g], name="p")
+        >>> line = m.add_variables(coords=[time], name="line")
+        >>> gen_bus = np.array([0, 1])  # bus position of g1 and g2
+        >>> t = np.arange(2)[:, None]
+        >>> rows = np.concatenate([(t * 2 + gen_bus).ravel(), (t * 2 + [0, 1]).ravel()])
+        >>> vars = np.concatenate(
+        ...     [gen.labels.values.ravel(), np.repeat(line.labels.values, 2)]
+        ... )
+        >>> coeffs = np.concatenate([np.ones(4), np.tile([-1.0, 1.0], 2)])
+        >>> balance = LinearExpression.from_coo(m, [time, bus], rows, vars, coeffs)
+        >>> balance
+        LinearExpression [time: 2, bus: 2]:
+        -----------------------------------
+        [0, a]: +1 p[0, g1] - 1 line[0]
+        [0, b]: +1 p[0, g2] + 1 line[0]
+        [1, a]: +1 p[1, g1] - 1 line[1]
+        [1, b]: +1 p[1, g2] + 1 line[1]
+        """
+        dims = _coords_to_dict(coords)
+        if not isinstance(coords, Mapping) and len(dims) != len(coords):
+            raise ValueError(
+                "`coords` must name every dimension, e.g. with a named "
+                "pandas.Index, and must not repeat a name."
+            )
+        grid = Grid({str(d): _as_index(v).rename(str(d)) for d, v in dims.items()})
+        rows_, vars_, coeffs_ = (np.array(a).reshape(-1) for a in (rows, vars, coeffs))
+        if not rows_.size == vars_.size == coeffs_.size:
+            raise ValueError(
+                "`rows`, `vars` and `coeffs` must have the same length, got "
+                f"{rows_.size}, {vars_.size} and {coeffs_.size}."
+            )
+        for name, values in (("rows", rows_), ("vars", vars_)):
+            if values.size and values.dtype.kind not in "iu":
+                raise TypeError(
+                    f"`{name}` must hold integers, got dtype {values.dtype}."
+                )
+        rows_ = rows_.astype(np.intp, copy=False)
+        coeffs_ = coeffs_.astype(float, copy=False)
+        n_cells = grid.size
+        if rows_.size and (rows_.min() < 0 or rows_.max() >= n_cells):
+            bad = rows_[(rows_ < 0) | (rows_ >= n_cells)]
+            raise IndexError(
+                f"`rows` must lie in [0, {n_cells}) for a grid of shape "
+                f"{grid.shape}, got e.g. {bad[:5].tolist()}."
+            )
+        if vars_.size and (vars_.min() < -1 or vars_.max() >= model._xCounter):
+            bad = vars_[(vars_ < -1) | (vars_ >= model._xCounter)]
+            raise ValueError(
+                "`vars` must be variable labels of the model (or -1 to mask a "
+                f"term), in [0, {model._xCounter}); got e.g. {bad[:5].tolist()}."
+            )
+        if np.isnan(coeffs_[vars_ != -1]).any():
+            check_user_nan("coefficient")
+        terms = Dataset({"vars": ("_coo", vars_), "coeffs": ("_coo", coeffs_)})
+        store = CSRStore.from_labels(terms, model).aggregate(grid, rows_)
+        return cls._from_store(store if model.sparse else store.to_dense(), model)
+
 
 class QuadraticExpression(BaseExpression):
     """
@@ -3433,6 +3589,8 @@ class QuadraticExpression(BaseExpression):
             )
 
         other = _matmul_operand_to_dataarray(other, self.coords, self.coord_dims)
+        if is_sparse_backed(other):
+            other = _densified_operand(other, "matmul on a quadratic expression")
         common_dims = list(set(self.coord_dims).intersection(other.dims))
         return (self * other).sum(dim=common_dims)
 

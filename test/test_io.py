@@ -828,6 +828,48 @@ def test_highs_direct_qp_keeps_hessian_with_names() -> None:
     assert m.objective.value == pytest.approx(1.5)
 
 
+def _highs_semi_continuous_model() -> Model:
+    m = Model()
+    s = m.add_variables(lower=2, upper=10, name="s", semi_continuous=True)
+    x = m.add_variables(lower=0, upper=10, name="x")
+    m.add_constraints(s + x >= 1.5, name="demand")
+    m.add_objective(s + 3 * x)
+    return m
+
+
+def _highs_no_constraints_model() -> Model:
+    m = Model()
+    x = m.add_variables(lower=1, upper=4, coords=[pd.RangeIndex(2, name="i")])
+    n = m.add_variables(lower=0, upper=3, integer=True, name="n")
+    m.add_objective(x.sum() - 2 * n)
+    return m
+
+
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="Highspy not installed")
+@pytest.mark.parametrize(
+    "build,expected",
+    [(_highs_semi_continuous_model, 2.0), (_highs_no_constraints_model, -4.0)],
+)
+def test_highs_direct_known_optimum(
+    build: Callable[[], Model], expected: float
+) -> None:
+    m = build()
+    assert m.solve(solver_name="highs", io_api="direct")[0] == "ok"
+    assert m.objective.value == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "io_api,fn",
+    [("mps", "problem.lp"), ("lp", "problem.mps"), ("lp-polars", "problem.mps")],
+)
+def test_to_file_rejects_mismatched_extension(
+    model: Model, tmp_path: Path, io_api: str, fn: str
+) -> None:
+    with pytest.raises(ValueError, match="does not match io_api"):
+        model.to_file(tmp_path / fn, io_api=io_api)
+    assert not (tmp_path / fn).exists()
+
+
 def test_to_blocks(tmp_path: Path) -> None:
     m: Model = Model()
 

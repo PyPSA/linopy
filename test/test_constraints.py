@@ -372,3 +372,19 @@ def test_sanitize_infinities() -> None:
         m.add_constraints(x >= np.inf, name="con_wrong_inf")
     with pytest.raises(ValueError):
         m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")
+
+
+def test_masked_incorrect_infinities() -> None:
+    # https://github.com/PyPSA/linopy/issues/1116
+    m: Model = Model()
+    x = m.add_variables(name="x", coords=[[0, 1]])
+    rhs = xr.DataArray([-np.inf, -1000], coords=x.coords)
+
+    con = m.add_constraints(x <= rhs, name="masked", mask=x.coords["dim_0"] == 1)
+    assert (con.labels.values == [-1, con.labels.values[1]]).all()
+    assert con.labels.values[1] != -1
+
+    with pytest.raises(ValueError, match="incorrect infinite values"):
+        m.add_constraints(x <= rhs, name="unmasked")
+    with pytest.raises(ValueError, match="incorrect infinite values"):
+        m.add_constraints(x <= rhs, name="wrong_mask", mask=x.coords["dim_0"] == 0)
