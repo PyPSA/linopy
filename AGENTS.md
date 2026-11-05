@@ -43,7 +43,7 @@ must stay human and honest. Two rules:
 - Run the test suite with `pytest`, lint and format with `ruff`
   (`ruff check --fix .`), and type-check with `mypy`.
 - For the authoritative, detailed commands (extras, coverage, GPU and benchmark
-  runs) see [`doc/contributing.rst`](doc/contributing.rst).
+  runs) see [`doc/contributing/contributing.md`](doc/contributing/contributing.md).
 
 ## Project conventions
 

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+<!-- Outdated version warning -->
+{% block outdated %}
+  You're not viewing the latest version.
+  <a href="{{ '../' ~ base_url }}">
+    <strong>Click here to go to latest.</strong>
+  </a>
+{% endblock %}
+
+<!-- Read the Docs addons (version selector, search) -->
+{% block site_meta %}
+{{ super() }}
+<meta name="readthedocs-addons-api-version" content="1" />
+{% endblock %}

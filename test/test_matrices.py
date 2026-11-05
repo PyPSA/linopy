@@ -11,7 +11,7 @@ import pytest
 import xarray as xr
 
 from linopy import EQUAL, GREATER_EQUAL, Model
-from linopy.matrices import Matrices
+from linopy.matrices import Matrices, _row_block
 
 
 def test_basic_matrices() -> None:
@@ -238,3 +238,51 @@ def test_matrices_take_rejects_indicator_constraints() -> None:
 
     with pytest.raises(NotImplementedError, match="indicator"):
         m.matrices.take(rows, cols)
+
+
+def test_row_block_keeps_broadcast_fields_lazy() -> None:
+    m = Model()
+    x = m.add_variables(coords=[pd.RangeIndex(4, name="i")], name="x")
+    c = m.add_constraints(2 * x >= 3, name="c", scaling=2.0)
+    block = _row_block(c, np.array([True, False, True, True]), m.variables.label_index)
+    assert block.n_rows == 3
+    assert block.sign.shape == block.scaling.shape == ()
+    assert block.sign.dtype == np.dtype("U1")
+
+
+@pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
+def test_matrices_scalar_fields(sparse: bool) -> None:
+    m = Model()
+    i = pd.RangeIndex(3, name="i")
+    x = m.add_variables(coords=[i], name="x")
+    cons = [
+        m.add_constraints(2 * x >= 1, name="a", scaling=2.0),
+        m.add_constraints(
+            x == 4,
+            name="d",
+            scaling=4.0,
+            mask=xr.DataArray([True, False, True], coords=[i]),
+        ),
+        # fully masked: empty block with a 0-d rhs and scaling
+        m.add_constraints(
+            x >= 0, name="off", scaling=3.0, mask=xr.DataArray([False] * 3, coords=[i])
+        ),
+        # dimensionless constraint
+        m.add_constraints(x.sum() <= 7, name="tot", scaling=2.0),
+    ]
+    if sparse:
+        for con in cons:
+            con.to_sparse()
+    M = m.matrices
+
+    assert M.A is not None
+    np.testing.assert_array_equal(
+        M.A.toarray(),
+        [[4, 0, 0], [0, 4, 0], [0, 0, 4], [4, 0, 0], [0, 0, 4], [2, 2, 2]],
+    )
+    np.testing.assert_array_equal(M.b, [2, 2, 2, 16, 16, 14])
+    assert M.sense.dtype == np.dtype("U1")
+    np.testing.assert_array_equal(M.sense, [">", ">", ">", "=", "=", "<"])
+    assert M.con_scaling.dtype == float
+    np.testing.assert_array_equal(M.con_scaling, [2, 2, 2, 4, 4, 2])
+    np.testing.assert_array_equal(M.clabels, [0, 1, 2, 3, 5, 9])

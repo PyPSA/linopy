@@ -29,6 +29,7 @@ class _RowBlock(NamedTuple):
     """
     Active rows of one constraint. ``positional`` returns their positional
     CSR, built only while the rows are gathered; ``nnz`` bounds its nonzeros.
+    ``rhs``, ``sign`` and ``scaling`` are 0-d when the field is a broadcast scalar.
     """
 
     positional: Callable[[], scipy.sparse.csr_array]
@@ -48,17 +49,26 @@ def _concat(arrays: list[ndarray]) -> ndarray:
     return np.concatenate(arrays) if arrays else np.empty(0, dtype=float)
 
 
+def _active(values: ndarray, rows: ndarray | slice) -> ndarray:
+    """``values`` raveled at ``rows``; a broadcast scalar stays a 0-d view."""
+    flat = values.reshape(-1)
+    if flat.size and not flat.strides[0]:
+        return flat[:1].reshape(())
+    return flat[rows]
+
+
 def _row_block(
     con: Constraint, active: ndarray, label_index: VariableLabelIndex
 ) -> _RowBlock:
     store = con.lhs._store
+    rows = slice(None) if active.all() else active
     return _RowBlock(
         partial(store.positional_csr, label_index, active, con.name),
-        int(active.sum()),
+        int(np.count_nonzero(active)),
         store.nnz(active),
-        con.rhs.values.ravel()[active],
-        con.sign.values.ravel()[active].astype("U1"),
-        con.scaling.values.ravel()[active],
+        _active(con.rhs.values, rows),
+        _active(con.sign.values, rows).astype("U1"),
+        _active(con.scaling.values, rows),
     )
 
 
@@ -112,7 +122,11 @@ def _stack(
             data[entries] = block_data
             b[rows] = block.rhs
         else:
-            per_row = repeat_per_row(row_scaling, block_indptr)
+            per_row = (
+                repeat_per_row(row_scaling, block_indptr)
+                if row_scaling.ndim
+                else row_scaling
+            )
             np.multiply(block_data, per_row, out=data[entries])
             np.multiply(block.rhs, row_scaling, out=b[rows])
         if col_scaling is not None:
@@ -293,7 +307,9 @@ def _build_cons(m: Model, col_scaling: ndarray | None) -> _ConArrays:
     label_dtype = m._dtypes["labels"]
     return _ConArrays(
         clabels=m.constraints.label_index.clabels,
-        con_scaling=_concat([block.scaling for block in regular]),
+        con_scaling=_concat(
+            [np.broadcast_to(block.scaling, block.n_rows) for block in regular]
+        ),
         A=A,
         b=b,
         sense=sense,

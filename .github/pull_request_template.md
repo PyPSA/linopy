@@ -11,5 +11,5 @@ mark AI-generated content. See AGENTS.md for the rules. -->
 - [ ] AI-generated content is marked (see [`AGENTS.md`](../blob/master/AGENTS.md)).
 - [ ] Code changes are sufficiently documented; i.e. new functions contain docstrings and further explanations may be given in `doc`.
 - [ ] Unit tests for new features were added (if applicable).
-- [ ] A note for the release notes `doc/release_notes.rst` of the upcoming release is included.
+- [ ] A note for the release notes `doc/release-notes.md` of the upcoming release is included.
 - [ ] I consent to the release of this PR's code under the MIT license.
