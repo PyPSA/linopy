@@ -51,6 +51,7 @@ from linopy.common import (
     iterate_slices,
     reassign_coords,
     save_join,
+    skip_full_indexers,
     to_dataframe,
     to_polars,
 )
@@ -1502,7 +1503,14 @@ class Variable:
 
     expand_dims = varwrap(Dataset.expand_dims)  # type: ignore[arg-type]
 
-    sel = varwrap(Dataset.sel)  # type: ignore[arg-type]
+    sel = skip_full_indexers(varwrap(Dataset.sel))  # type: ignore[arg-type]
+
+    def _shallow_copy(self) -> Variable:
+        """A new Variable on the same model sharing this one's arrays."""
+        obj = self.__class__.__new__(self.__class__)
+        obj._data = self._data.copy(deep=False)
+        obj._model = self._model
+        return obj
 
     isel = varwrap(Dataset.isel)  # type: ignore[arg-type]
 

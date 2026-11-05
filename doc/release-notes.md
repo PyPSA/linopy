@@ -107,6 +107,7 @@
 - `Model.assign_coords` no longer relabels containers through a Python dict. It locates each container's labels with `master.get_indexer(index)` and takes the new values with `new.take(positions)`: on a tz-aware `DatetimeIndex`, the rolling-horizon case it is built for, the previous `Index.map` over a dict fell into pandas' object-to-datetime inference and cost milliseconds per container. Reassigning a dataset's coordinates also builds it once instead of twice. A model with ~30 containers on a 4380-label tz-aware axis reassigns in ~9 ms, down from ~810 ms.
 - `Model.matrices` keeps broadcast scalar constraint fields (sign, rhs, scaling) as scalars and skips the row-mask copy when all rows are active, speeding up matrix assembly; output is unchanged.
 - HiGHS (direct API, `to_highspy`): the model is passed in one row-wise `passModel` call, without converting the constraint matrix.
+- `.sel` on a `Variable`, `LinearExpression`, `QuadraticExpression` or `Constraint` skips indexers that select every label of their dimension in order (e.g. `slice(None)` or the full index). If all indexers are such, it returns a shallow copy that shares the data. This took about 10% of PyPSA's sparse model build.
 
 **Bug fixes**
 
