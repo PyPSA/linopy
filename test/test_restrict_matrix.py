@@ -712,6 +712,7 @@ def test_close_drops_the_solver_and_keeps_the_result(
     assert window.solver_model is solver.solver_model is not None
 
     window.close()
+    window.close()
 
     assert window.solver is None
     assert window.solver_model is None
