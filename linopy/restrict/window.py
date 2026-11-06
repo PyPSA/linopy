@@ -270,10 +270,10 @@ class WindowModel:
         """
         from linopy.infeasibility import compute_infeasibilities
 
-        if self._result is None:
+        if self._result is None or self._solver is None:
             raise ValueError(
-                "The window has not been solved. Call `solve()` before computing "
-                "infeasibilities."
+                "The window has no solved solver model. Call `solve()` before "
+                "computing infeasibilities."
             )
         return compute_infeasibilities(self._solver, self._matrices.clabels)
 

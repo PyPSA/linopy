@@ -2101,6 +2101,8 @@ class Highs(Solver[None]):
         def get_solver_solution() -> Solution:
             objective = h.getObjectiveValue()
             solution = h.getSolution()
+            if not solution.value_valid:
+                return Solution()
             sol = np.asarray(solution.col_value, dtype=float)
             dual = np.asarray(solution.row_dual, dtype=float)
             if from_file:

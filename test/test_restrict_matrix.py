@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -559,6 +560,16 @@ def test_limited_mip_solve_returns_its_incumbent() -> None:
     assert window.termination_condition == "terminated_by_limit"
     assert set(np.unique(window["x"].values)) <= {0.0, 1.0}
     assert window.objective.value > optimum
+
+
+def test_limited_mip_solve_without_incumbent_has_no_solution() -> None:
+    window = knapsack_model().restrict(item=slice(None))
+    window.solve(solver_name="highs", output_flag=False, time_limit=0.0)
+
+    assert window.termination_condition == "time_limit"
+    assert window.objective.value is None
+    with pytest.raises(AttributeError, match="returned no solution"):
+        window.solution
 
 
 def test_solve_updates_options_on_later_calls() -> None:
@@ -1138,12 +1149,18 @@ def test_compute_infeasibilities_returns_parent_labels(solver_name: str) -> None
     ]
 
 
-@pytest.mark.parametrize("advance", [False, True], ids=["unsolved", "advanced"])
-def test_compute_infeasibilities_requires_a_solve(advance: bool) -> None:
+@pytest.mark.parametrize(
+    "after_solve",
+    [None, lambda w: w.advance(), lambda w: w.close()],
+    ids=["unsolved", "advanced", "closed"],
+)
+def test_compute_infeasibilities_requires_a_solved_solver(
+    after_solve: Callable[[WindowModel], Any] | None,
+) -> None:
     window = infeasible_window()
-    if advance:
+    if after_solve is not None:
         window.solve(solver_name="highs", output_flag=False)
-        window.advance()
+        after_solve(window)
 
-    with pytest.raises(ValueError, match="has not been solved"):
+    with pytest.raises(ValueError, match="no solved solver model"):
         window.compute_infeasibilities()
