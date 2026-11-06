@@ -62,6 +62,24 @@ Every coordinate of the variable must be present, otherwise `restrict`
 raises. Values for in-window variables are ignored. A `NaN` at an outside
 label counts as missing.
 
+A folded row counts as satisfied within a tolerance of `tol=1e-9`, relative to
+the magnitude of its folded terms when that exceeds one. Pass a larger `tol`
+when the fixed values carry solver noise.
+
+## Dropping rows
+
+`drop` leaves rows out of a window, keyed by constraint name, as boolean masks
+aligned like `fix` where `True` drops the row; `True` alone drops the whole
+constraint. Masks must be boolean; other dtypes, e.g. `NaN` or labels, raise.
+Dropped rows are removed before folding, so they are never checked, and their
+duals are `NaN`. In a rolling horizon with look-ahead, this keeps the
+target of the next block from binding in the current window:
+
+```python
+lookahead = sns > block_end
+window.advance(snapshot=window_sns, fix=fixed, drop={"soc_target": lookahead})
+```
+
 ## Example: one region of a network
 
 Two regions balance their demand with local generation and imports. The
@@ -157,7 +175,18 @@ directly:
     not raise on `solve()`, but reading its values does, so check that
     `status` is `"ok"` in a loop. A status of `"ok"` does not imply an
     optimum: a MIP stopped by its time limit is `"ok"` with the termination
-    condition `"time_limit"`.
+    condition `"time_limit"`. Its incumbent, if any, is readable.
+- [`solve_fixed_lp()`][linopy.restrict.WindowModel.solve_fixed_lp] re-solves a
+    MIP window as an LP with its discrete variables fixed at the last
+    solution, so `dual` returns the duals of the fixed problem. A later
+    `solve()` solves the MIP again.
+- `log_fn` in `solve()` writes the solver log, e.g. one file per window.
+- [`solver`][linopy.restrict.WindowModel.solver] and
+    [`solver_model`][linopy.restrict.WindowModel.solver_model] expose the
+    solver and its native model;
+    [`close()`][linopy.restrict.WindowModel.close] disposes them, e.g. to
+    release a license, and the next `solve()` creates a new one with the
+    same solver and options.
 
 Terms outside the window are dropped from the objective, so the window's value
 differs from the full model's by a constant.
@@ -171,7 +200,8 @@ the solver updates its existing model instead of building a new one, so a
 chain of equal-sized windows keeps that fast path. A changed pattern, e.g. a
 coefficient that is zero in one window only, rebuilds the solver model, or
 raises [`RebuildRequiredError`][linopy.persistent.errors.RebuildRequiredError] with
-`disallow_rebuild=True`.
+`disallow_rebuild=True`. `fix`, `drop` and `tol` default to the previous
+window's; `drop={}` clears the masks.
 
 Each solve starts from scratch: the basis left by the previous window is
 discarded, because a window shifted in time usually makes it a poor start that

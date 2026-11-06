@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
+import highspy
 import numpy as np
 import pandas as pd
 import pytest
@@ -107,6 +110,19 @@ def test_window_keeps_parent_labels() -> None:
     assert np.isin(selected.vlabels, m.variables.label_index.vlabels).all()
 
 
+ZERO_X = {"x": pd.Series(np.zeros(len(TIME)), index=TIME)}
+
+
+def pinned_model(sign: str, rhs: float) -> Model:
+    """Unit values per step, plus a row on the first step only."""
+    m = Model()
+    x = m.add_variables(lower=0, coords=[TIME], name="x")
+    m.add_constraints(x == 1, name="eq")
+    m.add_constraints(x.isel(time=0), sign, rhs, name="pin")
+    m.add_objective(x.sum())
+    return m
+
+
 @pytest.mark.parametrize(
     ("sign", "rhs", "satisfied"),
     [("==", 2, False), (">=", 2, False), ("<=", -2, False), ("<=", 2, True)],
@@ -115,19 +131,38 @@ def test_folded_row_is_checked_against_its_sign(
     sign: str, rhs: float, satisfied: bool
 ) -> None:
     """A row that loses every term is dropped only when its sign holds."""
-    m = Model()
-    x = m.add_variables(lower=0, coords=[TIME], name="x")
-    m.add_constraints(x == 1, name="eq")
-    m.add_constraints(x.isel(time=0), sign, rhs, name="pin")
-    m.add_objective(x.sum())
-
-    window = MatrixWindow(m)
-    fix = {"x": pd.Series(np.zeros(len(TIME)), index=TIME)}
+    window = MatrixWindow(pinned_model(sign, rhs))
     if satisfied:
-        assert window.select({"time": TIME[1:3]}, fix=fix)[0].clabels.size == 2
+        assert window.select({"time": TIME[1:3]}, fix=ZERO_X)[0].clabels.size == 2
         return
     with pytest.raises(RestrictionError, match="unsatisfiable"):
-        window.select({"time": TIME[1:3]}, fix=fix)
+        window.select({"time": TIME[1:3]}, fix=ZERO_X)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{}, {"tol": 1e-6}, {"drop": {"pin": True}}],
+    ids=["default", "loose-tol", "dropped"],
+)
+def test_folded_residual_passes_within_tol_or_when_dropped(
+    kwargs: dict[str, Any],
+) -> None:
+    m = pinned_model("==", 1e-7)
+    if not kwargs:
+        with pytest.raises(RestrictionError, match="unsatisfiable"):
+            m.restrict(time=TIME[1:3], fix=ZERO_X)
+        return
+    window = m.restrict(time=TIME[1:3], fix=ZERO_X, **kwargs)
+
+    assert window.matrices.clabels.size == 2
+
+
+def test_advance_keeps_the_tolerance() -> None:
+    window = pinned_model("==", 1e-7).restrict(time=TIME[1:3], fix=ZERO_X, tol=1e-6)
+    window.advance(time=TIME[2:4])
+
+    with pytest.raises(RestrictionError, match="unsatisfiable"):
+        window.advance(tol=1e-9)
 
 
 def test_binary_integrality_is_preserved() -> None:
@@ -226,9 +261,92 @@ def test_window_requires_a_constraint() -> None:
         MatrixWindow(m)
 
 
-def test_fix_must_name_a_variable() -> None:
-    with pytest.raises(RestrictionError, match="does not name a variable"):
-        MatrixWindow(linear_model()).select({"time": TIME[:2]}, fix={"nope": 1.0})
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"fix": {"nope": 1.0}}, "does not name a variable"),
+        ({"drop": {"nope": True}}, "does not name a constraint"),
+    ],
+    ids=["fix", "drop"],
+)
+def test_select_rejects_unknown_names(kwargs: dict[str, Any], match: str) -> None:
+    with pytest.raises(RestrictionError, match=match):
+        MatrixWindow(linear_model()).select({"time": TIME[:2]}, **kwargs)
+
+
+def test_dropped_rows_leave_the_window_and_have_no_dual() -> None:
+    m = linear_model()
+    cap = m.constraints["cap"].labels
+    window = m.restrict(time=TIME[:3], drop={"cap": TIME == 1})
+    window.solve(solver_name="highs", output_flag=False)
+
+    assert list(window.matrices.clabels) == list(cap.values[[0, 2]])
+    assert window.dual["cap"].isnull().values.tolist() == [False, True, False]
+
+
+@pytest.mark.parametrize(
+    "mask",
+    [
+        lambda m: xr.DataArray(np.where(TIME == 1, 1.0, np.nan), coords=[TIME]),
+        lambda m: m.constraints["cap"].labels,
+        lambda m: xr.DataArray(np.full(len(TIME), "yes"), coords=[TIME]),
+    ],
+    ids=["float-nan", "labels", "string"],
+)
+def test_drop_masks_must_be_boolean(mask: Callable[[Model], Any]) -> None:
+    m = linear_model()
+    with pytest.raises(RestrictionError, match="must be boolean"):
+        m.restrict(time=TIME[:3], drop={"cap": mask(m)})
+
+
+def test_changing_drop_requires_a_rebuild() -> None:
+    window = linear_model().restrict(time=TIME[:3], drop={"cap": TIME == 0})
+    window.solve(solver_name="highs", output_flag=False)
+
+    window.advance(drop={})
+    with pytest.raises(RebuildRequiredError):
+        window.solve(disallow_rebuild=True)
+
+
+def test_advance_updates_the_drop_masks() -> None:
+    m = linear_model()
+    cap = m.constraints["cap"].labels.values
+    window = m.restrict(time=TIME[:3], drop={"cap": TIME == 0})
+    assert list(window.matrices.clabels) == list(cap[[1, 2]])
+
+    window.advance(drop={"cap": TIME == 1})
+    assert list(window.matrices.clabels) == list(cap[[0, 2]])
+
+    window.advance(time=TIME[1:4])
+    assert list(window.matrices.clabels) == list(cap[[2, 3]])
+
+    window.advance(drop={})
+    assert list(window.matrices.clabels) == list(cap[1:4])
+
+
+def target_model() -> Model:
+    """A storage that must reach a rising state of charge every second step."""
+    m = Model()
+    soc = m.add_variables(0, 10, coords=[TIME], name="soc")
+    charge = m.add_variables(0, 5, coords=[TIME], name="charge")
+    m.add_constraints(soc - soc.shift(time=1) - charge == 0, name="balance")
+    target = xr.DataArray(TIME + 1.0, coords=[TIME])
+    m.add_constraints(soc == target, mask=target % 2 == 0, name="target")
+    m.add_objective(charge.sum() + 0.1 * soc.sum())
+    return m
+
+
+def test_drop_leaves_look_ahead_targets_out_of_rolling_windows() -> None:
+    """Each window binds the target of its own block, not of its look-ahead."""
+    window = target_model().restrict(time=TIME[:4], drop={"target": TIME > 1})
+    window.solve(solver_name="highs", output_flag=False)
+    assert np.allclose(window["soc"].values, [2, 2, 2, 2])
+    assert np.isnan(window.dual["target"].sel(time=3))
+
+    fix = {"soc": window["soc"].sel(time=TIME[:2]).reindex(time=TIME)}
+    window.advance(time=TIME[2:6], fix=fix, drop={"target": TIME > 3})
+    window.solve()
+    assert np.allclose(window["soc"].values, [2, 4, 4, 4])
 
 
 @pytest.mark.parametrize(
@@ -257,7 +375,7 @@ def ramp_model(scaling: float = 1.0, mask: xr.DataArray | None = None) -> Model:
     return m
 
 
-def solve_window(m: Model, fix: object, **selection: object) -> xr.DataArray:
+def solve_window(m: Model, fix: object, **selection: Any) -> xr.DataArray:
     window = m.restrict(fix={"x": fix}, **selection)
     window.solve(solver_name="highs", output_flag=False)
     return window.solution["x"]
@@ -427,7 +545,7 @@ def test_advance_must_name_exactly_the_selected_dimensions(
     ids=["empty", "repeated", "repeated-multi-dim"],
 )
 def test_select_rejects_degenerate_selections(
-    selection: dict[str, object], match: str
+    selection: dict[str, Any], match: str
 ) -> None:
     with pytest.raises(RestrictionError, match=match):
         ramp_model().restrict(fix={"x": 0.0}, **selection)
@@ -442,6 +560,44 @@ def test_advance_without_selection_keeps_the_window() -> None:
     assert np.array_equal(window.matrices.b, before)
 
 
+def knapsack_model() -> Model:
+    """A binary knapsack that HiGHS does not solve at its first incumbent."""
+    items = pd.RangeIndex(12, name="item")
+    weight = xr.DataArray(np.arange(12) * 37 % 41 + 5, coords=[items])
+    value = xr.DataArray(np.arange(12) * 29 % 43 + 5, coords=[items])
+    m = Model()
+    x = m.add_variables(binary=True, coords=[items], name="x")
+    m.add_constraints((weight * x).sum() <= 60, name="cap")
+    m.add_objective(-(value * x).sum())
+    return m
+
+
+def test_limited_mip_solve_returns_its_incumbent() -> None:
+    """Options of a later in-place solve apply, and its incumbent is readable."""
+    window = knapsack_model().restrict(item=slice(None))
+    window.solve(solver_name="highs", output_flag=False)
+    assert window.termination_condition == "optimal"
+    optimum = window.objective.value
+    assert optimum is not None
+
+    window.solve(disallow_rebuild=True, mip_max_improving_sols=1)
+
+    assert window.termination_condition == "terminated_by_limit"
+    assert set(np.unique(window["x"].values)) <= {0.0, 1.0}
+    incumbent = window.objective.value
+    assert incumbent is not None and incumbent > optimum
+
+
+def test_limited_mip_solve_without_incumbent_has_no_solution() -> None:
+    window = knapsack_model().restrict(item=slice(None))
+    window.solve(solver_name="highs", output_flag=False, time_limit=0.0)
+
+    assert window.termination_condition == "time_limit"
+    assert window.objective.value is None
+    with pytest.raises(AttributeError, match="returned no solution"):
+        window.solution
+
+
 def test_solve_updates_options_on_later_calls() -> None:
     window = linear_model().restrict(time=TIME[:2])
     window.solve(solver_name="highs", output_flag=False)
@@ -449,6 +605,19 @@ def test_solve_updates_options_on_later_calls() -> None:
     window.solve()
 
     assert window.objective.value == pytest.approx(0.0)
+
+
+def test_solve_rejects_another_solver_name_until_closed() -> None:
+    window = linear_model().restrict(time=TIME[:2])
+    window.solve(solver_name="highs", output_flag=False)
+    window.solve(solver_name="highs")
+
+    with pytest.raises(ValueError, match="already holds a 'highs' solver"):
+        window.solve(solver_name="scip")
+
+    window.close()
+    window.solve(solver_name="highs")
+    assert window.status == "ok"
 
 
 @pytest.mark.parametrize(
@@ -537,18 +706,57 @@ def test_ok_solve_without_a_solution_raises_on_read() -> None:
         window.solution
 
 
-def test_failed_status_hides_returned_values() -> None:
-    from linopy.constants import Status
+@pytest.mark.parametrize(
+    ("solver_name", "options"),
+    [("highs", {"output_flag": False}), ("gurobi", {"OutputFlag": 0})],
+)
+def test_close_drops_the_solver_and_keeps_the_result(
+    solver_name: str, options: dict[str, Any]
+) -> None:
+    from linopy import licensed_solvers
 
-    window = solved_window()
-    assert window._result is not None
-    window._result = replace(
-        window._result, status=Status.from_termination_condition("infeasible")
-    )
+    if solver_name not in licensed_solvers:
+        pytest.skip(f"{solver_name} is not available with a license")
 
-    assert window.objective.value is None
-    with pytest.raises(AttributeError, match="termination condition 'infeasible'"):
-        window.solution
+    window = linear_model().restrict(time=TIME[:2])
+    window.solve(solver_name=solver_name, **options)
+    solver = window.solver
+    assert solver is not None
+    assert window.solver_model is solver.solver_model is not None
+
+    window.close()
+    window.close()
+
+    assert window.solver is None
+    assert window.solver_model is None
+    assert solver.solver_model is None
+    assert np.allclose(window["x"].values, 0.0)
+    window.solve(time_limit=10.0)
+    assert window.solver is not None
+    assert window.solver is not solver
+    assert window.solver.solver_name.value == solver_name
+    assert window.solver.solver_options == {**options, "time_limit": 10.0}
+    assert window.status == "ok"
+
+
+@pytest.mark.parametrize("solver_name", ["highs", "gurobi"])
+def test_solve_writes_one_log_per_window(solver_name: str, tmp_path: Path) -> None:
+    from linopy import licensed_solvers
+
+    if solver_name not in licensed_solvers:
+        pytest.skip(f"{solver_name} is not available with a license")
+
+    fix = {"soc": initial()}
+    first, second = tmp_path / "first.log", tmp_path / "second.log"
+    window = storage_model().restrict(time=TIME[1:4], fix=fix)
+    window.solve(solver_name=solver_name, log_fn=first)
+    logged = first.read_text()
+    window.advance(time=TIME[4:7], fix=fix)
+    window.solve(disallow_rebuild=True, log_fn=second)
+
+    assert logged
+    assert first.read_text().startswith(logged)
+    assert second.read_text()
 
 
 def test_solve_that_raises_drops_the_previous_result(
@@ -655,6 +863,49 @@ def test_window_solve_matches_the_restricted_model(kinds: str, scaling: float) -
     assert window.objective.value == pytest.approx(reference.objective.value)
     for kind in kinds:
         assert np.allclose(window[kind].values, reference.solution[kind].values)
+
+
+@pytest.mark.parametrize("scaling", [1.0, 10.0])
+def test_solve_fixed_lp_reports_the_duals_of_the_fixed_mip(scaling: float) -> None:
+    window = kinds_model("CI", TIME, scaling).restrict(time=TIME[:2])
+    window.solve(solver_name="highs", output_flag=False)
+    window.solve_fixed_lp()
+    reference = kinds_model("CI", TIME[:2], scaling)
+    reference.solve(solver_name="highs", output_flag=False)
+    reference.variables["I"].fix()
+    reference.variables["I"].relax()
+    reference.solve(solver_name="highs", output_flag=False)
+
+    assert window.matrices.type == "MILP"
+    assert np.allclose(window["I"].values, 1.0)
+    assert np.allclose(window.dual["demand"].values, reference.dual["demand"].values)
+    assert window.objective.value == pytest.approx(reference.objective.value)
+
+
+def test_mip_window_has_no_duals_until_solve_fixed_lp() -> None:
+    window = kinds_model("CI", TIME).restrict(time=TIME[:2])
+    window.solve(solver_name="highs", output_flag=False)
+    with pytest.raises(AttributeError, match="returned no dual values"):
+        window.dual
+
+    window.solve_fixed_lp()
+
+    assert window.dual["demand"].notnull().all()
+
+
+def test_solve_after_solve_fixed_lp_restores_integrality() -> None:
+    window = kinds_model("CI", TIME).restrict(time=TIME[:2])
+    window.solve(solver_name="highs", output_flag=False)
+    window.solve_fixed_lp()
+    window.solve(disallow_rebuild=True)
+
+    assert window.objective.value == pytest.approx(2 * 1.1)
+    assert np.allclose(window["I"].values, 1.0)
+
+
+def test_solve_fixed_lp_requires_a_solution() -> None:
+    with pytest.raises(AttributeError, match="has not been solved"):
+        kinds_model("CI", TIME).restrict(time=TIME[:2]).solve_fixed_lp()
 
 
 def _window_matrices() -> Matrices:
@@ -891,3 +1142,90 @@ def test_window_rejects_horizon_wide_sos_rows() -> None:
 
     with pytest.raises(RestrictionError, match="dangling terms"):
         m.restrict(time=TIME[:2])
+
+
+@pytest.mark.parametrize("suffix", [".lp", ".mps", ".LP"])
+@pytest.mark.parametrize(
+    "explicit, columns, rows",
+    [
+        (False, ["x1", "x2", "x9", "x10"], ["c1", "c2", "c9", "c10"]),
+        (
+            True,
+            ["soc(1)#1", "soc(2)#2", "charge(1)#9", "charge(2)#10"],
+            ["balance(1)#1", "balance(2)#2", "cap(1)#9", "cap(2)#10"],
+        ),
+    ],
+    ids=["labels", "coordinates"],
+)
+def test_to_file_writes_the_window_with_parent_names(
+    tmp_path: Path, suffix: str, explicit: bool, columns: list[str], rows: list[str]
+) -> None:
+    window = storage_model().restrict(time=TIME[1:3], fix={"soc": initial()})
+    window.solve(solver_name="highs", output_flag=False)
+
+    fn = window.to_file(
+        tmp_path / f"window{suffix}", explicit_coordinate_names=explicit
+    )
+    h = highspy.Highs()
+    h.setOptionValue("output_flag", False)
+    h.readModel(str(fn))
+    h.run()
+
+    assert h.getLp().col_names_ == columns
+    assert h.getLp().row_names_ == rows
+    assert h.getInfo().objective_function_value == pytest.approx(window.objective.value)
+
+
+def test_to_file_rejects_unknown_formats(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="expected an '.lp' or '.mps' file"):
+        linear_model().restrict(time=TIME[:2]).to_file(tmp_path / "window.nc")
+
+
+def infeasible_boundary_model() -> Model:
+    """A ramp from a boundary fixed at zero cannot reach the floor at time 3."""
+    m = Model()
+    x = m.add_variables(0, 10, coords=[TIME], name="x")
+    m.add_constraints(x - x.shift(time=1) <= 1, name="ramp")
+    floor = xr.DataArray(np.where(TIME == 3, 5.0, 0.0), coords=[TIME])
+    m.add_constraints(x >= floor, name="lower")
+    m.add_objective(x.sum())
+    return m
+
+
+@pytest.mark.parametrize("solver_name", ["highs", "gurobi", "xpress"])
+def test_compute_infeasibilities_returns_parent_labels(solver_name: str) -> None:
+    from linopy import licensed_solvers
+
+    if solver_name not in licensed_solvers:
+        pytest.skip(f"{solver_name} is not available with a license")
+    m = infeasible_boundary_model()
+    window = m.restrict(time=TIME[3:5], fix={"x": pd.Series(0.0, index=TIME)})
+    window.solve(solver_name=solver_name)
+
+    labels = window.compute_infeasibilities()
+
+    assert [m.constraints.get_label_position(label) for label in labels] == [
+        ("ramp", {"time": 3}),
+        ("lower", {"time": 3}),
+    ]
+    assert m.constraints.format_labels(labels).splitlines() == [
+        "ramp[3]: +1 x[3] - 1 x[2] ≤ 1",
+        "lower[3]: +1 x[3] ≥ 5",
+    ]
+
+
+@pytest.mark.parametrize(
+    "after_solve",
+    [None, lambda w: w.advance(), lambda w: w.close()],
+    ids=["unsolved", "advanced", "closed"],
+)
+def test_compute_infeasibilities_requires_a_solved_solver(
+    after_solve: Callable[[WindowModel], Any] | None,
+) -> None:
+    window = infeasible_window()
+    if after_solve is not None:
+        window.solve(solver_name="highs", output_flag=False)
+        after_solve(window)
+
+    with pytest.raises(ValueError, match="no solved solver model"):
+        window.compute_infeasibilities()

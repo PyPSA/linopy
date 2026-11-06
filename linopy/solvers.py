@@ -104,6 +104,18 @@ def _names_to_labels(names: Any) -> np.ndarray:
             )
 
 
+def _iis_not_supported(solver_name: str) -> NotImplementedError:
+    return NotImplementedError(
+        f"Computing infeasibilities is not supported for '{solver_name}' solver. "
+        "Only Gurobi, Xpress and HiGHS solvers support IIS computation."
+    )
+
+
+def _iis_labels(labels: np.ndarray) -> list[int]:
+    """Sorted distinct constraint labels of the IIS rows, masked rows left out."""
+    return sorted(set(labels[labels >= 0].tolist()))
+
+
 def _solution_from_names(values: np.ndarray, names: Any, size: int) -> np.ndarray:
     """
     Build a label-indexed dense solution array of length ``size`` from
@@ -564,6 +576,45 @@ class Solver(ABC, Generic[EnvType]):
         raise UnsupportedUpdate(
             f"{self.display_name} cannot discard the warm start in place"
         )
+
+    def compute_infeasibilities(self, clabels: np.ndarray) -> list[int]:
+        """
+        Compute an irreducible infeasible subsystem (IIS) of the solved native model.
+
+        For a model read from a file, Gurobi and HiGHS ignore ``clabels`` and
+        parse the labels from the row names, which must be linopy's; Xpress
+        always maps rows by position.
+
+        Parameters
+        ----------
+        clabels : np.ndarray
+            Constraint label of each native row position, as
+            :meth:`linopy.Model.compute_infeasibilities` passes
+            ``constraints.label_index.clabels``.
+
+        Returns
+        -------
+        list[int]
+            Sorted constraint labels of one IIS.
+
+        Raises
+        ------
+        NotImplementedError
+            If the solver does not support IIS computation.
+        ValueError
+            If no solver model is available.
+        RuntimeError
+            If the solver fails to compute an IIS.
+        """
+        raise _iis_not_supported(self.solver_name.value)
+
+    def _solver_model_for_iis(self) -> Any:
+        if self.solver_model is None:
+            raise ValueError(
+                "No solver model available. The model must be solved first with "
+                "a solver that supports IIS computation and the result must be infeasible."
+            )
+        return self.solver_model
 
     def _build_window(self, M: Matrices) -> None:
         self.close()
@@ -1825,6 +1876,24 @@ class Highs(Solver[None]):
     def _discard_warm_start(self) -> None:
         self.solver_model.clearSolver()
 
+    def compute_infeasibilities(self, clabels: np.ndarray) -> list[int]:
+        h = self._solver_model_for_iis()
+        if "iis_strategy" not in self.solver_options:
+            from_lp = int(highspy.IisStrategy.kIisStrategyFromLp)
+            irreducible = int(highspy.IisStrategy.kIisStrategyIrreducible)
+            h.setOptionValue("iis_strategy", from_lp | irreducible)
+
+        status, iis = h.getIis()
+        if status == highspy.HighsStatus.kError or not iis.valid_:
+            raise RuntimeError(
+                "HiGHS failed to compute an irreducible infeasible subsystem (IIS)."
+            )
+
+        if self.io_api != "direct":
+            clabels = _names_to_labels(h.getLp().row_names_)
+        rows = np.asarray(iis.row_index_, dtype=np.intp)
+        return _iis_labels(clabels[rows])
+
     @classmethod
     @functools.cache
     def _vtype_map(cls) -> dict[VarKind, Any]:
@@ -1966,6 +2035,7 @@ class Highs(Solver[None]):
         env: Any = None,
         **kw: Any,
     ) -> Result:
+        self._set_solver_params(self.solver_model, log_fn)
         return self._solve(
             self.solver_model,
             solution_fn=solution_fn,
@@ -2100,6 +2170,8 @@ class Highs(Solver[None]):
         def get_solver_solution() -> Solution:
             objective = h.getObjectiveValue()
             solution = h.getSolution()
+            if not solution.value_valid:
+                return Solution()
             sol = np.asarray(solution.col_value, dtype=float)
             dual = np.asarray(solution.row_dual, dtype=float)
             if from_file:
@@ -2109,6 +2181,8 @@ class Highs(Solver[None]):
             else:
                 sol = _solution_from_labels(sol, self._vlabels, self._n_vars)
                 dual = _solution_from_labels(dual, self._clabels, self._n_cons)
+            if not solution.dual_valid:
+                dual = np.array([], dtype=float)
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)
@@ -2383,6 +2457,15 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
 
     def _discard_warm_start(self) -> None:
         self.solver_model.reset(0)
+
+    def compute_infeasibilities(self, clabels: np.ndarray) -> list[int]:
+        m = self._solver_model_for_iis()
+        m.computeIIS()
+        constrs = m.getConstrs()
+        in_iis = np.asarray(m.getAttr("IISConstr", constrs), dtype=bool)
+        if self.io_api != "direct":
+            clabels = _names_to_labels([c.ConstrName for c in constrs])
+        return _iis_labels(clabels[in_iis])
 
     def _apply_var_bounds(
         self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
@@ -2953,6 +3036,42 @@ class Xpress(Solver[None]):
     @classmethod
     def _license_probe(cls) -> None:
         xpress.init()
+
+    def compute_infeasibilities(self, clabels: np.ndarray) -> list[int]:
+        """
+        A single IIS, found with Xpress' fast search (mode 2) over minimality.
+
+        Rows are mapped by position, so masked constraints with gaps in their labels
+        are handled.
+        """
+        m = self._solver_model_for_iis()
+        try:
+            m.firstIIS(2)
+        except AttributeError:
+            m.iisfirst(2)
+
+        if m.attributes.numiis == 0:
+            return []
+
+        position_to_label = {
+            constraint: clabels[position]
+            for position, constraint in enumerate(m.getConstraint())
+            if position < len(clabels) and clabels[position] >= 0
+        }
+        try:
+            rows = m.getIISData(1)[0]
+        except AttributeError:
+            iis_constraints: list[Any] = []
+            m.getiisdata(1, iis_constraints, *([] for _ in range(7)))
+        else:
+            iis_constraints = [m.getConstraint(row) for row in rows]
+        return sorted(
+            {
+                int(position_to_label[constraint])
+                for constraint in iis_constraints
+                if constraint in position_to_label
+            }
+        )
 
     def _apply_var_bounds(
         self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray

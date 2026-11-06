@@ -76,6 +76,10 @@ Backend restrictions on file contents and names still apply. Without a linopy `M
     options:
       heading_level: 4
 
+::: linopy.solvers.Solver.compute_infeasibilities
+    options:
+      heading_level: 4
+
 ### Capabilities
 
 ::: linopy.solvers.Solver.is_available

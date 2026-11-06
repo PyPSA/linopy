@@ -10,12 +10,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from xarray import DataArray
 
-from linopy.restrict.matrix import MatrixWindow, RestrictionError
+from linopy.common import to_path
+from linopy.restrict.matrix import DROPPED_ROW_TOL, MatrixWindow, RestrictionError
 
 if TYPE_CHECKING:
     from linopy.constants import Result, Solution
@@ -34,7 +36,12 @@ class WindowObjective:
 
     @property
     def value(self) -> float | None:
-        """The objective value, ``None`` unless the last solve returned a solution."""
+        """
+        The objective value of the solution the last solve returned, if any.
+
+        This may be an incumbent, e.g. of a MIP stopped by a limit; check
+        :attr:`WindowModel.termination_condition`.
+        """
         solution = self._window._solution()
         if solution is None:
             return None
@@ -60,21 +67,46 @@ class WindowModel:
         parent: Model,
         selection: Mapping[str, Any],
         fix: Mapping[str, Any] | None = None,
+        drop: Mapping[str, Any] | None = None,
+        tol: float = DROPPED_ROW_TOL,
     ) -> None:
         self._parent = parent
         self._matrix_window = MatrixWindow(parent)
         self._selection = dict(selection)
         self._fix = fix
-        self._matrices, self._variables, self._constraints = self._matrix_window.select(
-            self._selection, fix
-        )
+        self._drop = drop
+        self._tol = tol
+        self._select()
         self.objective = WindowObjective(self)
         self._result: Result | None = None
         self._solver: Solver | None = None
+        self._solver_name = "highs"
+        self._solver_options: dict[str, Any] = {}
 
     @property
     def matrices(self) -> Matrices:
         return self._matrices
+
+    @property
+    def solver(self) -> Solver | None:
+        """The window's solver, ``None`` before the first solve and after :meth:`close`."""
+        return self._solver
+
+    @property
+    def solver_model(self) -> Any:
+        """The solver's native model, ``None`` without a solver."""
+        return self._solver.solver_model if self._solver is not None else None
+
+    def close(self) -> None:
+        """
+        Dispose the solver and its native model, releasing any held license.
+
+        The last result stays readable; the next :meth:`solve` creates a new
+        solver of the same name with the same options.
+        """
+        if self._solver is not None:
+            self._solver.close()
+        self._solver = None
 
     @property
     def status(self) -> str:
@@ -91,9 +123,19 @@ class WindowModel:
         return self._result.status.termination_condition.value
 
     def advance(
-        self, fix: Mapping[str, Any] | None = None, **selection: Any
+        self,
+        fix: Mapping[str, Any] | None = None,
+        drop: Mapping[str, Any] | None = None,
+        tol: float | None = None,
+        **selection: Any,
     ) -> WindowModel:
-        """Move the window, recomputing the matrices for the new selection."""
+        """
+        Move the window, recomputing the matrices for the new selection.
+
+        ``fix``, ``drop`` and ``tol`` are as for :meth:`linopy.Model.restrict`;
+        ``None`` keeps the previous value, and ``drop={}`` clears the drop
+        masks. Without a selection the window stays where it is.
+        """
         if selection:
             if selection.keys() != self._selection.keys():
                 raise RestrictionError(
@@ -103,9 +145,9 @@ class WindowModel:
                 )
             self._selection = selection
         self._fix = fix if fix is not None else self._fix
-        self._matrices, self._variables, self._constraints = self._matrix_window.select(
-            self._selection, self._fix
-        )
+        self._drop = drop if drop is not None else self._drop
+        self._tol = tol if tol is not None else self._tol
+        self._select()
         self._result = None
         return self
 
@@ -114,6 +156,7 @@ class WindowModel:
         solver_name: str | None = None,
         disallow_rebuild: bool = False,
         warm_start: bool = False,
+        log_fn: str | Path | None = None,
         **options: Any,
     ) -> WindowModel:
         """
@@ -124,25 +167,123 @@ class WindowModel:
         solver down. Pass ``warm_start=True`` to keep it, e.g. when re-solving
         the same window with slightly changed fixed values.
 
+        ``solver_name`` picks the solver of the first solve; later solves reuse
+        it and raise ``ValueError`` on another name until :meth:`close`, after
+        which a solver of the same name is created unless another is given. ``log_fn`` writes the solver log of this solve to
+        that file; the solver may keep logging there until another ``log_fn``
+        is given. Further keyword arguments are solver options, kept for later
+        solves, also after :meth:`close`.
+
         Check :attr:`status` and :attr:`termination_condition` afterwards: an
         infeasible or otherwise failed window does not raise, but reading its
-        values does.
+        values does when the solver returned none. A solution returned with a
+        limit, e.g. a MIP incumbent at its time limit, is readable.
         """
+        return self._solve(
+            self._matrices, solver_name, disallow_rebuild, warm_start, log_fn, options
+        )
+
+    def solve_fixed_lp(
+        self,
+        solver_name: str | None = None,
+        disallow_rebuild: bool = False,
+        warm_start: bool = False,
+        log_fn: str | Path | None = None,
+        **options: Any,
+    ) -> WindowModel:
+        """
+        Re-solve the window as an LP with its discrete variables fixed, for duals.
+
+        Every non-continuous column is fixed at its value in the last solve's
+        solution and made continuous. The result replaces the last one, so
+        :attr:`solution`, :attr:`dual` and ``objective.value`` read the fixed
+        LP, while :attr:`matrices` and a later :meth:`solve` keep the MIP.
+        Arguments are as for :meth:`solve`.
+
+        Raises
+        ------
+        AttributeError
+            If the last solve returned no solution.
+        """
+        primal = self._solved().primal
+        mat = self._matrices
+        discrete = mat.vtypes != "C"
+        fixed = replace(
+            mat,
+            lb=np.where(discrete, primal, mat.lb),
+            ub=np.where(discrete, primal, mat.ub),
+            vtypes=np.full_like(mat.vtypes, "C"),
+        )
+        return self._solve(
+            fixed, solver_name, disallow_rebuild, warm_start, log_fn, options
+        )
+
+    def _solve(
+        self,
+        matrices: Matrices,
+        solver_name: str | None,
+        disallow_rebuild: bool,
+        warm_start: bool,
+        log_fn: str | Path | None,
+        options: dict[str, Any],
+    ) -> WindowModel:
         from linopy.solvers import Solver
 
+        self._solver_options.update(options)
         if self._solver is None:
+            self._solver_name = solver_name or self._solver_name
             self._solver = Solver.from_name(
-                solver_name or "highs", io_api="direct", options=options
+                self._solver_name, io_api="direct", options=dict(self._solver_options)
             )
-        elif options:
+        else:
+            if solver_name is not None and solver_name != self._solver_name:
+                raise ValueError(
+                    f"The window already holds a {self._solver_name!r} solver; "
+                    f"call `close()` before solving with {solver_name!r}."
+                )
             self._solver.solver_options.update(options)
         self._result = None  # a solve that raises leaves no stale result behind
         result = self._solver.solve_window(
-            self._matrices, disallow_rebuild=disallow_rebuild, warm_start=warm_start
+            matrices,
+            disallow_rebuild=disallow_rebuild,
+            warm_start=warm_start,
+            log_fn=to_path(log_fn),
         )
         self._result = result
-        _log_in_model_units(result, self._matrices.objective_scaling)
+        _log_in_model_units(result, matrices.objective_scaling)
         return self
+
+    def to_file(self, fn: str | Path, explicit_coordinate_names: bool = False) -> Path:
+        """
+        Write the window to an LP or MPS file, depending on the suffix of ``fn``.
+
+        Columns and rows carry the parent's variable and constraint names, like
+        :meth:`Model.to_file <linopy.model.Model.to_file>` writes them, and the
+        coefficients are in solver-scaled units, as the solver sees them.
+        """
+        from linopy.io import get_printers_scalar, matrices_to_file
+
+        fn = Path(fn)
+        if fn.suffix.lower() not in (".lp", ".mps"):
+            raise ValueError(f"Cannot write '{fn}': expected an '.lp' or '.mps' file.")
+        names = get_printers_scalar(self._parent, explicit_coordinate_names)
+        matrices_to_file(self._matrices, fn, names, sos=[])
+        return fn
+
+    def compute_infeasibilities(self) -> list[int]:
+        """
+        Parent constraint labels of an irreducible infeasible subset of the window.
+
+        Requires the last :meth:`solve` to have found the window infeasible with
+        ``gurobi``, ``xpress`` or ``highs``. Format the labels with the parent's
+        :meth:`Constraints.format_labels <linopy.constraints.Constraints.format_labels>`.
+        """
+        if self._result is None or self._solver is None:
+            raise ValueError(
+                "The window has no solved solver model. Call `solve()` before "
+                "computing infeasibilities."
+            )
+        return self._solver.compute_infeasibilities(self._matrices.clabels)
 
     @property
     def solution(self) -> dict[str, DataArray]:
@@ -175,10 +316,16 @@ class WindowModel:
         values = self._solved().primal / mat.var_scaling
         return _scatter(variables, mat.vlabels, values, self._parent._xCounter)
 
+    def _select(self) -> None:
+        selected = self._matrix_window.select(
+            self._selection, self._fix, self._drop, self._tol
+        )
+        self._matrices, self._variables, self._constraints = selected
+
     def _solution(self) -> Solution | None:
-        """The last solve's solution, ``None`` unless it succeeded with values."""
+        """The last solve's solution, ``None`` unless it returned primal values."""
         result = self._result
-        if result is None or not result.status.is_ok:
+        if result is None:
             return None
         solution = result.solution
         if solution is None or solution.primal.size != self._matrices.vlabels.size:
@@ -216,9 +363,11 @@ def restrict_model(
     model: Model,
     fix: Mapping[str, Any] | None,
     selection: Mapping[str, Any],
+    drop: Mapping[str, Any] | None = None,
+    tol: float = DROPPED_ROW_TOL,
 ) -> WindowModel:
     """Build a matrix-backed window of ``model``, see :meth:`linopy.Model.restrict`."""
-    return WindowModel(model, selection, fix)
+    return WindowModel(model, selection, fix, drop, tol)
 
 
 def _log_in_model_units(result: Result, objective_scaling: float) -> None:

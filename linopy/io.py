@@ -41,7 +41,9 @@ if TYPE_CHECKING:
     from highspy.highs import Highs
 
     from linopy.expressions import LinearExpression, QuadraticExpression
+    from linopy.matrices import Matrices
     from linopy.model import Model
+    from linopy.solvers import Printers, SosSet
     from linopy.variables import Variable
 
 
@@ -821,27 +823,33 @@ def to_file(
         )
 
     elif io_api == "mps":
-        if "highs" not in solvers.available_solvers:
-            raise RuntimeError(
-                "Package highspy not installed. This is required to exporting to MPS file."
-            )
-
-        # Use very fast highspy implementation
-        # Might be replaced by custom writer, however needs C/Rust bindings for performance
-        h = solvers.Highs._build_solver_model(
+        matrices_to_file(
             m.matrices,
-            names=get_printers_scalar(
-                m, explicit_coordinate_names=explicit_coordinate_names
-            ),
+            fn,
+            get_printers_scalar(m, explicit_coordinate_names=explicit_coordinate_names),
             sos=list(solvers._iter_sos_sets(m)),
         )
-        h.writeModel(str(fn))
     else:
         raise ValueError(
             f"Invalid io_api '{io_api}'. Choose from 'lp', 'lp-polars' or 'mps'."
         )
 
     return fn
+
+
+def matrices_to_file(M: Matrices, fn: Path, names: Printers, sos: list[SosSet]) -> None:
+    """
+    Write ``M`` with HiGHS, as an LP or MPS file depending on the suffix of ``fn``.
+
+    Columns and rows are named by ``names`` applied to ``M.vlabels`` and
+    ``M.clabels``.
+    """
+    if "highs" not in solvers.available_solvers:
+        raise RuntimeError(
+            "Package highspy not installed. It is required to write matrices to file."
+        )
+    h = solvers.Highs._build_solver_model(M, names=names, sos=sos)
+    h.writeModel(str(fn))
 
 
 def to_mosek(

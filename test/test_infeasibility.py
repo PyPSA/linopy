@@ -204,21 +204,22 @@ class TestInfeasibility:
             # Some solvers might raise an error when computing IIS on feasible model
             pass
 
-    def test_unsupported_solver_error(self) -> None:
+    @pytest.mark.parametrize("solver", ["cbc", "glpk", "scip"])
+    def test_unsupported_solver_error(self, solver: str) -> None:
         """Test error for unsupported solvers."""
+        if solver not in licensed_solvers:
+            pytest.skip(f"{solver} not available")
         m = Model()
         x = m.add_variables(name="x")
         m.add_constraints(x >= 0)
-        m.add_constraints(x <= -1)  # Make it infeasible
+        m.add_constraints(x <= -1)
         m.add_objective(1 * x)
 
-        # Use a solver that doesn't support IIS
-        if "cbc" in licensed_solvers:
-            status, condition = m.solve(solver_name="cbc")
-            assert "infeasible" in condition
+        status, condition = m.solve(solver_name=solver)
+        assert "infeasible" in condition
 
-            with pytest.raises(NotImplementedError):
-                m.compute_infeasibilities()
+        with pytest.raises(NotImplementedError, match="Computing infeasibilities is"):
+            m.compute_infeasibilities()
 
     @pytest.mark.parametrize("solver", ["gurobi", "xpress", "highs"])
     @pytest.mark.parametrize("io_api,set_names", [("lp", None), ("direct", False)])
