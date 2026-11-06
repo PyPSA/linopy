@@ -284,6 +284,30 @@ def test_dropped_rows_leave_the_window_and_have_no_dual() -> None:
     assert window.dual["cap"].isnull().values.tolist() == [False, True, False]
 
 
+@pytest.mark.parametrize(
+    "mask",
+    [
+        lambda m: xr.DataArray(np.where(TIME == 1, 1.0, np.nan), coords=[TIME]),
+        lambda m: m.constraints["cap"].labels,
+        lambda m: xr.DataArray(np.full(len(TIME), "yes"), coords=[TIME]),
+    ],
+    ids=["float-nan", "labels", "string"],
+)
+def test_drop_masks_must_be_boolean(mask: Callable[[Model], Any]) -> None:
+    m = linear_model()
+    with pytest.raises(RestrictionError, match="must be boolean"):
+        m.restrict(time=TIME[:3], drop={"cap": mask(m)})
+
+
+def test_changing_drop_requires_a_rebuild() -> None:
+    window = linear_model().restrict(time=TIME[:3], drop={"cap": TIME == 0})
+    window.solve(solver_name="highs", output_flag=False)
+
+    window.advance(drop={})
+    with pytest.raises(RebuildRequiredError):
+        window.solve(disallow_rebuild=True)
+
+
 def test_advance_updates_the_drop_masks() -> None:
     m = linear_model()
     cap = m.constraints["cap"].labels.values
@@ -667,8 +691,20 @@ def test_ok_solve_without_a_solution_raises_on_read() -> None:
         window.solution
 
 
-def test_close_drops_the_solver_and_keeps_the_result() -> None:
-    window = solved_window()
+@pytest.mark.parametrize(
+    ("solver_name", "options"),
+    [("highs", {"output_flag": False}), ("gurobi", {"OutputFlag": 0})],
+)
+def test_close_drops_the_solver_and_keeps_the_result(
+    solver_name: str, options: dict[str, Any]
+) -> None:
+    from linopy import licensed_solvers
+
+    if solver_name not in licensed_solvers:
+        pytest.skip(f"{solver_name} is not available with a license")
+
+    window = linear_model().restrict(time=TIME[:2])
+    window.solve(solver_name=solver_name, **options)
     solver = window.solver
     assert solver is not None
     assert window.solver_model is solver.solver_model is not None
@@ -679,9 +715,11 @@ def test_close_drops_the_solver_and_keeps_the_result() -> None:
     assert window.solver_model is None
     assert solver.solver_model is None
     assert np.allclose(window["x"].values, 0.0)
-    window.solve()
+    window.solve(time_limit=10.0)
     assert window.solver is not None
     assert window.solver is not solver
+    assert window.solver.solver_name.value == solver_name
+    assert window.solver.solver_options == {**options, "time_limit": 10.0}
     assert window.status == "ok"
 
 
@@ -826,6 +864,17 @@ def test_solve_fixed_lp_reports_the_duals_of_the_fixed_mip(scaling: float) -> No
     assert np.allclose(window["I"].values, 1.0)
     assert np.allclose(window.dual["demand"].values, reference.dual["demand"].values)
     assert window.objective.value == pytest.approx(reference.objective.value)
+
+
+def test_mip_window_has_no_duals_until_solve_fixed_lp() -> None:
+    window = kinds_model("CI", TIME).restrict(time=TIME[:2])
+    window.solve(solver_name="highs", output_flag=False)
+    with pytest.raises(AttributeError, match="returned no dual values"):
+        window.dual
+
+    window.solve_fixed_lp()
+
+    assert window.dual["demand"].notnull().all()
 
 
 def test_solve_after_solve_fixed_lp_restores_integrality() -> None:
@@ -1079,7 +1128,7 @@ def test_window_rejects_horizon_wide_sos_rows() -> None:
         m.restrict(time=TIME[:2])
 
 
-@pytest.mark.parametrize("suffix", [".lp", ".mps"])
+@pytest.mark.parametrize("suffix", [".lp", ".mps", ".LP"])
 @pytest.mark.parametrize(
     "explicit, columns, rows",
     [

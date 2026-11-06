@@ -93,6 +93,7 @@ from linopy.piecewise import (
     add_piecewise_formulation,
 )
 from linopy.remote import RemoteHandler
+from linopy.restrict.matrix import DROPPED_ROW_TOL
 from linopy.scaling import validate_scaling
 from linopy.semantics import check_user_nan, enforce_no_multiindex
 from linopy.solver_capabilities import solver_supports
@@ -2434,7 +2435,7 @@ class Model:
         self,
         fix: Mapping[str, Any] | None = None,
         drop: Mapping[str, Any] | None = None,
-        tol: float = 1e-9,
+        tol: float = DROPPED_ROW_TOL,
         **selection: Any,
     ) -> WindowModel:
         """
@@ -2486,7 +2487,7 @@ class Model:
             If a dimension does not exist, a carrier does not contain the
             selected labels, the fixed values or drop masks do not match a
             variable's or constraint's coordinates, ``drop`` names an unknown
-            constraint, a cut coupling has no fixed values, or a fully folded
+            constraint or has a non-boolean mask, a cut coupling has no fixed values, or a fully folded
             row is unsatisfiable.
         NotImplementedError
             If the model has indicators, a quadratic objective or native SOS

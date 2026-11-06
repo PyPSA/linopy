@@ -125,7 +125,7 @@
 - Multiplying a constant or one-term `LinearExpression` by a multi-term `LinearExpression` no longer raises `TypeError` and gives the same result as the mirrored product, on both the dense and sparse backends. ([\#1055](https://github.com/PyPSA/linopy/issues/1055))
 - `to_netcdf` no longer raises on timezone-aware datetimes in indexes, auxiliary coordinates, sparse (CSR) constraints and `Model.parameters`; they are written as naive UTC with the zone in an attribute and restored by `read_netcdf`. ([\#1021](https://github.com/PyPSA/linopy/pull/1021))
 - The repr of an expression with more terms than `linopy.options["display_max_terms"]` now shows the last terms of a `QuadraticExpression` after the `...` instead of repeating the first ones, and prints the constant once at the end instead of also before the `...`. ([\#1023](https://github.com/PyPSA/linopy/pull/1023))
-- HiGHS: a solve that stops at a limit before finding a solution no longer returns all-zero values as its solution. ([\#1130](https://github.com/PyPSA/linopy/issues/1130))
+- HiGHS: a solve that stops at a limit before finding a solution no longer returns all-zero values as its solution, and a MIP no longer returns all-zero duals. ([\#1130](https://github.com/PyPSA/linopy/issues/1130))
 - HiGHS: `log_fn` and solver options now also apply to a re-solve of an existing direct-API model, e.g. a persistent or window solve. ([\#1130](https://github.com/PyPSA/linopy/issues/1130))
 - SCIP now applies solver options before reading the problem file, so `model.solve("scip", **{"display/verblevel": 0})` also suppresses the initial model-loading output.
 

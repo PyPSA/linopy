@@ -17,7 +17,7 @@ import numpy as np
 from xarray import DataArray
 
 from linopy.common import to_path
-from linopy.restrict.matrix import MatrixWindow, RestrictionError
+from linopy.restrict.matrix import DROPPED_ROW_TOL, MatrixWindow, RestrictionError
 
 if TYPE_CHECKING:
     from linopy.constants import Result, Solution
@@ -68,7 +68,7 @@ class WindowModel:
         selection: Mapping[str, Any],
         fix: Mapping[str, Any] | None = None,
         drop: Mapping[str, Any] | None = None,
-        tol: float = 1e-9,
+        tol: float = DROPPED_ROW_TOL,
     ) -> None:
         self._parent = parent
         self._matrix_window = MatrixWindow(parent)
@@ -80,6 +80,8 @@ class WindowModel:
         self.objective = WindowObjective(self)
         self._result: Result | None = None
         self._solver: Solver | None = None
+        self._solver_name = "highs"
+        self._solver_options: dict[str, Any] = {}
 
     @property
     def matrices(self) -> Matrices:
@@ -100,7 +102,7 @@ class WindowModel:
         Dispose the solver and its native model, releasing any held license.
 
         The last result stays readable; the next :meth:`solve` creates a new
-        solver.
+        solver of the same name with the same options.
         """
         if self._solver is not None:
             self._solver.close()
@@ -166,10 +168,11 @@ class WindowModel:
         the same window with slightly changed fixed values.
 
         ``solver_name`` picks the solver of the first solve, later solves reuse
-        it until :meth:`close`. ``log_fn`` writes the solver log of this solve
-        to that file; the solver may keep logging there until another
-        ``log_fn`` is given. Further keyword arguments are solver options, kept
-        for later solves.
+        it; after :meth:`close` a solver of the same name is created unless
+        another is given. ``log_fn`` writes the solver log of this solve to
+        that file; the solver may keep logging there until another ``log_fn``
+        is given. Further keyword arguments are solver options, kept for later
+        solves, also after :meth:`close`.
 
         Check :attr:`status` and :attr:`termination_condition` afterwards: an
         infeasible or otherwise failed window does not raise, but reading its
@@ -226,9 +229,11 @@ class WindowModel:
     ) -> WindowModel:
         from linopy.solvers import Solver
 
+        self._solver_options.update(options)
         if self._solver is None:
+            self._solver_name = solver_name or self._solver_name
             self._solver = Solver.from_name(
-                solver_name or "highs", io_api="direct", options=options
+                self._solver_name, io_api="direct", options=dict(self._solver_options)
             )
         elif options:
             self._solver.solver_options.update(options)
@@ -254,7 +259,7 @@ class WindowModel:
         from linopy.io import get_printers_scalar, matrices_to_file
 
         fn = Path(fn)
-        if fn.suffix not in (".lp", ".mps"):
+        if fn.suffix.lower() not in (".lp", ".mps"):
             raise ValueError(f"Cannot write '{fn}': expected an '.lp' or '.mps' file.")
         names = get_printers_scalar(self._parent, explicit_coordinate_names)
         matrices_to_file(self._matrices, fn, names, sos=[])
@@ -356,7 +361,7 @@ def restrict_model(
     fix: Mapping[str, Any] | None,
     selection: Mapping[str, Any],
     drop: Mapping[str, Any] | None = None,
-    tol: float = 1e-9,
+    tol: float = DROPPED_ROW_TOL,
 ) -> WindowModel:
     """Build a matrix-backed window of ``model``, see :meth:`linopy.Model.restrict`."""
     return WindowModel(model, selection, fix, drop, tol)

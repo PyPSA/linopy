@@ -2112,6 +2112,8 @@ class Highs(Solver[None]):
             else:
                 sol = _solution_from_labels(sol, self._vlabels, self._n_vars)
                 dual = _solution_from_labels(dual, self._clabels, self._n_cons)
+            if not solution.dual_valid:
+                dual = np.array([], dtype=float)
             return Solution(sol, dual, objective)
 
         solution = self.safe_get_solution(status=status, func=get_solver_solution)

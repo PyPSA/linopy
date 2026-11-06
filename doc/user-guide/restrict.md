@@ -70,8 +70,9 @@ when the fixed values carry solver noise.
 
 `drop` leaves rows out of a window, keyed by constraint name, as boolean masks
 aligned like `fix` where `True` drops the row; `True` alone drops the whole
-constraint. Dropped rows are removed before folding, so they are never checked,
-and their duals are `NaN`. In a rolling horizon with look-ahead, this keeps the
+constraint. Masks must be boolean; other dtypes, e.g. `NaN` or labels, raise.
+Dropped rows are removed before folding, so they are never checked, and their
+duals are `NaN`. In a rolling horizon with look-ahead, this keeps the
 target of the next block from binding in the current window:
 
 ```python
@@ -184,7 +185,8 @@ directly:
     [`solver_model`][linopy.restrict.WindowModel.solver_model] expose the
     solver and its native model;
     [`close()`][linopy.restrict.WindowModel.close] disposes them, e.g. to
-    release a license, and the next `solve()` creates a new one.
+    release a license, and the next `solve()` creates a new one with the
+    same solver and options.
 
 Terms outside the window are dropped from the objective, so the window's value
 differs from the full model's by a constant.

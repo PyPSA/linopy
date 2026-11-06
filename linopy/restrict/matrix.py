@@ -33,7 +33,9 @@ from linopy.matrices import Matrices
 if TYPE_CHECKING:
     from linopy.model import Model
 
-__all__ = ["MatrixWindow", "RestrictionError"]
+__all__ = ["DROPPED_ROW_TOL", "MatrixWindow", "RestrictionError"]
+
+DROPPED_ROW_TOL = 1e-9
 
 
 class RestrictionError(ValueError):
@@ -201,7 +203,7 @@ class MatrixWindow:
         selection: Mapping[str, Any],
         fix: Mapping[str, Any] | None = None,
         drop: Mapping[str, Any] | None = None,
-        tol: float = 1e-9,
+        tol: float = DROPPED_ROW_TOL,
     ) -> tuple[Matrices, dict[str, DataArray], dict[str, DataArray]]:
         """
         The window's matrices and each container's selected labels.
@@ -305,7 +307,11 @@ class MatrixWindow:
                 )
             labels = constraints[name].labels
             what = f"Drop masks for constraint {name!r}"
-            mask = _align(given, labels, what).values.astype(bool)
+            mask = _align(given, labels, what).values
+            if mask.dtype != bool:
+                raise RestrictionError(
+                    f"{what} must be boolean, got dtype {mask.dtype}."
+                )
             selected = labels.values[mask & (labels.values != -1)]
             positions = constraints.label_index.label_to_pos[selected]
             excluded[positions[positions >= 0]] = True
