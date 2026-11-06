@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -143,6 +144,40 @@ class WindowModel:
         self._result = result
         _log_in_model_units(result, self._matrices.objective_scaling)
         return self
+
+    def to_file(self, fn: str | Path, explicit_coordinate_names: bool = False) -> Path:
+        """
+        Write the window to an LP or MPS file, depending on the suffix of ``fn``.
+
+        Columns and rows carry the parent's variable and constraint names, like
+        :meth:`Model.to_file <linopy.model.Model.to_file>` writes them, and the
+        coefficients are in solver-scaled units, as the solver sees them.
+        """
+        from linopy.io import get_printers_scalar, matrices_to_file
+
+        fn = Path(fn)
+        if fn.suffix not in (".lp", ".mps"):
+            raise ValueError(f"Cannot write '{fn}': expected an '.lp' or '.mps' file.")
+        names = get_printers_scalar(self._parent, explicit_coordinate_names)
+        matrices_to_file(self._matrices, fn, names, sos=[])
+        return fn
+
+    def compute_infeasibilities(self) -> list[int]:
+        """
+        Parent constraint labels of an irreducible infeasible subset of the window.
+
+        Requires the last :meth:`solve` to have found the window infeasible with
+        ``gurobi``, ``xpress`` or ``highs``. Format the labels with the parent's
+        :meth:`Constraints.format_labels <linopy.constraints.Constraints.format_labels>`.
+        """
+        from linopy.infeasibility import compute_infeasibilities
+
+        if self._result is None:
+            raise ValueError(
+                "The window has not been solved. Call `solve()` before computing "
+                "infeasibilities."
+            )
+        return compute_infeasibilities(self._solver, self._matrices.clabels)
 
     @property
     def solution(self) -> dict[str, DataArray]:

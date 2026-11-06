@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
+import highspy
 import numpy as np
 import pandas as pd
 import pytest
@@ -891,3 +893,84 @@ def test_window_rejects_horizon_wide_sos_rows() -> None:
 
     with pytest.raises(RestrictionError, match="dangling terms"):
         m.restrict(time=TIME[:2])
+
+
+@pytest.mark.parametrize("suffix", [".lp", ".mps"])
+@pytest.mark.parametrize(
+    "explicit, columns, rows",
+    [
+        (False, ["x1", "x2", "x9", "x10"], ["c1", "c2", "c9", "c10"]),
+        (
+            True,
+            ["soc(1)#1", "soc(2)#2", "charge(1)#9", "charge(2)#10"],
+            ["balance(1)#1", "balance(2)#2", "cap(1)#9", "cap(2)#10"],
+        ),
+    ],
+    ids=["labels", "coordinates"],
+)
+def test_to_file_writes_the_window_with_parent_names(
+    tmp_path: Path, suffix: str, explicit: bool, columns: list[str], rows: list[str]
+) -> None:
+    window = storage_model().restrict(time=TIME[1:3], fix={"soc": initial()})
+    window.solve(solver_name="highs", output_flag=False)
+
+    fn = window.to_file(
+        tmp_path / f"window{suffix}", explicit_coordinate_names=explicit
+    )
+    h = highspy.Highs()
+    h.setOptionValue("output_flag", False)
+    h.readModel(str(fn))
+    h.run()
+
+    assert h.getLp().col_names_ == columns
+    assert h.getLp().row_names_ == rows
+    assert h.getInfo().objective_function_value == pytest.approx(window.objective.value)
+
+
+def test_to_file_rejects_unknown_formats(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="expected an '.lp' or '.mps' file"):
+        linear_model().restrict(time=TIME[:2]).to_file(tmp_path / "window.nc")
+
+
+def infeasible_boundary_model() -> Model:
+    """A ramp from a boundary fixed at zero cannot reach the floor at time 3."""
+    m = Model()
+    x = m.add_variables(0, 10, coords=[TIME], name="x")
+    m.add_constraints(x - x.shift(time=1) <= 1, name="ramp")
+    floor = xr.DataArray(np.where(TIME == 3, 5.0, 0.0), coords=[TIME])
+    m.add_constraints(x >= floor, name="lower")
+    m.add_objective(x.sum())
+    return m
+
+
+@pytest.mark.parametrize("solver_name", ["highs", "gurobi", "xpress"])
+def test_compute_infeasibilities_returns_parent_labels(solver_name: str) -> None:
+    from linopy import licensed_solvers
+
+    if solver_name not in licensed_solvers:
+        pytest.skip(f"{solver_name} is not available with a license")
+    m = infeasible_boundary_model()
+    window = m.restrict(time=TIME[3:5], fix={"x": pd.Series(0.0, index=TIME)})
+    window.solve(solver_name=solver_name)
+
+    labels = window.compute_infeasibilities()
+
+    assert [m.constraints.get_label_position(label) for label in labels] == [
+        ("ramp", {"time": 3}),
+        ("lower", {"time": 3}),
+    ]
+    assert m.constraints.format_labels(labels).splitlines() == [
+        "ramp[3]: +1 x[3] - 1 x[2] ≤ 1",
+        "lower[3]: +1 x[3] ≥ 5",
+    ]
+
+
+@pytest.mark.parametrize("advance", [False, True], ids=["unsolved", "advanced"])
+def test_compute_infeasibilities_requires_a_solve(advance: bool) -> None:
+    window = infeasible_window()
+    if advance:
+        window.solve(solver_name="highs", output_flag=False)
+        window.advance()
+
+    with pytest.raises(ValueError, match="has not been solved"):
+        window.compute_infeasibilities()
