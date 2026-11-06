@@ -111,6 +111,11 @@ def _iis_not_supported(solver_name: str) -> NotImplementedError:
     )
 
 
+def _iis_labels(labels: np.ndarray) -> list[int]:
+    """Sorted distinct constraint labels of the IIS rows, masked rows left out."""
+    return sorted(set(labels[labels >= 0].tolist()))
+
+
 def _solution_from_names(values: np.ndarray, names: Any, size: int) -> np.ndarray:
     """
     Build a label-indexed dense solution array of length ``size`` from
@@ -1884,14 +1889,10 @@ class Highs(Solver[None]):
                 "HiGHS failed to compute an irreducible infeasible subsystem (IIS)."
             )
 
-        row_index = np.asarray(iis.row_index_, dtype=np.intp)
-        if not len(row_index):
-            return []
-
         if self.io_api != "direct":
             clabels = _names_to_labels(h.getLp().row_names_)
-
-        return sorted({int(clabels[pos]) for pos in row_index if clabels[pos] >= 0})
+        rows = np.asarray(iis.row_index_, dtype=np.intp)
+        return _iis_labels(clabels[rows])
 
     @classmethod
     @functools.cache
@@ -2464,7 +2465,7 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         in_iis = np.asarray(m.getAttr("IISConstr", constrs), dtype=bool)
         if self.io_api != "direct":
             clabels = _names_to_labels([c.ConstrName for c in constrs])
-        return sorted(int(label) for label in clabels[in_iis] if label >= 0)
+        return _iis_labels(clabels[in_iis])
 
     def _apply_var_bounds(
         self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray

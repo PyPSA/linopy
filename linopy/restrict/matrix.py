@@ -108,11 +108,16 @@ def _positions(
     """Parent matrix positions of the selected active labels, in container order."""
     empty = np.empty(0, dtype=label_to_pos.dtype)
     flat = np.concatenate([empty, *(lab.values.ravel() for lab in selected.values())])
-    positions = label_to_pos[flat[flat != -1]]
-    positions = positions[positions >= 0]
+    positions = _active_positions(flat, label_to_pos)
     if not distinct and np.unique(positions).size != positions.size:
         raise RestrictionError("Cannot restrict model: the selection repeats labels.")
     return positions
+
+
+def _active_positions(labels: np.ndarray, label_to_pos: np.ndarray) -> np.ndarray:
+    """Matrix positions of the active labels, skipping missing and masked ones."""
+    positions = label_to_pos[labels[labels != -1]]
+    return positions[positions >= 0]
 
 
 def _align(given: Any, labels: DataArray, what: str) -> DataArray:
@@ -312,7 +317,6 @@ class MatrixWindow:
                 raise RestrictionError(
                     f"{what} must be boolean, got dtype {mask.dtype}."
                 )
-            selected = labels.values[mask & (labels.values != -1)]
-            positions = constraints.label_index.label_to_pos[selected]
-            excluded[positions[positions >= 0]] = True
+            label_to_pos = constraints.label_index.label_to_pos
+            excluded[_active_positions(labels.values[mask], label_to_pos)] = True
         return excluded
