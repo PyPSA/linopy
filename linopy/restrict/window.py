@@ -273,14 +273,12 @@ class WindowModel:
         ``gurobi``, ``xpress`` or ``highs``. Format the labels with the parent's
         :meth:`Constraints.format_labels <linopy.constraints.Constraints.format_labels>`.
         """
-        from linopy.infeasibility import compute_infeasibilities
-
         if self._result is None or self._solver is None:
             raise ValueError(
                 "The window has no solved solver model. Call `solve()` before "
                 "computing infeasibilities."
             )
-        return compute_infeasibilities(self._solver, self._matrices.clabels)
+        return self._solver.compute_infeasibilities(self._matrices.clabels)
 
     @property
     def solution(self) -> dict[str, DataArray]:

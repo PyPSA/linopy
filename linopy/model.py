@@ -72,7 +72,6 @@ from linopy.expressions import (
     ScalarLinearExpression,
     copy_expression,
 )
-from linopy.infeasibility import compute_infeasibilities
 from linopy.io import (
     copy,
     deepcopy,
@@ -100,6 +99,7 @@ from linopy.solver_capabilities import solver_supports
 from linopy.solvers import (
     IO_APIS,
     SolverFeature,
+    _iis_not_supported,
     available_solvers,
 )
 from linopy.sos_reformulation import (
@@ -2629,9 +2629,9 @@ class Model:
         labels : list[int]
             Labels of the infeasible constraints.
         """
-        return compute_infeasibilities(
-            self.solver, self.constraints.label_index.clabels
-        )
+        if self.solver is None:
+            raise _iis_not_supported("unknown")
+        return self.solver.compute_infeasibilities(self.constraints.label_index.clabels)
 
     def format_infeasibilities(self, display_max_terms: int | None = None) -> str:
         """
