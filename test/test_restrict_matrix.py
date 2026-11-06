@@ -375,7 +375,7 @@ def ramp_model(scaling: float = 1.0, mask: xr.DataArray | None = None) -> Model:
     return m
 
 
-def solve_window(m: Model, fix: object, **selection: object) -> xr.DataArray:
+def solve_window(m: Model, fix: object, **selection: Any) -> xr.DataArray:
     window = m.restrict(fix={"x": fix}, **selection)
     window.solve(solver_name="highs", output_flag=False)
     return window.solution["x"]
@@ -545,7 +545,7 @@ def test_advance_must_name_exactly_the_selected_dimensions(
     ids=["empty", "repeated", "repeated-multi-dim"],
 )
 def test_select_rejects_degenerate_selections(
-    selection: dict[str, object], match: str
+    selection: dict[str, Any], match: str
 ) -> None:
     with pytest.raises(RestrictionError, match=match):
         ramp_model().restrict(fix={"x": 0.0}, **selection)
@@ -578,12 +578,14 @@ def test_limited_mip_solve_returns_its_incumbent() -> None:
     window.solve(solver_name="highs", output_flag=False)
     assert window.termination_condition == "optimal"
     optimum = window.objective.value
+    assert optimum is not None
 
     window.solve(disallow_rebuild=True, mip_max_improving_sols=1)
 
     assert window.termination_condition == "terminated_by_limit"
     assert set(np.unique(window["x"].values)) <= {0.0, 1.0}
-    assert window.objective.value > optimum
+    incumbent = window.objective.value
+    assert incumbent is not None and incumbent > optimum
 
 
 def test_limited_mip_solve_without_incumbent_has_no_solution() -> None:
