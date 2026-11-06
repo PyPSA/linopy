@@ -607,6 +607,19 @@ def test_solve_updates_options_on_later_calls() -> None:
     assert window.objective.value == pytest.approx(0.0)
 
 
+def test_solve_rejects_another_solver_name_until_closed() -> None:
+    window = linear_model().restrict(time=TIME[:2])
+    window.solve(solver_name="highs", output_flag=False)
+    window.solve(solver_name="highs")
+
+    with pytest.raises(ValueError, match="already holds a 'highs' solver"):
+        window.solve(solver_name="scip")
+
+    window.close()
+    window.solve(solver_name="highs")
+    assert window.status == "ok"
+
+
 @pytest.mark.parametrize(
     "read",
     [lambda w: w.solution, lambda w: w.dual, lambda w: w["x"]],

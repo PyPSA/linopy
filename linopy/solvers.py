@@ -581,16 +581,16 @@ class Solver(ABC, Generic[EnvType]):
         """
         Compute an irreducible infeasible subsystem (IIS) of the solved native model.
 
-        For a model read from a file, Gurobi and HiGHS parse the labels from the
-        row names instead of ``clabels``; Xpress always maps rows by position.
+        For a model read from a file, Gurobi and HiGHS ignore ``clabels`` and
+        parse the labels from the row names, which must be linopy's; Xpress
+        always maps rows by position.
 
         Parameters
         ----------
         clabels : np.ndarray
             Constraint label of each native row position, as
             :meth:`linopy.Model.compute_infeasibilities` passes
-            ``constraints.label_index.clabels``. For a solver built from a file
-            without a linopy model, ``np.arange(n_rows)`` returns row positions.
+            ``constraints.label_index.clabels``.
 
         Returns
         -------

@@ -167,9 +167,9 @@ class WindowModel:
         solver down. Pass ``warm_start=True`` to keep it, e.g. when re-solving
         the same window with slightly changed fixed values.
 
-        ``solver_name`` picks the solver of the first solve, later solves reuse
-        it; after :meth:`close` a solver of the same name is created unless
-        another is given. ``log_fn`` writes the solver log of this solve to
+        ``solver_name`` picks the solver of the first solve; later solves reuse
+        it and raise ``ValueError`` on another name until :meth:`close`, after
+        which a solver of the same name is created unless another is given. ``log_fn`` writes the solver log of this solve to
         that file; the solver may keep logging there until another ``log_fn``
         is given. Further keyword arguments are solver options, kept for later
         solves, also after :meth:`close`.
@@ -235,7 +235,12 @@ class WindowModel:
             self._solver = Solver.from_name(
                 self._solver_name, io_api="direct", options=dict(self._solver_options)
             )
-        elif options:
+        else:
+            if solver_name is not None and solver_name != self._solver_name:
+                raise ValueError(
+                    f"The window already holds a {self._solver_name!r} solver; "
+                    f"call `close()` before solving with {solver_name!r}."
+                )
             self._solver.solver_options.update(options)
         self._result = None  # a solve that raises leaves no stale result behind
         result = self._solver.solve_window(
