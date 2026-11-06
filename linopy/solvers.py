@@ -1966,6 +1966,7 @@ class Highs(Solver[None]):
         env: Any = None,
         **kw: Any,
     ) -> Result:
+        self._set_solver_params(self.solver_model, log_fn)
         return self._solve(
             self.solver_model,
             solution_fn=solution_fn,

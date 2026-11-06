@@ -9,7 +9,8 @@ the parent's flattened matrices and folds the out-of-window columns into the rig
 The window is a :class:`~linopy.matrices.Matrices` taken from the parent's with
 :meth:`~linopy.matrices.Matrices.take`. No container is rebuilt.
 
-Indicator constraints, quadratic objectives and native SOS constraints raise.
+Rows named in ``drop`` are removed before folding. Indicator constraints,
+quadratic objectives and native SOS constraints raise.
 """
 
 from __future__ import annotations
@@ -40,8 +41,9 @@ class RestrictionError(ValueError):
     Raised when a model cannot be windowed.
 
     A window requires dimensions that exist in the model, carriers that contain
-    every selected label, fixed values aligned with their variables, and folded
-    boundary terms whose constant rows are satisfiable.
+    every selected label, fixed values and drop masks aligned with their
+    variables and constraints, and folded boundary terms whose constant rows
+    are satisfiable.
     """
 
 
@@ -111,8 +113,8 @@ def _positions(
     return positions
 
 
-def _align(given: Any, labels: DataArray, name: str) -> DataArray:
-    """Fixed values of one variable, aligned and broadcast onto its labels."""
+def _align(given: Any, labels: DataArray, what: str) -> DataArray:
+    """Values given for one container, aligned and broadcast onto its labels."""
     try:
         value = (
             given
@@ -126,8 +128,7 @@ def _align(given: Any, labels: DataArray, name: str) -> DataArray:
         return value.sel(shared).broadcast_like(labels).transpose(*labels.dims)
     except (KeyError, ValueError) as error:
         raise RestrictionError(
-            f"Fixed values for variable {name!r} do not match its coordinates "
-            f"({error})."
+            f"{what} do not match its coordinates ({error})."
         ) from error
 
 
@@ -139,10 +140,14 @@ def _equal(value: DataArray, indexes: dict[str, pd.Index]) -> bool:
 
 
 def _check_dropped(
-    rhs: np.ndarray, sense: np.ndarray, magnitude: np.ndarray, clabels: np.ndarray
+    rhs: np.ndarray,
+    sense: np.ndarray,
+    magnitude: np.ndarray,
+    clabels: np.ndarray,
+    tol: float,
 ) -> None:
-    """Raise when a row that lost every term violates its sign."""
-    tolerance = 1e-9 * np.maximum(1.0, magnitude)
+    """Raise when a row that lost every term violates its sign beyond ``tol``."""
+    tolerance = tol * np.maximum(1.0, magnitude)
     violated = (
         ((sense == "=") & (np.abs(rhs) > tolerance))
         | ((sense == "<") & (rhs < -tolerance))
@@ -153,7 +158,8 @@ def _check_dropped(
             "Cannot window the matrices: folding the dangling terms makes "
             f"constraint labels {clabels[violated].tolist()} unsatisfiable "
             f"(folded rhs {rhs[violated].tolist()} against sign "
-            f"{sense[violated].tolist()})."
+            f"{sense[violated].tolist()}). Raise `tol` or exclude the rows "
+            "via `drop`."
         )
 
 
@@ -191,7 +197,11 @@ class MatrixWindow:
         self._dims |= set(model.parameters.sizes)
 
     def select(
-        self, selection: Mapping[str, Any], fix: Mapping[str, Any] | None = None
+        self,
+        selection: Mapping[str, Any],
+        fix: Mapping[str, Any] | None = None,
+        drop: Mapping[str, Any] | None = None,
+        tol: float = 1e-9,
     ) -> tuple[Matrices, dict[str, DataArray], dict[str, DataArray]]:
         """
         The window's matrices and each container's selected labels.
@@ -200,7 +210,9 @@ class MatrixWindow:
         ``fix`` maps variable names to the values of out-of-window terms, which
         are folded into the right-hand side at their actual coefficient; a row
         that loses every term is dropped when its folded right-hand side
-        satisfies its sign.
+        satisfies its sign within ``tol``, relative to the folded magnitude.
+        ``drop`` maps constraint names to boolean masks of rows removed from
+        the window before folding.
 
         Columns follow the parent variable labels in ``vlabels``; rows follow the
         parent constraint labels in ``clabels``. The selected labels are where
@@ -223,6 +235,7 @@ class MatrixWindow:
         rows = _positions(
             constraints, m.constraints.label_index.label_to_pos, indexers.distinct
         )
+        rows = rows[~self._excluded(drop)[rows]]
         if not cols.size:
             raise RestrictionError(
                 f"Cannot restrict model: the selection {dict(selection)} is empty."
@@ -254,7 +267,7 @@ class MatrixWindow:
         magnitude = np.bincount(outer_rows, np.abs(folded), minlength=rows.size)
         dropped = rows[~keep]
         _check_dropped(
-            rhs[~keep], mat.sense[dropped], magnitude[~keep], mat.clabels[dropped]
+            rhs[~keep], mat.sense[dropped], magnitude[~keep], mat.clabels[dropped], tol
         )
         indptr = indptr_from_counts(counts[keep], A.indptr.dtype)
         inner = scipy.sparse.csr_array(
@@ -276,6 +289,24 @@ class MatrixWindow:
             variable = self._model.variables[name]
             start, stop = variable.range
             own = (labels >= start) & (labels < stop)
-            aligned = _align(given, variable.labels, name).values.ravel()
+            what = f"Fixed values for variable {name!r}"
+            aligned = _align(given, variable.labels, what).values.ravel()
             values[own] = aligned[labels[own] - start]
         return values * mat.var_scaling[cols]
+
+    def _excluded(self, drop: Mapping[str, Any] | None) -> np.ndarray:
+        """Whether each parent row is excluded by ``drop``, by matrix position."""
+        constraints = self._model.constraints
+        excluded = np.zeros(self._matrices.clabels.size, dtype=bool)
+        for name, given in (drop or {}).items():
+            if name not in constraints:
+                raise RestrictionError(
+                    f"Cannot drop {name!r}: it does not name a constraint of the model."
+                )
+            labels = constraints[name].labels
+            what = f"Drop masks for constraint {name!r}"
+            mask = _align(given, labels, what).values.astype(bool)
+            selected = labels.values[mask & (labels.values != -1)]
+            positions = constraints.label_index.label_to_pos[selected]
+            excluded[positions[positions >= 0]] = True
+        return excluded

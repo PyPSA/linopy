@@ -2432,6 +2432,8 @@ class Model:
     def restrict(
         self,
         fix: Mapping[str, Any] | None = None,
+        drop: Mapping[str, Any] | None = None,
+        tol: float = 1e-9,
         **selection: Any,
     ) -> WindowModel:
         """
@@ -2446,6 +2448,7 @@ class Model:
         into the right-hand side at their actual coefficient when ``fix``
         supplies their values. Rows that lose every term are dropped when their
         folded right-hand side satisfies their sign, and raise otherwise.
+        Rows masked by ``drop`` are left out of the window before folding.
 
         The returned :class:`~linopy.restrict.WindowModel` exposes ``matrices``
         directly, so solving never rebuilds a container. Variables and
@@ -2459,6 +2462,14 @@ class Model:
             variable's dimensions they lack; every coordinate of the variable
             must be present. ``NaN`` counts as unfixed. Values for in-window
             variables are ignored.
+        drop : mapping, optional
+            Rows to leave out of the window, keyed by constraint name, as
+            boolean masks where ``True`` drops the row. Masks are aligned like
+            ``fix``; a scalar ``True`` drops the whole constraint. Dropped rows
+            are never checked when folded and have ``NaN`` duals.
+        tol : float, default 1e-9
+            Tolerance of the check on rows that lose every term, relative to
+            the magnitude of their folded terms when it exceeds one.
         **selection : Any
             Dimensions and the labels of the window, e.g.
             ``snapshot=sns[:24]`` or ``snapshot=slice(t0, t1), bus=["a"]``.
@@ -2472,8 +2483,9 @@ class Model:
         ------
         RestrictionError
             If a dimension does not exist, a carrier does not contain the
-            selected labels, the fixed values do not match a variable's
-            coordinates, a cut coupling has no fixed values, or a fully folded
+            selected labels, the fixed values or drop masks do not match a
+            variable's or constraint's coordinates, ``drop`` names an unknown
+            constraint, a cut coupling has no fixed values, or a fully folded
             row is unsatisfiable.
         NotImplementedError
             If the model has indicators, a quadratic objective or native SOS
@@ -2497,7 +2509,7 @@ class Model:
         """
         from linopy.restrict import restrict_model
 
-        return restrict_model(self, fix, selection)
+        return restrict_model(self, fix, selection, drop, tol)
 
     def assign_result(
         self,
