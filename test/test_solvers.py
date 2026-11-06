@@ -578,6 +578,15 @@ def test_capability_shim_round_trips(solver_name: str) -> None:
         assert solver_supports(solver_name, feature) == solver_cls.supports(feature)
 
 
+@pytest.mark.parametrize("solver_name", [n.value for n in solvers.SolverName])
+def test_iis_feature_matches_override(solver_name: str) -> None:
+    solver_cls = getattr(solvers, solvers.SolverName(solver_name).name)
+    overridden = (
+        solver_cls.compute_infeasibilities is not solvers.Solver.compute_infeasibilities
+    )
+    assert solver_cls.supports(SolverFeature.IIS_COMPUTATION) == overridden
+
+
 def test_solver_registry_iter_and_index() -> None:
     names = list(SOLVER_REGISTRY)
     assert "gurobi" in names

@@ -574,11 +574,32 @@ class Solver(ABC, Generic[EnvType]):
 
     def compute_infeasibilities(self, clabels: np.ndarray) -> list[int]:
         """
-        Sorted constraint labels of an IIS of the solved native model.
+        Compute an irreducible infeasible subsystem (IIS) of the solved native model.
 
-        ``clabels`` maps the native model's row positions to constraint labels.
         For a model read from a file, Gurobi and HiGHS parse the labels from the
-        row names instead.
+        row names instead of ``clabels``; Xpress always maps rows by position.
+
+        Parameters
+        ----------
+        clabels : np.ndarray
+            Constraint label of each native row position, as
+            :meth:`linopy.Model.compute_infeasibilities` passes
+            ``constraints.label_index.clabels``. For a solver built from a file
+            without a linopy model, ``np.arange(n_rows)`` returns row positions.
+
+        Returns
+        -------
+        list[int]
+            Sorted constraint labels of one IIS.
+
+        Raises
+        ------
+        NotImplementedError
+            If the solver does not support IIS computation.
+        ValueError
+            If no solver model is available.
+        RuntimeError
+            If the solver fails to compute an IIS.
         """
         raise _iis_not_supported(self.solver_name.value)
 
@@ -3036,24 +3057,20 @@ class Xpress(Solver[None]):
             for position, constraint in enumerate(m.getConstraint())
             if position < len(clabels) and clabels[position] >= 0
         }
+        try:
+            rows = m.getIISData(1)[0]
+        except AttributeError:
+            iis_constraints: list[Any] = []
+            m.getiisdata(1, iis_constraints, *([] for _ in range(7)))
+        else:
+            iis_constraints = [m.getConstraint(row) for row in rows]
         return sorted(
             {
                 int(position_to_label[constraint])
-                for constraint in self._iis_constraints(m, 1)
+                for constraint in iis_constraints
                 if constraint in position_to_label
             }
         )
-
-    @staticmethod
-    def _iis_constraints(solver_model: Any, iis_num: int) -> list[Any]:
-        """The xpress.constraint objects of IIS number ``iis_num`` (1-indexed)."""
-        try:
-            rows = solver_model.getIISData(iis_num)[0]
-        except AttributeError:
-            constraints: list[Any] = []
-            solver_model.getiisdata(iis_num, constraints, *([] for _ in range(7)))
-            return constraints
-        return [solver_model.getConstraint(row) for row in rows]
 
     def _apply_var_bounds(
         self, ctx: Any, indices: np.ndarray, lower: np.ndarray, upper: np.ndarray
