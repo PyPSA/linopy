@@ -29,12 +29,12 @@ from linopy.spec.attach import (
     attach,
     fill,
     reached_dimensions,
-    strict_parameters,
 )
 from linopy.spec.builder import build
 from linopy.spec.context import Context, Memo, uses_of
 from linopy.spec.errors import SpecDataError, shown, unknown
 from linopy.spec.evaluator import fold
+from linopy.spec.where import admitted
 
 SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
 Sources: TypeAlias = Mapping[str, Any] | xr.Dataset
@@ -118,7 +118,7 @@ def evaluate(
     spec: SpecLike, model: Model, *names: str, sources: Sources | None = None
 ) -> dict[str, xr.DataArray]:
     """
-    The named expressions *names* of *spec*, all in declared order when none is named, folded over *model*.
+    The named expressions *names* of *spec*, all in name order when none is named, folded over *model*.
 
     Each folds over ``model.solution`` and its duals, with the data read from
     *sources*, or from ``model.parameters`` when none is given, as
@@ -188,17 +188,25 @@ def _context(
     solved: bool,
 ) -> Context:
     program = attached.program
-    strict = strict_parameters(program)
+    tables = (model, program, attached.coords, attached.relations)
+
+    @functools.cache
+    def unmasked(name: str) -> Parameter:
+        parameter = raw(name)
+        return Parameter(fill(program, name, parameter), parameter.present)
+
+    conditions = Context(*tables, unmasked, solved=solved)
 
     def read(name: str) -> Parameter:
+        if program.parameters[name].where is None:
+            return unmasked(name)
         parameter = raw(name)
-        return Parameter(fill(program, name, parameter, strict), parameter.present)
+        inside = admitted(name, conditions)
+        filled = fill(program, name, parameter, inside)
+        return Parameter(filled, (parameter.present & inside).transpose(*filled.dims))
 
     return Context(
-        model,
-        program,
-        attached.coords,
-        attached.relations,
+        *tables,
         functools.cache(read),
         solved=solved,
         memo=Memo(uses=uses_of(program)),

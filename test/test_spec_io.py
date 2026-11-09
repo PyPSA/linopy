@@ -86,7 +86,7 @@ DTYPE_SPEC: dict[str, Any] = {
         "flag": {"dims": ["s1"], "dtype": "bool"},
         "cost": {"dims": ["s1"]},
         "tag": {"dims": ["s1"], "dtype": "str"},
-        "sparse_count": {"dims": ["s1"], "dtype": "int", "missing": "neutral"},
+        "sparse_count": {"dims": ["s1"], "dtype": "int", "missing": 0},
         "sparse_flag": {"dims": ["s1"], "dtype": "bool", "missing": "absent"},
     },
     "variables": {"x": {"dims": ["s1"], "bounds": {"lower": 0, "upper": 1}}},

@@ -19,6 +19,7 @@ pytest.importorskip("mathspec")
 pytest.importorskip("highspy")
 yaml = pytest.importorskip("yaml")
 
+from mathspec.errors import LanguageError  # noqa: E402
 from spec_helpers import (  # noqa: E402
     CURVE_DATA,
     CURVE_SPEC,
@@ -84,7 +85,7 @@ def test_every_mathspec_example_builds_and_solves(path: Path) -> None:
     """Every whole mathspec example builds and solves on synthetic data, bar the ones :data:`REFUSED` names, which are refused."""
     program = lower(path)
     m = solved(path, synthetic_sources(path), store=False)
-    assert m.nvars == sum(int(m.variables[v].labels.count()) for v in program.variables)
+    assert set(m.variables) == set(program.variables)
     assert m.termination_condition in ("optimal", "infeasible")
 
 
@@ -109,12 +110,29 @@ PYPSA_DATA: dict[str, Any] = {
     "Transformer_loss_offset": 0.0,
     "Transformer_phase_shift_min": 0.0,
     "Transformer_phase_shift_weight": 0.0,
-    **{f"{c}_must_stay_up": False for c in COMMITTED},
     "StorageUnit_p_min_pu": 0.0,
     "Store_e_min_pu": 0.0,
-    "Generator_e_sum_min": -np.inf,
+    **{f"{c}_e_sum_min": -np.inf for c in ("Generator", "Link", "Process", "Store")},
     "Carrier_max_growth": 1e3,
     **{f"{c}_maintenance_start_blocked": False for c in COMMITTED},
+    **{f"{c}_maintenance_duration": 1 for c in COMMITTED},
+    **{f"{c}_{d}_time_brought_in": 0 for c in COMMITTED for d in ("up", "down")},
+    **{
+        f"{c}_nom_min": 0.0
+        for c in (
+            "Generator_p",
+            "Link_p",
+            "Process_p",
+            "StorageUnit_p",
+            "Store_e",
+            "Line_s",
+            "Transformer_s",
+        )
+    },
+    "Store_p_min_pu": -1.0,
+    "StorageUnit_state_of_charge_initial_per_period": False,
+    "Store_e_initial_per_period": False,
+    "period_weight_years": 1.0,
 }
 
 
@@ -149,14 +167,14 @@ def test_the_pypsa_example_refuses_a_quadratic_cost_under_a_risk_preference() ->
 def test_the_dispatch_example_solves_and_its_expressions_fold() -> None:
     m = solved(yaml_dict(), DISPATCH_DATA)
     assert m.objective.value == pytest.approx(2500.0)
-    xr.testing.assert_allclose(m.solution["p"], DISPATCH_P)
+    xr.testing.assert_allclose(m.solution["p"], DISPATCH_P.T)
     folded = evaluate(yaml_dict(), m)
     assert list(folded) == ["spend", "usage"]
     xr.testing.assert_allclose(
         folded["spend"], (DISPATCH_P * [0.0, 50.0]).sum("generator").rename("spend")
     )
     xr.testing.assert_allclose(
-        folded["usage"], (DISPATCH_P / [100.0, 200.0]).rename("usage")
+        folded["usage"], (DISPATCH_P / [100.0, 200.0]).T.rename("usage")
     )
     assert set(m.parameters.data_vars) == set(lower(yaml_dict()).parameters)
     assert m.parameters.indexes["generator"].equals(GENERATOR)
@@ -525,7 +543,7 @@ DEFINED_SPEC = with_(
 )
 
 
-def sized(missing: str, expression: str) -> dict[str, Any]:
+def sized(missing: Any, expression: str) -> dict[str, Any]:
     """:data:`ENVELOPE_SPEC` with a row over ``size`` alone, which the data empties at ``f='b'``."""
     spec = with_(
         ENVELOPE_SPEC,
@@ -613,7 +631,7 @@ def test_a_row_the_data_emptied_of_variables_is_refused() -> None:
     with pytest.raises(
         SpecDataError, match=r"(?s)constraint 'sized'.*Supply the rows of the variables"
     ):
-        Model.from_spec(sized("neutral", "size <= relmax"), ENVELOPE_DATA)
+        Model.from_spec(sized(0, "size <= relmax"), ENVELOPE_DATA)
 
 
 def quotient(expression: str, where: str | None = None) -> dict[str, Any]:
@@ -688,9 +706,14 @@ def test_arithmetic_masked_out_for_one_row_is_refused_for_the_next_reading_it() 
         Model.from_spec(spec, ZERO_AT_0)
 
 
-def test_a_dead_row_of_zero_absences_against_a_zero_side_is_only_warned_about() -> None:
+@pytest.mark.parametrize(
+    ("missing", "expression"), [(0, "size >= 0"), (5, "size >= 5")]
+)
+def test_a_dead_row_of_missing_values_whose_sides_are_equal_is_only_warned_about(
+    missing: float, expression: str
+) -> None:
     with pytest.warns(UserWarning, match=r"constraint 'sized'.*trivially true"):
-        m = solved(sized("neutral", "size >= 0"), ENVELOPE_DATA)
+        m = solved(sized(missing, expression), ENVELOPE_DATA)
     assert m.termination_condition == "optimal"
     assert (m.constraints["sized"].vars.sel(f="b") == -1).all()
 
@@ -740,15 +763,15 @@ def test_a_fully_masked_constraint_adds_no_group_and_reads_a_nan_dual() -> None:
 
 
 @pytest.mark.parametrize("expression", ["y <= 5", "5 >= y"], ids=["left", "flipped"])
-def test_a_constraint_is_framed_in_its_declared_order(expression: str) -> None:
+def test_a_constraint_is_framed_in_the_name_order_of_its_dims(expression: str) -> None:
     spec = {
         "dimensions": {"t": {"dtype": "int"}, "g": {"dtype": "str"}},
-        "variables": {"y": {"dims": ["g", "t"], "bounds": {"lower": 0}}},
+        "variables": {"y": {"dims": ["t", "g"], "bounds": {"lower": 0}}},
         "constraints": {"k": {"dims": ["t", "g"], "expression": expression}},
     }
     m = Model.from_spec(spec, {"t": T, "g": ["a", "b"]})
-    assert m.constraints["k"].labels.dims == ("t", "g")
-    assert m.constraints["k"].lhs.coord_dims == ("t", "g")
+    assert m.constraints["k"].labels.dims == ("g", "t")
+    assert m.constraints["k"].lhs.coord_dims == ("g", "t")
 
 
 @pytest.mark.parametrize("row", ["sum(x, over=t) >= 5", "sum(x, over=t) <= 0"])
@@ -762,10 +785,13 @@ def test_a_dimension_with_no_members_empties_a_summed_row(row: str) -> None:
         Model.from_spec(spec, {"t": empty, "w": none, "c": none})
 
 
-def test_a_neutral_hole_in_a_where_reads_as_false() -> None:
+@pytest.mark.parametrize(("missing", "kept"), [("absent", False), (0, True)])
+def test_a_missing_row_in_a_where_reads_the_way_missing_says(
+    missing: Any, kept: bool
+) -> None:
     spec = {
         "dimensions": {"f": {"dtype": "str"}},
-        "parameters": {"count": {"dims": ["f"], "dtype": "int", "missing": "neutral"}},
+        "parameters": {"count": {"dims": ["f"], "dtype": "int", "missing": missing}},
         "variables": {
             "x": {
                 "dims": ["f"],
@@ -778,16 +804,48 @@ def test_a_neutral_hole_in_a_where_reads_as_false() -> None:
     m = Model.from_spec(
         spec, {"f": ["a", "b"], "count": pd.DataFrame({"f": ["a"], "count": [0]})}
     )
-    assert (m.variables["x"].labels != -1).values.tolist() == [True, False]
+    assert (m.variables["x"].labels != -1).values.tolist() == [True, kept]
+
+
+@pytest.mark.parametrize(
+    ("missing", "rows", "x"),
+    [
+        pytest.param(7, {0: 4.0, 2: 5.0}, [4.0, 7.0, 10.0], id="a-value-inside"),
+        pytest.param(
+            "refused", {0: 4.0, 1: 6.0}, [4.0, 6.0, 10.0], id="refused-inside"
+        ),
+    ],
+)
+def test_a_parameter_is_absent_outside_its_where(
+    missing: Any, rows: dict[int, float], x: list[float]
+) -> None:
+    spec = {
+        "dimensions": {"t": {"dtype": "int"}},
+        "parameters": {
+            "on": {"dims": ["t"], "dtype": "bool"},
+            "c": {"dims": ["t"], "where": "on", "missing": missing},
+        },
+        "variables": {
+            "x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 10}},
+            "y": {"dims": ["t"], "where": "c != 1", "bounds": {"lower": 0, "upper": 1}},
+        },
+        "constraints": {"cap": {"dims": ["t"], "expression": "x <= c"}},
+        "objective": {"sense": "maximize", "expression": "sum(x)"},
+    }
+    on = xr.DataArray([True, True, False], coords=[T])
+    c = xr.DataArray(list(rows.values()), coords=[pd.Index(list(rows), name="t")])
+    m = solved(spec, {"t": T, "on": on, "c": c})
+    assert m.solution["x"].values.tolist() == pytest.approx(x)
+    assert (m.variables["y"].labels != -1).values.tolist() == [True, True, False]
 
 
 @pytest.mark.parametrize(
     ("missing", "masked_reads_nan"),
-    [("absent", True), ("neutral", False)],
+    [("absent", True), (0, False)],
     ids=["undefined-leaves-a-masked-slot-nan", "zero-fills-a-masked-slot"],
 )
 def test_a_fold_reads_a_masked_slot_the_way_its_absence_says(
-    missing: str, masked_reads_nan: bool
+    missing: Any, masked_reads_nan: bool
 ) -> None:
     spec = yaml_dict()
     spec["variables"]["p"]["missing"] = missing
@@ -811,8 +869,9 @@ def test_a_sos2_curve_is_built_as_a_special_ordered_set() -> None:
         CURVE_SPEC,
         piecewise={
             "cost_curve": {
-                "over": "bp",
-                "links": [["p", "bp_x"], ["op_cost", "bp_y"]],
+                "along": "bp",
+                "dims": ["snapshot", "generator"],
+                "links": {"p": ["p", "bp_x"], "op_cost": ["op_cost", "bp_y"]},
                 "method": "sos2",
             }
         },
@@ -834,28 +893,37 @@ def test_a_constant_on_the_left_is_the_same_row() -> None:
     assert m.objective.value == pytest.approx(9.0)
 
 
+def zero_filled(expression: str, upper: Any = 10) -> dict[str, Any]:
+    """:data:`SPARSE_SPEC` with ``c`` declared ``missing: 0``, read by *expression* and the bound *upper*."""
+    return with_(
+        SPARSE_SPEC,
+        parameters={"w": {"dims": ["t"]}, "c": {"dims": ["t"], "missing": 0}},
+        variables={"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": upper}}},
+        constraints={"cap": {"dims": ["t"], "expression": expression}},
+    )
+
+
 @pytest.mark.parametrize(
     ("expression", "upper"),
     [
         pytest.param("x <= c", 10, id="constant-side"),
         pytest.param("x <= c ** 2", 10, id="constant-side-under-a-power"),
-        pytest.param("x <= -(c ** 2)", 10, id="constant-side-under-a-negation"),
-        pytest.param("x / c <= 1", 10, id="divisor"),
-        pytest.param("x / (c ** 2) <= 1", 10, id="divisor-under-a-power"),
         pytest.param("x <= 10", "c", id="bound"),
     ],
 )
-def test_a_neutral_hole_where_no_neutral_value_exists_is_refused(
+def test_a_missing_value_stands_in_a_bound_and_a_constant_side(
     expression: str, upper: Any
 ) -> None:
-    spec = with_(
-        SPARSE_SPEC,
-        parameters={"w": {"dims": ["t"]}, "c": {"dims": ["t"], "missing": "neutral"}},
-        variables={"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": upper}}},
-        constraints={"cap": {"dims": ["t"], "expression": expression}},
-    )
-    with pytest.raises(SpecDataError, match="parameter 'c' is missing: neutral"):
-        Model.from_spec(spec, {"t": T, "w": FULL_W, "c": HOLE_AT_0})
+    m = solved(zero_filled(expression, upper), {"t": T, "w": FULL_W, "c": HOLE_AT_0})
+    assert float(m.solution["x"].sel(t=0)) == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("expression", ["x / c <= 1", "x / (c ** 2) <= 1"])
+def test_an_unguarded_divisor_a_missing_value_makes_zero_is_refused_at_load(
+    expression: str,
+) -> None:
+    with pytest.raises(LanguageError, match="the divisor contains 'c'"):
+        lower(zero_filled(expression))
 
 
 def test_an_operator_under_a_power_keeps_the_parameters_it_reads() -> None:
@@ -989,13 +1057,13 @@ def without(arr: xr.DataArray, *keys: tuple[str, int]) -> xr.DataArray:
                 },
             ),
             {"bp_x": without(FULL_X, ("gas", 3)), "bp_y": FULL_Y},
-            "assumption 'cost_curve_complete' does not hold.*\n  Not so at generator='gas', bp=3",
+            "assumption 'cost_curve_complete' does not hold.*\n  Not so at bp=3, generator='gas'",
             id="a-hole-in-a-whole-curve",
         ),
         pytest.param(
             MASKED_CURVE_SPEC,
             {"bp_x": RAGGED_X, "bp_y": without(RAGGED_Y, ("gas", 3))},
-            "assumption 'cost_curve_complete' does not hold.*narrow points: 'bp_x'",
+            "assumption 'cost_curve_complete' does not hold.*narrow where: 'bp_x'",
             id="a-hole-inside-the-mask",
         ),
         pytest.param(
@@ -1014,7 +1082,13 @@ def without(arr: xr.DataArray, *keys: tuple[str, int]) -> xr.DataArray:
                         for k, x in enumerate([0.0, 20.0, 20.0, 80.0])
                     }
                 ),
-                "bp_y": FULL_Y,
+                "bp_y": curve(
+                    {
+                        (g, k): y
+                        for g in UNITS
+                        for k, y in enumerate([0.0, 150.0, 150.0, 900.0])
+                    }
+                ),
             },
             "strictly increasing",
             id="breakpoints-that-do-not-increase",
@@ -1054,8 +1128,9 @@ def test_a_convex_hull_curve_may_bend_either_way_but_not_both() -> None:
         CURVE_SPEC,
         piecewise={
             "cost_curve": {
-                "over": "bp",
-                "links": [["p", "bp_x"], ["op_cost", "bp_y"]],
+                "along": "bp",
+                "dims": ["snapshot", "generator"],
+                "links": {"p": ["p", "bp_x"], "op_cost": ["op_cost", "bp_y"]},
                 "method": "convex",
             }
         },

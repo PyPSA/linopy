@@ -181,8 +181,8 @@ def test_spec_api_warns_once_per_session() -> None:
 def test_model_repr_of_a_spec_model_carries_no_tags() -> None:
     text = repr(Model.from_spec(yaml_dict(), DISPATCH_DATA))
     assert " * spend (snapshot)\n" in text
-    assert " * usage (snapshot, generator)\n" in text
-    assert " * p (snapshot, generator)\n" in text
+    assert " * usage (generator, snapshot)\n" in text
+    assert " * p (generator, snapshot)\n" in text
     assert " * power_balance (snapshot)\n" in text
     assert "[spec]" not in text
 
@@ -339,10 +339,10 @@ def test_evaluate_follows_assign_coords() -> None:
 
 
 def test_evaluate_applies_missing_in_a_condition() -> None:
-    """A ``neutral`` hole fills to 0 as a value, but a condition still reads it as absent."""
+    """A ``missing:`` value fills a missing row in a condition too."""
     spec = {
         "dimensions": {"t": {"dtype": "int"}},
-        "parameters": {"v": {"dims": ["t"], "missing": "neutral"}},
+        "parameters": {"v": {"dims": ["t"], "missing": 0}},
         "variables": {"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 1}}},
         "objective": {"sense": "maximize", "expression": "sum(x)"},
         "expressions": {
@@ -355,7 +355,7 @@ def test_evaluate_applies_missing_in_a_condition() -> None:
     }
     t = TT[:3]
     m = solved(spec, {"t": t, "v": pd.DataFrame({"t": t[:2], "v": [1.0, 9.0]})})
-    assert evaluate(spec, m, "big")["big"].values.tolist() == [1.0, 0.0, 0.0]
+    assert evaluate(spec, m, "big")["big"].values.tolist() == [1.0, 0.0, 1.0]
 
 
 def test_a_fold_over_data_needs_no_solve() -> None:
@@ -432,7 +432,7 @@ def test_a_dual_is_the_rate_the_objective_rises_with_the_right_side(
 
 
 @pytest.mark.parametrize(
-    ("name", "dims"), [("spend", ("snapshot",)), ("usage", ("snapshot", "generator"))]
+    ("name", "dims"), [("spend", ("snapshot",)), ("usage", ("generator", "snapshot"))]
 )
 def test_named_expression_dims_are_static(name: str, dims: tuple[str, ...]) -> None:
     m = solved(yaml_dict(), DISPATCH_DATA)

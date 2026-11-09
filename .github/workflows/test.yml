@@ -88,9 +88,10 @@ jobs:
       if: matrix.python-version != '3.11'
       shell: bash
       run: |
-        version=$(python -c "import mathspec; print(mathspec.__version__)")
-        git clone --depth 1 --branch "v$version" --filter=blob:none --sparse https://github.com/energy-models/mathspec.git "$RUNNER_TEMP/mathspec"
+        ref=$(python -c "import json, mathspec; from importlib.metadata import distribution as d; u = d('mathspec').read_text('direct_url.json'); print(json.loads(u)['vcs_info']['commit_id'] if u and 'vcs_info' in u else 'v' + mathspec.__version__)")
+        git clone --no-checkout --filter=blob:none --sparse https://github.com/energy-models/mathspec.git "$RUNNER_TEMP/mathspec"
         git -C "$RUNNER_TEMP/mathspec" sparse-checkout set examples
+        git -C "$RUNNER_TEMP/mathspec" checkout "$ref"
         echo "MATHSPEC_EXAMPLES=$RUNNER_TEMP/mathspec/examples" >> "$GITHUB_ENV"
 
     - name: Test with pytest

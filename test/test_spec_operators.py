@@ -552,6 +552,7 @@ def test_a_join_through_several_columns_builds_and_folds_alike(
     name = key.replace("-", "_")
     coords = {d: RELATION_DATA[d] for d in dims}
     want = xr.DataArray(np.asarray(expected, dtype=float), coords=coords, dims=dims)
+    want = want.transpose(*sorted(dims))
     built = relations_model.solution[f"y_{name}"]
     probe = f"probe_{name}"
     folded = evaluate(relations_spec(), relations_model, probe, sources=RELATION_DATA)
@@ -581,13 +582,13 @@ def test_a_where_reads_one_column_of_several(predicate: str, labels: list[int]) 
         pytest.param(
             "zone_of",
             RELATION_DATA["zone_of"].iloc[:-1],
-            r"no row for 1 \('t', 'k'\) label\(s\), the first at t=3, k='q'",
+            r"no row for 1 \('k', 't'\) label\(s\), the first at k='q', t=3",
             id="multi-key-missing-a-tuple",
         ),
         pytest.param(
             "cover",
             pd.DataFrame({"start": [0, 0], "covered": [1, 1]}),
-            r"maps 1 \('start', 'covered'\) label\(s\) more than once: \(0, 1\)",
+            r"maps 1 \('covered', 'start'\) label\(s\) more than once: \(1, 0\)",
             id="bare-row-twice",
         ),
         pytest.param(

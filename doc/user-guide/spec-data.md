@@ -160,10 +160,16 @@ The parameter's `missing:` decides what a missing row means:
     `absent` row of another parameter, takes the term with it, so
     `w * x` reads no `w` where `x` does not exist. A hole no
     declaration reads is left alone. A condition never demands a row: a
-    missing row compares as false there, whatever the `missing:`.
-- `neutral`: the row reads as the neutral value, `0` or `False`.
+    missing row compares as false there.
 - `absent`: the row is absent, and the absence propagates through the
-    arithmetic that reads it.
+    arithmetic that reads it. A condition reads the row as false.
+- a value, such as `0`, `1`, `.inf` or `false`: the row takes that value
+    wherever the parameter is read, a condition included.
+
+A parameter with a `where:` is absent wherever its condition is false: the
+rows of data there are dropped, and `missing:` applies only where the
+condition holds. A label of a dimension that declares `one_of:` must be one
+that the list names, or `SpecDataError` names it.
 
 ### Label types
 
