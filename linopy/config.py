@@ -98,4 +98,5 @@ options = OptionSettings(
     display_max_rows=14,
     display_max_terms=6,
     warn_on_densify=None,
+    warn_on_absorbed_terms=False,
 )
