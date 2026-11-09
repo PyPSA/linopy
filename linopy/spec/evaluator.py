@@ -55,9 +55,7 @@ def evaluate(node: ms.Expression, ctx: Context) -> Value:
     )
     if isinstance(node, ms.ExpressionReference):
         node = node.body
-    return ctx.memo.evaluated(
-        node, ctx.filled, lambda: _evaluated(node, ctx), pinned=pinned
-    )
+    return ctx.memo.evaluated(node, lambda: _evaluated(node, ctx), pinned=pinned)
 
 
 def _evaluated(node: ms.Expression, ctx: Context) -> Value:
@@ -70,7 +68,7 @@ def _evaluated(node: ms.Expression, ctx: Context) -> Value:
     if isinstance(node, ms.Dual):
         return _dual(node.constraint, ctx)
     if isinstance(node, ms.ParameterReference):
-        return _parameter(node.name, ctx)
+        return ctx.parameter(node.name).values
     if isinstance(node, ms.Negate):
         return -evaluate(node.operand, ctx)
     if isinstance(node, _Binary):
@@ -119,14 +117,6 @@ def _through(array: Array, columns: ms.JoinColumns, ctx: Context) -> Array:
     grouped = {columns.dim(r): rows[r].to_numpy() for r in columns.grouped}
     onto = {d: ctx.coords[d] for d in grouped}
     return operators.grouped_sum(array, joined, grouped, onto)
-
-
-def _parameter(name: str, ctx: Context) -> xr.DataArray:
-    """The parameter filled as its ``missing:`` says; unfilled, a missing row is a hole that a comparison reads as false."""
-    filled, present = ctx.parameter(name)
-    if ctx.filled or not isinstance(ctx.program.parameters[name].missing, str):
-        return filled
-    return filled.where(present)
 
 
 def _variable(name: str, ctx: Context) -> Value:

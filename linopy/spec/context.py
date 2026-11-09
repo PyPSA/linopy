@@ -43,8 +43,8 @@ def as_expression(value: Array) -> Expression:
 @dataclass
 class Memo:
     """
-    What a build or a fold has evaluated: a condition by its node, an
-    expression node by its node and ``filled``. A reference and a named
+    What a build or a fold has evaluated, by its node: a condition or an
+    expression node. A reference and a named
     expression's body are kept for the build; another node is kept while
     ``uses`` counts a use of it ahead, and only when it is data: a term is
     made again where it is used, so none is held for a later declaration.
@@ -72,12 +72,11 @@ class Memo:
     def evaluated(
         self,
         node: ms.Expression,
-        filled: bool,
         make: Callable[[], _Kept],
         pinned: bool = False,
     ) -> _Kept:
-        """The value of *node* under *filled*, one use of it consumed: read back if kept, else made by *make* and kept for the build if *pinned*, else while a use is ahead and it is data."""
-        key = (node, filled)
+        """The value of *node*, one use of it consumed: read back if kept, else made by *make* and kept for the build if *pinned*, else while a use is ahead and it is data."""
+        key = node
         if key in self.values:
             value = cast(_Kept, self.values[key])
             if node not in self.inner:
@@ -109,8 +108,7 @@ class Memo:
             self.uses[node] = left - 1
             return
         del self.uses[node]
-        for filled in (True, False):
-            self.values.pop((node, filled), None)
+        self.values.pop(node, None)
 
 
 def uses_of(program: ms.Program) -> dict[ms.Expression, int]:
@@ -133,9 +131,8 @@ class Context:
     ``solved`` is the fold's switch: a build leaves it false
     and a variable enters an expression as its linopy term; a fold sets it
     true and a variable enters as its solved values, so a named expression
-    reads off the primal. ``filled`` is the comparison's switch: on, a
-    parameter enters as its filled values; a condition turns it off so a
-    missing row reaches the comparison as a hole, read as false there. ``rows``
+    reads off the primal. A ``refused`` or ``absent`` missing row is a NaN
+    hole, which a comparison reads as false. ``rows``
     narrows the finiteness check to the rows a constraint builds, and
     ``subject`` names what is being built in its refusals. ``memo`` is
     shared by every context replaced from one.
@@ -147,7 +144,6 @@ class Context:
     relations: Mapping[str, Table]
     parameter: Callable[[str], Parameter]
     solved: bool = False
-    filled: bool = True
     rows: xr.DataArray | None = None
     subject: str = "the spec"
     memo: Memo = field(default_factory=Memo, compare=False, repr=False)

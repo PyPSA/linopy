@@ -8,7 +8,7 @@ parameter or relation source is read for values, never for labels. Parameters
 are resolved from ``sources`` on demand and aligned onto the master
 coordinates without copying an already aligned array. A coordinate a table
 leaves out is a missing row, and the parameter's ``missing:`` says what it
-means: refused, absent (NaN, ``False`` for ``bool``) or a value. A
+means: refused, absent (NaN) or a value. A
 parameter with a ``where:`` is absent outside it, whatever its ``missing:``.
 A NaN in a grid (a DataArray or a Dataset variable) is a missing row too,
 while a table says a row is missing by leaving it out. Read leaves a missing
@@ -780,8 +780,7 @@ def fill(
 
     *parameter* is what :meth:`Attached.read` returns, so
     ``fill(attached.program, name, attached.read(name))`` reads a parameter
-    filled. An ``absent`` row is NaN (``False`` for ``bool``) and a value
-    row that value; an ``int`` or ``bool`` parameter is back at its declared
+    filled. An ``absent`` row is NaN and a value row that value; an ``int`` or ``bool`` parameter is back at its declared
     dtype unless a row stays NaN. A ``refused`` row stays NaN too: whether a
     declaration reads it is for :func:`linopy.spec.evaluator.refuse_holes` to
     decide. *admitted* is where the parameter's ``where:`` holds: outside it,
@@ -790,13 +789,11 @@ def fill(
     arr, present = parameter
     declared = program.parameters[name]
     missing = declared.missing
-    value = False if missing == "absent" and declared.dtype == "bool" else missing
-    if value not in ("refused", "absent") and not bool(present.all()):
-        arr = _with_fill(arr, present, value, declared.dtype)
+    if missing not in ("refused", "absent") and not bool(present.all()):
+        arr = _with_fill(arr, present, missing, declared.dtype)
     if admitted is None:
         return arr
-    outside = False if declared.dtype == "bool" else np.nan
-    return arr.where(admitted, outside).transpose(*arr.dims)
+    return arr.where(admitted).transpose(*arr.dims)
 
 
 def _with_fill(

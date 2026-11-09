@@ -278,7 +278,7 @@ def test_string_parameter_rows_attach_as_numpy_objects(
     assert present.values.tolist() == [True, True, False]
 
 
-def test_missing_rows_become_nan_and_false(program: Any, good: dict[str, Any]) -> None:
+def test_missing_rows_become_nan(program: Any, good: dict[str, Any]) -> None:
     sparse = {
         **good,
         "lead": pd.DataFrame({"f": ["a"], "lead": [1]}),
@@ -290,12 +290,9 @@ def test_missing_rows_become_nan_and_false(program: Any, good: dict[str, Any]) -
     assert lead.dtype == np.float64
     assert lead.sel(f="a").item() == 1.0
     assert lead.sel(f=["b", "c"]).isnull().all()
-    unfilled = attached.read("flag").values
-    assert unfilled.dtype == np.float64
-    np.testing.assert_array_equal(unfilled.values, [np.nan, 1.0, np.nan])
     flag = filled(attached, "flag")
-    assert flag.dtype == bool
-    assert flag.values.tolist() == [False, True, False]
+    assert flag.dtype == np.float64
+    np.testing.assert_array_equal(flag.values, [np.nan, 1.0, np.nan])
     cap = filled(attached, "cap")
     assert cap.dims == ("f", "t")
     assert cap.sel(t=2).isnull().all()
@@ -366,7 +363,7 @@ HOLES = [
     pytest.param("int", "absent", [1.0, np.nan, 3.0], id="int"),
     pytest.param("int", 0, [1, 0, 3], id="int-0"),
     pytest.param("int", 7, [1, 7, 3], id="int-7"),
-    pytest.param("bool", "absent", [True, False, False], id="bool"),
+    pytest.param("bool", "absent", [1.0, np.nan, 0.0], id="bool"),
     pytest.param("bool", True, [True, True, False], id="bool-true"),
     pytest.param("str", "absent", STR_HOLE, id="str"),
 ]

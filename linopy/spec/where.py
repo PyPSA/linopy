@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import operator
 from collections.abc import Callable
-from dataclasses import replace
 from typing import assert_never, cast
 
 import numpy as np
@@ -71,11 +70,8 @@ def _condition(node: ms.Condition, ctx: Context) -> xr.DataArray:
     if isinstance(node, ms.VariableDefined):
         return ctx.model.variables[node.name].mask
     if isinstance(node, ms.ParameterComparison):
-        filled, present = ctx.parameter(node.name)
-        compared = _compared(filled, node.op, node.value)
-        if isinstance(ctx.program.parameters[node.name].missing, str):
-            return compared & present
-        return compared & admitted(node.name, ctx)
+        values = ctx.parameter(node.name).values
+        return _compared(values, node.op, node.value) & values.notnull()
     if isinstance(node, ms.ExpressionComparison):
         return _both(node.op, _side(node.left, ctx), _side(node.right, ctx))
     if isinstance(node, ms.CountComparison):
@@ -163,7 +159,7 @@ def _side(node: ms.Expression, ctx: Context) -> xr.DataArray:
     """One side of an expression comparison as data, its missing rows kept so they read as exclusion."""
     from linopy.spec.evaluator import evaluate
 
-    return xr.DataArray(evaluate(node, replace(ctx, filled=False)))
+    return xr.DataArray(evaluate(node, ctx))
 
 
 def _compared(arr: xr.DataArray, op: str, value: object) -> xr.DataArray:
