@@ -1041,14 +1041,14 @@ def _broadcast_points(
 
     # Iterate exprs/dims in order; a set would give a hash-dependent,
     # run-varying expanded dimension order.
-    expand_map: dict[str, list] = {}
+    expand_map: dict[str, pd.Index] = {}
     for le in lin_exprs:
         for dim in le.coord_dims:
             d = str(dim)
             if d in skip or d in point_dims or d in expand_map:
                 continue
             if d in le.coords:
-                expand_map[d] = list(le.coords[d].values)
+                expand_map[d] = le.indexes[d]
 
     if expand_map:
         points = points.expand_dims(expand_map)

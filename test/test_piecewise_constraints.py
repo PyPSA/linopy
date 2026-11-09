@@ -1400,6 +1400,21 @@ class TestBroadcasting:
         out = _broadcast_points(points, 1 * x)
         assert out.dims == ("alpha", "beta", "gamma", BREAKPOINT_DIM)
 
+    def test_broadcast_over_tuple_labelled_dim(self) -> None:
+        """Points broadcast over a dim labelled by tuples, e.g. (period, time)."""
+        m = Model()
+        snapshots = pd.Index(
+            [(2030, 0), (2030, 1), (2040, 0)], name="snapshot", tupleize_cols=False
+        )
+        x = m.add_variables(coords=[snapshots], name="x")
+        y = m.add_variables(coords=[snapshots], name="y")
+        m.add_piecewise_formulation(
+            (x, breakpoints([0, 10, 50])),
+            (y, breakpoints([0, 5, 30])),
+        )
+        delta = m.variables[f"pwl0{PWL_DELTA_SUFFIX}"]
+        assert delta.indexes["snapshot"].equals(snapshots)
+
 
 # ===========================================================================
 # NaN masking
