@@ -43,6 +43,7 @@ Slice H — object scope (convention preamble):
 from __future__ import annotations
 
 import operator
+import warnings
 from typing import Any, cast
 
 import numpy as np
@@ -52,7 +53,13 @@ import pytest
 import xarray as xr
 from xarray.core.types import JoinOptions
 
-from linopy import LinearExpression, Model, QuadraticExpression
+import linopy
+from linopy import (
+    AbsorbedTermsWarning,
+    LinearExpression,
+    Model,
+    QuadraticExpression,
+)
 from linopy.expressions import merge
 from linopy.testing import assert_linequal
 from linopy.variables import Variable
@@ -992,6 +999,70 @@ class TestFillnaResolves:
 
         rhs = m.constraints["con0"].rhs.values
         assert not np.isnan(rhs).any()
+
+
+class TestAbsorbedTermsWarning:
+    """``options["warn_on_absorbed_terms"]`` flags present terms that §6 drops (#1135)."""
+
+    @pytest.fixture(params=[False, True], ids=["dense", "sparse"])
+    def x(self, request: pytest.FixtureRequest, time: pd.RangeIndex) -> Variable:
+        m = Model(sparse=request.param)
+        return m.add_variables(lower=0, coords=[time], name="x")
+
+    @pytest.fixture(autouse=True)
+    def enabled(self) -> Any:
+        with linopy.options as opts:
+            opts["warn_on_absorbed_terms"] = True
+            yield
+
+    _ABSORBING = {
+        "add": lambda x: x + x.shift(time=1),
+        "sub": lambda x: x - x.shift(time=1),
+        "multi_operand": lambda x: 2 * x + x + x.shift(time=1),
+        "expr_rhs": lambda x: x >= x.shift(time=1),
+        "quadratic": lambda x: x * x.shift(time=1),
+    }
+
+    @pytest.mark.parametrize("build", _ABSORBING.values(), ids=_ABSORBING.keys())
+    def test_warns(self, x: Variable, build: Any) -> None:
+        with pytest.warns(
+            AbsorbedTermsWarning, match=r"1 of 5 slots, e\.g\. \(time=0\)\. "
+        ):
+            build(x)
+
+    def test_constraint_points_at_caller(self, x: Variable) -> None:
+        with pytest.warns(AbsorbedTermsWarning) as record:
+            x.model.add_constraints(x - x.shift(time=1) >= 1)
+        assert record[0].filename == __file__
+
+    def test_lists_three_slots(self, x: Variable) -> None:
+        with pytest.warns(
+            AbsorbedTermsWarning,
+            match=r"4 of 5 slots, e\.g\. \(time=0\), \(time=1\), \(time=2\)\. ",
+        ):
+            x + x.shift(time=4)
+
+    _SILENT = {
+        "fillna": lambda x: x + x.shift(time=1).fillna(0),
+        "both_absent": lambda x: x.shift(time=1) + x.shift(time=1),
+        "where": lambda x: (1 * x).where(x.labels > 0),
+        "absent_join": lambda x: x.add(
+            x.sel(time=[1, 2]), join="outer", fill_value=linopy.ABSENT
+        ),
+        "scalar": lambda x: x.shift(time=1) + 3,
+    }
+
+    @pytest.mark.parametrize("build", _SILENT.values(), ids=_SILENT.keys())
+    def test_silent(self, x: Variable, build: Any) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", AbsorbedTermsWarning)
+            build(x)
+
+    def test_off_by_default(self, x: Variable) -> None:
+        linopy.options.reset()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", AbsorbedTermsWarning)
+            x - x.shift(time=1)
 
 
 # =====================================================================

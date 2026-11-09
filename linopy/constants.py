@@ -23,6 +23,16 @@ class PerformanceWarning(UserWarning):
     """Warning raised when an operation triggers expensive Dataset reconstruction."""
 
 
+class AbsorbedTermsWarning(UserWarning):
+    """
+    Warning raised when an absent operand drops the present terms of another.
+
+    Emitted only while ``linopy.options["warn_on_absorbed_terms"]`` is True.
+    Turn it into an error with
+    ``warnings.filterwarnings("error", category=linopy.AbsorbedTermsWarning)``.
+    """
+
+
 long_EQUAL = "=="
 short_GREATER_EQUAL = ">"
 short_LESS_EQUAL = "<"

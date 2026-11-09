@@ -18,6 +18,7 @@ from linopy.constants import (
     EQUAL,
     GREATER_EQUAL,
     LESS_EQUAL,
+    AbsorbedTermsWarning,
     EvolvingAPIWarning,
     PerformanceWarning,
 )
@@ -40,6 +41,7 @@ from linopy.solvers import SolverFeature, available_solvers, licensed_solvers
 
 __all__ = (
     "ABSENT",
+    "AbsorbedTermsWarning",
     "Constraints",
     "Constraint",
     "EQUAL",

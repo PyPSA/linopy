@@ -14,7 +14,7 @@ from __future__ import annotations
 import operator
 import os
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, NoReturn, TypeAlias
 from warnings import warn
 
@@ -22,7 +22,8 @@ import numpy as np
 import pandas as pd
 from xarray import DataArray, Dataset
 
-from linopy.constants import HELPER_DIMS
+from linopy.config import options
+from linopy.constants import HELPER_DIMS, AbsorbedTermsWarning
 
 
 def _user_nan_message(context: str = "constant") -> str:
@@ -142,6 +143,39 @@ def warn_outside_linopy(message: str, category: type[Warning]) -> None:
         frame = frame.f_back
         stacklevel += 1
     warn(message, category, stacklevel=stacklevel)
+
+
+def _slot_label(slot: np.ndarray, indexes: Mapping[Any, pd.Index | None]) -> str:
+    """The coordinates of the slot at positions ``slot``, e.g. ``(unit=b)``."""
+    parts = (
+        f"{d}={i if idx is None else idx[i]}"
+        for (d, idx), i in zip(indexes.items(), slot)
+    )
+    return "(" + ", ".join(parts) + ")"
+
+
+def warn_absorbed_terms(
+    absorbed: np.ndarray, indexes: Mapping[Any, pd.Index | None]
+) -> None:
+    """
+    Emit an :class:`AbsorbedTermsWarning` for the slots in ``absorbed``, a
+    boolean array over the dimensions ``indexes`` names in order, where an
+    absent operand dropped present terms. Callers check
+    ``options["warn_on_absorbed_terms"]`` first.
+    """
+    if not absorbed.any():
+        return
+    slots = np.argwhere(absorbed)
+    examples = ", ".join(_slot_label(slot, indexes) for slot in slots[:3])
+    warn_outside_linopy(
+        f"An absent operand dropped the present terms at {len(slots)} of "
+        f"{absorbed.size} slots, e.g. {examples}. Absence propagates through "
+        "every operator (§6), so a constraint built on the result has no row "
+        "there. Fill the absent operand explicitly, e.g. with `.fillna(0)`, "
+        "if it should count as zero. See "
+        "https://linopy.readthedocs.io/en/latest/migrating-to-v1.html",
+        AbsorbedTermsWarning,
+    )
 
 
 def _short_repr(values: Any, limit: int = 6) -> str:
@@ -428,7 +462,7 @@ def _reduced_at(
     return reduce(values.values, axis=None, initial=initial, where=where)
 
 
-def absorb_absence(ds: Dataset) -> Dataset:
+def absorb_absence(ds: Dataset, report: bool = False) -> Dataset:
     """
     Enforce the dead-term invariant on a merged dataset.
 
@@ -436,7 +470,9 @@ def absorb_absence(ds: Dataset) -> Dataset:
     ``coeffs = NaN`` and ``vars = -1``. After ``merge`` concatenates two
     expressions along ``_term``, a slot that's absent in one operand
     still carries the *other* operand's valid term in its row; this
-    helper masks those away so the §1/§2 storage invariant holds.
+    helper masks those away so the §1/§2 storage invariant holds. With
+    ``report`` and ``options["warn_on_absorbed_terms"]`` set, the slots where
+    it drops present terms go to :func:`warn_absorbed_terms`.
     """
     if "const" not in ds or "coeffs" not in ds or "vars" not in ds:
         return ds
@@ -447,6 +483,12 @@ def absorb_absence(ds: Dataset) -> Dataset:
     coeffs = _reduced_at(ds["coeffs"], mask, np.fmax.reduce, np.nan)
     if labels == -1 and np.isnan(coeffs):
         return ds
+    if report and options["warn_on_absorbed_terms"]:
+        term_dims = [d for d in HELPER_DIMS if d in ds["vars"].dims]
+        absorbed = mask & (ds["vars"] != -1).any(term_dims)
+        warn_absorbed_terms(
+            absorbed.values, {d: absorbed.indexes.get(d) for d in absorbed.dims}
+        )
     coeffs = ds["coeffs"].where(~mask, np.nan)
     vars_ = ds["vars"].where(~mask, -1)
     return ds.assign(coeffs=coeffs, vars=vars_)

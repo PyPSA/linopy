@@ -38,8 +38,15 @@ linopy 1.0 removed legacy directly, without a release that made v1 the default.
 
 1.  **Run your test suite** on linopy 1.0. Every difference from legacy either
     raises or changes a result as described in the table below.
-2.  **Fix each site** using the table.
-3.  **Drop** any `linopy.options["semantics"] = "v1"` line.
+2.  **Find silently dropped terms.** Absence that propagates changes a result
+    without raising. Set `linopy.options["warn_on_absorbed_terms"] = True`
+    while you build your model: every operation where an absent operand drops
+    the present terms of another emits a `linopy.AbsorbedTermsWarning` that
+    names the line and the slots. To stop at the first one, turn it into an
+    error with
+    `warnings.filterwarnings("error", category=linopy.AbsorbedTermsWarning)`.
+3.  **Fix each site** using the table.
+4.  **Drop** any `linopy.options["semantics"] = "v1"` line.
 
 ## What changes, and how to fix it
 
