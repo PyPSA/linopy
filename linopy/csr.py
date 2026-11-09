@@ -54,7 +54,11 @@ from xarray import DataArray, Dataset, broadcast
 from linopy.common import lookup_table
 from linopy.config import options
 from linopy.constants import HELPER_DIMS, TERM_DIM, PerformanceWarning
-from linopy.semantics import check_arithmetic_nan, warn_outside_linopy
+from linopy.semantics import (
+    check_arithmetic_nan,
+    warn_absorbed_terms,
+    warn_outside_linopy,
+)
 from linopy.store import (
     CSR_COLUMNS_ATTR,
     STORE_KIND_ATTR,
@@ -695,8 +699,17 @@ class CSRStore(Store):
             store = store._scaled_terms(factor.to_numpy().reshape(-1), op)
         return store.assign_const(const.to_numpy().reshape(-1)).with_grid(grid)
 
-    def absorbed(self) -> CSRStore:
-        return self._without_terms(np.isnan(self.const))
+    def absorbed(self, report: bool = False) -> CSRStore:
+        """
+        Drop the terms of the absent cells; with ``report`` and
+        ``options["warn_on_absorbed_terms"]`` set, the cells that held terms
+        go to :func:`~linopy.semantics.warn_absorbed_terms`.
+        """
+        cells = np.isnan(self.const)
+        if report and options["warn_on_absorbed_terms"]:
+            held = cells & (np.diff(self.csr.indptr) > 0)
+            warn_absorbed_terms(held.reshape(self.grid.shape), self.grid.indexes)
+        return self._without_terms(cells)
 
     def _without_terms(self, cells: np.ndarray) -> CSRStore:
         """Drop the terms of the cells in the mask ``cells``."""
@@ -806,7 +819,7 @@ class CSRStore(Store):
         """Whether both live on the same cells, auxiliary coordinates aside."""
         return self.grid.same_layout(other.grid)
 
-    def add(self, *others: CSRStore) -> CSRStore:
+    def add(self, *others: CSRStore, report: bool = False) -> CSRStore:
         """
         Sparse matrix addition == merge along the term dimension, over any
         number of operands on the same grid in one pass that interleaves each
@@ -815,13 +828,15 @@ class CSRStore(Store):
         distinguishable from an empty cell. A cell absent in any operand is
         absent in the sum and carries no terms. Auxiliary coordinates
         propagate, earlier operands taking precedence, and conflicting ones
-        raise (§11).
+        raise (§11). With ``report``, the absent cells that held terms go to
+        :func:`~linopy.semantics.warn_absorbed_terms`.
         """
         parts = (self, *others)
         const = functools.reduce(np.add, (p.const for p in parts))
         shape = (self.n_cells, max(p.csr.shape[1] for p in parts))
         csr = _interleaved([p.csr for p in parts], shape, self.model)
-        return replace(self, csr=csr, const=const, grid=merged_grid(parts)).absorbed()
+        res = replace(self, csr=csr, const=const, grid=merged_grid(parts))
+        return res.absorbed(report)
 
     @classmethod
     def from_matmul(

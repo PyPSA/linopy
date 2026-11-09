@@ -606,7 +606,8 @@ class DenseStore(Store):
         data = [self.ds, other.ds]
         if not (_overriding(data, TERM_DIM, None) and _stackable(data)):
             return None
-        return self._derived(absorb_absence(_stacked_terms(data, [False, True])))
+        ds = _stacked_terms(data, [False, True])
+        return self._derived(absorb_absence(ds, report=True))
 
     def _derived(self, ds: Dataset) -> DenseStore:
         """A store on this model holding ``ds``, normalized."""
@@ -1096,7 +1097,7 @@ def merge_datasets(
     """
     override = _overriding(data, dim, join)
     if dim == TERM_DIM and override and not kwargs and _stackable(data):
-        return absorb_absence(_stacked_terms(data))
+        return absorb_absence(_stacked_terms(data), report=True)
 
     data = [fill_missing_coords(ds, fill_helper_dims=True) for ds in data]
 
@@ -1129,7 +1130,7 @@ def merge_datasets(
     for d in set(HELPER_DIMS) & set(ds.coords):
         ds = ds.reset_index(d, drop=True)
 
-    return absorb_absence(ds)
+    return absorb_absence(ds, report=dim in HELPER_DIMS and not np.isnan(fill))
 
 
 def _overriding(data: Sequence[Dataset], dim: str, join: JoinOptions | None) -> bool:
@@ -1313,7 +1314,7 @@ def _merged_sparse(
         if isinstance(aligned, str):
             return aligned
         csrs = aligned
-    return csrs[0].add(*csrs[1:])
+    return csrs[0].add(*csrs[1:], report=not np.isnan(fill))
 
 
 def align_stores(
