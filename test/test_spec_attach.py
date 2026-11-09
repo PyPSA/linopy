@@ -177,7 +177,7 @@ def test_dimension_shapes_keep_source_order(
     coords = attach(program, {**good, "f": f}).coords
     assert coords["f"].tolist() == ["b", "a", "c"]
     assert coords["f"].name == "f"
-    assert list(coords) == ["f", "t", "g"]
+    assert list(coords) == ["f", "g", "t"]
 
 
 def test_a_table_column_gives_a_dimension_through_unique(
@@ -347,7 +347,7 @@ def with_missing(**missing: Any) -> Any:
     [
         ("refused", [1.0, np.nan]),
         ("absent", [1.0, np.nan]),
-        ("neutral", [1.0, 0.0]),
+        (0, [1.0, 0.0]),
         (7.5, [1.0, 7.5]),
     ],
 )
@@ -362,11 +362,12 @@ def test_a_missing_row_reads_the_way_missing_says(
 STR_HOLE = np.array(["x", np.nan, "z"], dtype=object)
 HOLES = [
     pytest.param("float", "absent", [1.0, np.nan, 3.0], id="float"),
-    pytest.param("float", "neutral", [1.0, 0.0, 3.0], id="float-0"),
+    pytest.param("float", 0, [1.0, 0.0, 3.0], id="float-0"),
     pytest.param("int", "absent", [1.0, np.nan, 3.0], id="int"),
-    pytest.param("int", "neutral", [1, 0, 3], id="int-0"),
+    pytest.param("int", 0, [1, 0, 3], id="int-0"),
     pytest.param("int", 7, [1, 7, 3], id="int-7"),
     pytest.param("bool", "absent", [True, False, False], id="bool"),
+    pytest.param("bool", True, [True, True, False], id="bool-true"),
     pytest.param("str", "absent", STR_HOLE, id="str"),
 ]
 HELD = {
@@ -858,7 +859,27 @@ def test_a_source_key_that_leaves_no_name_without_data_is_silent(
 def test_unreached_dimension_needs_no_source(good: dict[str, Any]) -> None:
     dimensions = {**SPEC["dimensions"], "z": {"dtype": "int"}}
     program = lower({**SPEC, "dimensions": dimensions})
-    assert list(attach(program, good).coords) == ["f", "t", "g"]
+    assert list(attach(program, good).coords) == ["f", "g", "t"]
+
+
+@pytest.mark.parametrize(
+    ("labels", "match"),
+    [(["wind", "ccgt"], None), (["wind", "solar"], "'solar' that its one_of")],
+)
+def test_a_dimension_takes_only_the_labels_its_one_of_allows(
+    labels: list[str], match: str | None
+) -> None:
+    program = lower(
+        {
+            "dimensions": {"carrier": {"one_of": ["ccgt", "ocgt", "wind"]}},
+            "variables": {"x": {"dims": ["carrier"]}},
+        }
+    )
+    if match is None:
+        assert attach(program, {"carrier": labels}).coords["carrier"].tolist() == labels
+        return
+    with pytest.raises(SpecDataError, match=match):
+        attach(program, {"carrier": labels})
 
 
 def test_master_coordinate_dtype_wins(program: Any, good: dict[str, Any]) -> None:
@@ -922,7 +943,7 @@ RELATION_GOOD = {
     ("override", "match"),
     [
         pytest.param(
-            {"g": None, "b": None}, "dimension 'g' has no index", id="a-map-no-labels"
+            {"g": None, "b": None}, "dimension 'b' has no index", id="a-map-no-labels"
         ),
         pytest.param(
             {"gen_bus": None}, "no data provided for relation", id="an-index-no-map"

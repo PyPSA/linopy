@@ -15,7 +15,7 @@ from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec import operators
 from linopy.spec.context import Array, Context, Term, Value, as_expression
 from linopy.spec.errors import SpecDataError, first_coordinates
-from linopy.spec.where import evaluate_where, groups_of, looked_up
+from linopy.spec.where import admitted, evaluate_where, groups_of, looked_up
 from linopy.variables import Variable
 
 _Binary: TypeAlias = ms.Add | ms.Multiply | ms.Divide | ms.Power
@@ -131,14 +131,15 @@ def _parameter(name: str, ctx: Context) -> xr.DataArray:
 
 def _variable(name: str, ctx: Context) -> Value:
     variable = ctx.model.variables[name]
-    neutral = ctx.program.variables[name].missing == "neutral"
+    missing = ctx.program.variables[name].missing
     if not ctx.solved:
-        return variable.fillna(0) if neutral else variable
+        return variable if missing == "absent" else variable.fillna(missing)
     if "solution" not in variable.data:
         raise AttributeError(
             f"variable '{name}' has no solution yet: solve the model before reading a named expression"
         )
-    return variable.solution.fillna(0) if neutral else variable.solution
+    solution = variable.solution
+    return solution if missing == "absent" else solution.fillna(missing)
 
 
 def _dual(constraint: str, ctx: Context) -> xr.DataArray:
@@ -338,13 +339,15 @@ def refuse_holes(
     is absent there: a masked variable or an ``absent`` parameter row takes
     the hole's term with it, as in :func:`evaluate`. A condition never reads
     a row: a missing row compares as false there, whatever its ``missing:``.
+    Outside a parameter's ``where:`` it is absent, so no row there is missing.
     """
     live = xr.DataArray(True) if rows is None else rows
     for name in sorted(_read_parameters(nodes)):
         present = ctx.parameter(name).present
         if ctx.program.parameters[name].missing != "refused" or bool(present.all()):
             continue
-        found = _read_holes(~present, functools.partial(_reads, nodes, name, live, ctx))
+        holes = ~present & admitted(name, ctx)
+        found = _read_holes(holes, functools.partial(_reads, nodes, name, live, ctx))
         if bool(found.any()):
             raise SpecDataError(
                 f"{subject} reads parameter '{name}' at {first_coordinates(found, 3)}, "
@@ -422,7 +425,7 @@ def _marks(
     if isinstance(node, ms.VariableReference):
         labels = ctx.model.variables[node.name].labels
         zeros = xr.zeros_like(labels, dtype=float)
-        if ctx.program.variables[node.name].missing == "neutral":
+        if ctx.program.variables[node.name].missing != "absent":
             return zeros
         return zeros.where(labels != -1)
     if isinstance(node, ms.Constant | ms.Dual):
@@ -458,13 +461,15 @@ def _marks(
 def _parameter_marks(
     node: ms.ParameterReference, name: str, holes: xr.DataArray, ctx: Context
 ) -> xr.DataArray:
-    """*holes* on parameter *name*, NaN on a missing ``absent`` row of another."""
+    """*holes* on parameter *name*, NaN where a parameter is absent: a missing ``absent`` row, or outside its ``where:``."""
+    declared = ctx.program.parameters[node.name]
     if node.name == name:
-        return holes.astype(float)
-    if ctx.program.parameters[node.name].missing != "absent":
+        return holes.astype(float).where(admitted(name, ctx))
+    if declared.missing != "absent" and declared.where is None:
         return _zeros(node, ctx)
     present = ctx.parameter(node.name).present
-    return xr.zeros_like(present, dtype=float).where(present)
+    exists = present if declared.missing == "absent" else admitted(node.name, ctx)
+    return xr.zeros_like(present, dtype=float).where(exists)
 
 
 def _zeros(node: ms.Expression, ctx: Context) -> xr.DataArray:

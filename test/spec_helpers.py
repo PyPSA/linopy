@@ -152,8 +152,9 @@ CURVE_SPEC: dict[str, Any] = {
     },
     "piecewise": {
         "cost_curve": {
-            "over": "bp",
-            "links": [["p", "bp_x"], ["op_cost", "bp_y", ">="]],
+            "along": "bp",
+            "dims": ["snapshot", "generator"],
+            "links": {"p": ["p", "bp_x"], "op_cost": ["op_cost", "bp_y", ">="]},
             "method": "lp",
         }
     },
@@ -173,7 +174,7 @@ MASKED_CURVE_SPEC = with_(
         "bp_y": {"dims": ["generator", "bp"], "missing": "absent"},
     },
     piecewise={
-        "cost_curve": {**CURVE_SPEC["piecewise"]["cost_curve"], "points": "bp_x"}
+        "cost_curve": {**CURVE_SPEC["piecewise"]["cost_curve"], "where": "bp_x"}
     },
 )
 

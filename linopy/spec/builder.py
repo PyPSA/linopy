@@ -5,7 +5,7 @@ A build hands every variable to linopy as its term, then adds special-ordered
 sets, constraints, the objective and the named expressions that carry a
 variable term; which linopy call each construct becomes is one branch of
 :func:`linopy.spec.evaluator.evaluate`. Everything built is framed in the
-order its entry declares its dims.
+name order of its dims, the order mathspec sorts every ``dims:`` list into.
 """
 
 from __future__ import annotations
@@ -183,8 +183,9 @@ def _check_live(
 
     Such a row reads as ``0 sense rhs``: linopy carries no column there, the
     row leaves the problem and the constraint silently stops binding. Where
-    every variable of the row declares ``missing: neutral`` the zero is what
-    the math says, so a zero other side is warned about rather than refused.
+    every variable of the row declares a ``missing:`` number, the constant
+    left is what the math says, so a row whose two sides are equal there is
+    warned about rather than refused.
     An absent row is not emptied: absence spread through arithmetic, a masked
     variable or a vacated translation, takes the row with it. A bare variable
     term is never emptied: a row of it exists exactly where the variable does.
@@ -201,22 +202,22 @@ def _check_live(
         f"is attached, the first at {first_coordinates(dead, 3)}. Nothing is left to constrain there, so "
         f"the row leaves the problem without saying so."
     )
-    neutral = all(
-        ctx.program.variables[v].missing == "neutral"
+    valued = all(
+        ctx.program.variables[v].missing != "absent"
         for v in ms.variables_of(declared.lhs, declared.rhs)
     )
-    if neutral and not _binds(other, dead):
+    if valued and not _binds(other, constant_of(term), dead):
         warnings.warn(
-            f"{said} Every variable there is missing: neutral and the other side is 0, "
-            f"so the row is trivially true.",
+            f"{said} Every variable there takes its missing: number and the two sides "
+            f"are equal, so the row is trivially true.",
             UserWarning,
             stacklevel=2,
         )
         return
     supply = (
         "  Supply the rows of the variables, if the row is meant to bind."
-        if neutral
-        else "  Declare missing: neutral on the variables, if an absent term is a zero there."
+        if valued
+        else "  Declare missing: 0 on the variables, if an absent term is a zero there."
     )
     raise SpecDataError(
         f"{said}\n"
@@ -225,11 +226,10 @@ def _check_live(
     )
 
 
-def _binds(other: Value, dead: xr.DataArray) -> bool:
-    """Whether the side without the variable term is anything but 0 on a row *dead* names."""
-    if isinstance(other, xr.DataArray):
-        return bool((other.where(dead, 0.0) != 0).any())
-    return other != 0
+def _binds(other: Value, const: xr.DataArray, dead: xr.DataArray) -> bool:
+    """Whether the side without the variable term differs from the constant *const* left on a row *dead* names."""
+    differs = xr.DataArray(other) != const
+    return bool((differs & dead).any())
 
 
 def _objective(ctx: Context) -> None:
@@ -268,8 +268,8 @@ def _framed(
     term: Term, dims: tuple[str, ...]
 ) -> LinearExpression | QuadraticExpression:
     """
-    *term* with its dimensions in the order the entry declares, without
-    stray coordinates. A dimension the entry declares and the term lacks is
+    *term* with its dimensions in the order of the entry's dims, sorted by
+    name, without stray coordinates. A dimension the entry declares and the term lacks is
     what the other side of a comparison brings in.
     """
     expression = without_strays(as_expression(term))

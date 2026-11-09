@@ -8,7 +8,8 @@ parameter or relation source is read for values, never for labels. Parameters
 are resolved from ``sources`` on demand and aligned onto the master
 coordinates without copying an already aligned array. A coordinate a table
 leaves out is a missing row, and the parameter's ``missing:`` says what it
-means: refused, absent (NaN, ``False`` for ``bool``), neutral (0) or a value.
+means: refused, absent (NaN, ``False`` for ``bool``) or a value. A
+parameter with a ``where:`` is absent outside it, whatever its ``missing:``.
 A NaN in a grid (a DataArray or a Dataset variable) is a missing row too,
 while a table says a row is missing by leaving it out. Read leaves a missing
 row a hole, and :func:`fill` applies ``missing:``.
@@ -34,7 +35,6 @@ import pandas as pd
 import polars as pl
 import xarray as xr
 from mathspec import program as ms
-from mathspec.program import parameters_of, walk
 from pandas.api.extensions import ExtensionArray
 
 from linopy.spec.errors import (
@@ -60,7 +60,6 @@ _EMPTY_DTYPES: dict[str, Any] = {
     "bool": bool,
     "str": object,
 }
-_NEUTRAL: dict[str, Any] = {"float": 0.0, "int": 0, "bool": False}
 _SCALARS = (bool, int, float, str, np.number, np.bool_)
 _DIMENSION_SHAPES = "a pandas Index, a list, a tuple, a 1-D numpy or pandas array, or a pandas or polars Series"
 _UNIQUE_HINT = (
@@ -195,28 +194,6 @@ class Attached:
         return read
 
 
-def strict_parameters(program: ms.Program) -> frozenset[str]:
-    """The parameters standing where no neutral value exists: a divisor, a bound, a whole comparison side."""
-    p = program
-    bounds = [b for v in p.variables.values() for b in (v.lower, v.upper)]
-    sides = [_bare(s) for c in p.constraints.values() for s in (c.lhs, c.rhs)]
-    bodies = [e.expression for e in p.expressions.values()]
-    divisors = [n.divisor for n in walk(*p.roots, *bodies) if isinstance(n, ms.Divide)]
-    references = [n for n in bounds + sides if isinstance(n, ms.ParameterReference)]
-    return frozenset({r.name for r in references} | parameters_of(*divisors))
-
-
-def _bare(node: ms.Expression) -> ms.Expression:
-    """*node* looked through its references, powers and negations."""
-    if isinstance(node, ms.ExpressionReference):
-        return _bare(node.body)
-    if isinstance(node, ms.Power):
-        return _bare(node.base)
-    if isinstance(node, ms.Negate):
-        return _bare(node.operand)
-    return node
-
-
 # ---------------------------------------------------------------------------
 # sources and keys
 # ---------------------------------------------------------------------------
@@ -327,6 +304,14 @@ def _index(dim: str, obj: Any, declared: ms.Dimension) -> pd.Index:
         flat = pd.Index(flat.to_numpy())
     index = flat.rename(dim)
     _check_value_dtype(dim, declared.dtype, index.dtype, what="dimension")
+    if declared.one_of is not None and (
+        strays := _outside(index, pd.Index(declared.one_of))
+    ):
+        raise SpecDataError(
+            f"dimension '{dim}' has label(s) {shown(strays)} that its one_of does not "
+            f"allow, which are {shown(list(declared.one_of))}. Fix the labels, or add them "
+            f"to the one_of of '{dim}'."
+        )
     if index.has_duplicates:
         twice = _twice(index)
         raise SpecDataError(
@@ -788,46 +773,30 @@ def fill(
     program: ms.Program,
     name: str,
     parameter: Parameter,
-    strict: frozenset[str] | None = None,
+    admitted: xr.DataArray | None = None,
 ) -> xr.DataArray:
     """
     The values of *parameter* with its missing rows reading the way *program* declares *name* ``missing:``.
 
     *parameter* is what :meth:`Attached.read` returns, so
     ``fill(attached.program, name, attached.read(name))`` reads a parameter
-    filled. An ``absent`` row is NaN (``False`` for ``bool``), a ``neutral``
-    one 0 and a value that value; an ``int`` or ``bool`` parameter is back at
-    its declared dtype unless a row stays NaN. A ``refused`` row stays NaN
-    too: whether a declaration reads it is for
-    :func:`linopy.spec.evaluator.refuse_holes` to decide. *strict* names the parameters
-    standing where no neutral value exists, worked out from *program* when
-    not given; pass it to skip that walk on repeated calls.
-
-    Raises
-    ------
-    SpecDataError
-        A ``neutral`` missing row where no neutral value exists: as a
-        divisor, a bound, or the whole constant side of a comparison.
+    filled. An ``absent`` row is NaN (``False`` for ``bool``) and a value
+    row that value; an ``int`` or ``bool`` parameter is back at its declared
+    dtype unless a row stays NaN. A ``refused`` row stays NaN too: whether a
+    declaration reads it is for :func:`linopy.spec.evaluator.refuse_holes` to
+    decide. *admitted* is where the parameter's ``where:`` holds: outside it,
+    the parameter is absent and its rows of data are dropped.
     """
     arr, present = parameter
     declared = program.parameters[name]
     missing = declared.missing
-    if missing == "refused" or bool(present.all()):
+    value = False if missing == "absent" and declared.dtype == "bool" else missing
+    if value not in ("refused", "absent") and not bool(present.all()):
+        arr = _with_fill(arr, present, value, declared.dtype)
+    if admitted is None:
         return arr
-    if missing == "absent":
-        if declared.dtype == "bool":
-            return _with_fill(arr, present, False, "bool")
-        return arr
-    if missing == "neutral":
-        if name in (strict_parameters(program) if strict is None else strict):
-            raise SpecDataError(
-                f"parameter '{name}' is missing: neutral and has no row at "
-                f"{first_coordinates(~present, 3)}, and it stands where no neutral value "
-                f"exists: as a divisor, in bounds:, or as the whole constant side of a "
-                f"comparison. Supply the rows, or declare missing: absent."
-            )
-        return _with_fill(arr, present, _NEUTRAL[declared.dtype], declared.dtype)
-    return _with_fill(arr, present, missing, declared.dtype)
+    outside = False if declared.dtype == "bool" else np.nan
+    return arr.where(admitted, outside).transpose(*arr.dims)
 
 
 def _with_fill(

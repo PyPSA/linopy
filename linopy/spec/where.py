@@ -32,6 +32,11 @@ def evaluate_where(mask: ms.Mask | None, ctx: Context) -> xr.DataArray:
     return _node(mask.root, ctx)
 
 
+def admitted(name: str, ctx: Context) -> xr.DataArray:
+    """Where parameter *name* has coordinates: where its ``where:`` holds, everywhere without one."""
+    return evaluate_where(ctx.program.parameters[name].where, ctx)
+
+
 def as_linopy_mask(mask: xr.DataArray) -> xr.DataArray | None:
     """*mask* as linopy's ``mask=`` takes it: ``None`` where nothing is masked."""
     if mask.ndim == 0 and bool(mask):
@@ -70,7 +75,7 @@ def _condition(node: ms.Condition, ctx: Context) -> xr.DataArray:
         compared = _compared(filled, node.op, node.value)
         if isinstance(ctx.program.parameters[node.name].missing, str):
             return compared & present
-        return compared
+        return compared & admitted(node.name, ctx)
     if isinstance(node, ms.ExpressionComparison):
         return _both(node.op, _side(node.left, ctx), _side(node.right, ctx))
     if isinstance(node, ms.CountComparison):

@@ -198,7 +198,8 @@ def synthetic_sources(spec: SpecLike, n: int = 3) -> dict[str, Any]:
     *spec* takes every form :meth:`Model.from_spec` does: a path, YAML text,
     a mapping or a ``mathspec.Spec``.
 
-    Labels are numbered after their dimension, parameters are a linear ramp,
+    Labels are numbered after their dimension, parameters a ramp rising along
+    every dimension,
     and each relation holds a row for every key tuple, each value column
     cycling through the labels it maps into on its own stride, so that a sum
     grouping by several columns reaches every group.
@@ -250,7 +251,7 @@ def _parameter(
     elif declared.dtype == "str":
         values = np.full(shape, "a", dtype=object)
     elif dims:
-        values = np.broadcast_to(1.0 + np.arange(n), shape).copy()
+        values = 1.0 + np.indices(shape).sum(axis=0)
     else:
         values = np.array(1.0)
     if not dims:
