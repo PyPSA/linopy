@@ -170,7 +170,7 @@ def warn_absorbed_terms(
     warn_outside_linopy(
         f"An absent operand dropped the present terms at {len(slots)} of "
         f"{absorbed.size} slots, e.g. {examples}. Absence propagates through "
-        "every operator (§6), so a constraint built on the result has no row "
+        "every operator, so a constraint built on the result has no row "
         "there. Fill the absent operand explicitly, e.g. with `.fillna(0)`, "
         "if it should count as zero. See "
         "https://linopy.readthedocs.io/en/latest/migrating-to-v1.html",

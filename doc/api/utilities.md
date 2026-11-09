@@ -12,7 +12,7 @@
     has to be densified warns under `None` in a dense model too; only
     `False` silences it. See [Dense and sparse models](../user-guide/sparse-models.ipynb).
 - `warn_on_absorbed_terms`: `True` emits an `AbsorbedTermsWarning` wherever
-    an absent operand drops the present terms of another (§6), naming the
+    an absent operand drops the present terms of another, naming the
     slots. `False` (default) never warns. A merge with
     `fill_value=linopy.ABSENT` is not checked. Meant for
     [upgrading to linopy 1.0](../user-guide/migrating-to-v1.md).
