@@ -466,6 +466,32 @@ RELATION_SUMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
         ),
         grouped_sources(pd.Series([3.0, 4.0], index=GENS)),
     ),
+    "at-along-its-own-key": (
+        {
+            "dimensions": {
+                "t": {"dtype": "int", "ordered": True},
+                "e": {"dtype": "str"},
+            },
+            "relations": {
+                "source_of": {
+                    "key": ["e", "t"],
+                    "values": {"source": "t"},
+                    "missing": "absent",
+                }
+            },
+            "variables": {"x": {"dims": ["e", "t"]}},
+            "expressions": {
+                "summed": "at(shift(2 * x, along=t, offset=1), by=source_of[source])"
+            },
+        },
+        {
+            "t": TT,
+            "e": E,
+            "source_of": pd.DataFrame(
+                {"e": ["e1", "e1", "e3"], "t": [1, 3, 0], "source": [0, 2, 3]}
+            ),
+        },
+    ),
     "cases-beside-data-over-more-dimensions": (
         {
             "dimensions": {

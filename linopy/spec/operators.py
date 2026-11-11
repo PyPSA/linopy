@@ -189,12 +189,39 @@ def at(
     if any(not len(expression.indexes[d]) for d in positions):
         onto = {str(d): present.indexes[d] for d in present.dims}
         return _zeros(expression, tuple(positions), onto).where(present)
+    if isinstance(expression, LinearExpression) and expression.is_sparse:
+        if set(positions) & set(present.dims):
+            return _at_by_rows(expression, positions, present)
     picked = expression.isel(_keyed(positions, present))
     joined = [d for d in positions if d not in picked.dims]
     picked = picked.drop_vars(joined).assign_coords(present.coords)
     if bool(present.all()):
         return picked
     return picked.where(present)
+
+
+def _at_by_rows(
+    expression: LinearExpression,
+    positions: Mapping[str, xr.DataArray],
+    present: xr.DataArray,
+) -> LinearExpression:
+    """
+    :func:`at` of a sparse term read along a dimension of its own key, as a sum of one row per key tuple.
+
+    Read in place, the dimension keeps the labels it is read at as a
+    coordinate over the whole key, which a sparse (CSR) term cannot hold.
+    """
+    keys = [str(d) for d in present.dims]
+    held = np.nonzero(present.transpose(*keys).to_numpy())
+    grouped = {k: present.indexes[k][at_k].to_numpy() for k, at_k in zip(keys, held)}
+    joined = {k: grouped[k] for k in keys if k in expression.indexes}
+    for d, p in positions.items():
+        read = p.broadcast_like(present).transpose(*keys).to_numpy()[held]
+        joined[d] = expression.indexes[d][read].to_numpy()
+    onto = {k: present.indexes[k] for k in keys}
+    summed = cast(LinearExpression, grouped_sum(expression, joined, grouped, onto))
+    live = cast(xr.DataArray, at(~expression.isnull(), positions, present)) == 1
+    return summed.where(present & live)
 
 
 def _keyed(
