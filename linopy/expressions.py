@@ -2262,6 +2262,10 @@ class LinearExpression(BaseExpression):
         obj._attrs = {"name": None}
         return obj
 
+    def __init__(self, data: Dataset | Any | None, model: Model) -> None:
+        self._attrs = {"name": None}
+        super().__init__(data, model)
+
     def _set_data(self, data: Dataset) -> None:
         self._store = DenseStore(absorb_absence(data), self._model)
 

@@ -2265,6 +2265,15 @@ def test_linear_expression_from_constant_1D(m: Model) -> None:
     assert expr.is_constant
 
 
+def test_linear_expression_from_dataset_selects_on_full_coordinates(
+    x: Variable,
+) -> None:
+    """An expression made by the constructor had no attributes to copy on a no-op ``sel``."""
+    expr = LinearExpression((2 * x).data, x.model)
+    full = {dim: expr.indexes[dim] for dim in expr.coord_dims}
+    assert_linequal(expr.sel(full), expr)
+
+
 def test_constant_linear_expression_to_polars_2D(m: Model) -> None:
     index_a = pd.Index([0, 1], name="a")
     index_b = pd.Index([0, 1, 2], name="b")
