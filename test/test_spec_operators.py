@@ -414,6 +414,19 @@ RELATION_SUMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
             "next_of": pd.DataFrame({"t": TT, "next": [1, 2, 2, 0]}),
         },
     ),
+    "beside-a-relation-that-maps-nothing": (
+        with_(
+            GROUPED_SPEC,
+            variables={"out": {"dims": ["generator"], "bounds": {"lower": 0}}},
+            expressions={
+                "summed": "imports + sum(out, over=generator, by=gen_bus[bus])"
+            },
+        ),
+        {
+            **grouped_sources(pd.Series([3.0, 4.0], index=GENS)),
+            "gen_bus": pd.DataFrame({"generator": [], "bus": []}, dtype=object),
+        },
+    ),
 }
 
 

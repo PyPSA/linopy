@@ -29,7 +29,7 @@ from linopy import (
     Variable,
     merge,
 )
-from linopy.constants import FACTOR_DIM, HELPER_DIMS, TERM_DIM
+from linopy.constants import FACTOR_DIM, HELPER_DIMS, TERM_DIM, PerformanceWarning
 from linopy.csr import CSRStore
 from linopy.expressions import ScalarLinearExpression
 from linopy.testing import assert_linequal, assert_quadequal
@@ -2263,6 +2263,25 @@ def test_linear_expression_from_constant_1D(m: Model) -> None:
     assert expr.nterm == 0
     assert (expr.const.values == [10, 20]).all()
     assert expr.is_constant
+
+
+@pytest.mark.parametrize(
+    ("constant", "const"),
+    [(10, [10, 10]), (pd.Series([10, 20], index=pd.Index([0, 1], name="t")), [10, 20])],
+    ids=["scalar", "1D"],
+)
+def test_linear_expression_from_constant_is_built_on_the_model_store(
+    backend: Model, constant: int | pd.Series, const: list[int]
+) -> None:
+    """A sparse model built the constant dense, so adding it to a term sparsified it with a notice."""
+    expr = LinearExpression.from_constant(model=backend, constant=constant)
+    assert expr.is_sparse == backend.sparse
+    x = backend.add_variables(coords=[pd.Index([0, 1], name="t")], name="x")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", PerformanceWarning)
+        total = x + expr
+    assert total.is_sparse == backend.sparse
+    np.testing.assert_allclose(total.const.values, const)
 
 
 def test_linear_expression_from_dataset_selects_on_full_coordinates(

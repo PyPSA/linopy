@@ -3349,6 +3349,10 @@ class LinearExpression(BaseExpression):
         """
         Create a linear expression from a constant value or series
 
+        The result is built on the model's store class
+        (:attr:`~linopy.model.Model.store_cls`): CSR-backed in a sparse
+        model (``Model(sparse=True)``), dense otherwise.
+
         Parameters
         ----------
         model : linopy.Model
@@ -3361,8 +3365,9 @@ class LinearExpression(BaseExpression):
         linopy.LinearExpression
             A linear expression representing the constant value.
         """
-        const_da = as_dataarray(constant)
-        return LinearExpression(const_da, model)
+        expr = LinearExpression(as_dataarray(constant), model)
+        store = expr._store.to_sparse() if model.sparse else expr._store
+        return expr if isinstance(store, str) else cls._from_store(store, model)
 
     @classmethod
     def from_coo(
