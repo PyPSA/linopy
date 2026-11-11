@@ -390,6 +390,7 @@ def test_a_relation_into_its_own_dimension_joins_on_it(
         assert folded.values.tolist() == pytest.approx(want)
 
 
+E = pd.Index(["e1", "e2", "e3"], name="e")
 RELATION_SUMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
     "into-another-dim": (
         with_(
@@ -427,6 +428,36 @@ RELATION_SUMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
             "gen_bus": pd.DataFrame({"generator": [], "bus": []}, dtype=object),
         },
     ),
+    **{
+        name: (
+            {
+                "dimensions": {
+                    "t": {"dtype": "int", "ordered": True},
+                    "s": {"dtype": "str"},
+                    "e": {"dtype": "str"},
+                },
+                "relations": {
+                    "season_of": {"key": "t", "values": "s", "missing": "absent"}
+                },
+                "parameters": {"lag": {"dims": ["e"], "dtype": "int"}},
+                "variables": {"x": {"dims": ["t", "e"]}},
+                "expressions": {
+                    "summed": f"x + shift(2 * x, along=t, offset=lag, {edge})"
+                },
+            },
+            {
+                "t": TT,
+                "s": S,
+                "e": E,
+                "season_of": pd.DataFrame({"t": TT, "s": ["a", "a", "b", "b"]}),
+                "lag": pd.DataFrame({"e": E, "lag": [0, 1, 1]}),
+            },
+        )
+        for name, edge in {
+            "shift-by-an-entity-offset": "edge=0",
+            "shift-in-groups-by-an-entity-offset": "edge='wrap', within=season_of[s]",
+        }.items()
+    },
 }
 
 

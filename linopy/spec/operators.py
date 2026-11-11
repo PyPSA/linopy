@@ -353,9 +353,37 @@ def _gather(
     fill: float | None,
 ) -> Array:
     """*array* translated by *offset* along *over*, or inside each group of *partition*."""
+    sparse = isinstance(array, LinearExpression) and array.is_sparse
+    if sparse and isinstance(offset, xr.DataArray) and set(offset.dims) - {over}:
+        return _per_offset(array, over, offset, partition, wrap, fill)
     if partition is None:
         return _gather_by_offset(array, over, offset, wrap, fill)
     return _gather_in_groups(array, over, offset, partition, wrap, fill)
+
+
+def _per_offset(
+    array: Array,
+    over: str,
+    offset: xr.DataArray,
+    partition: Groups | None,
+    wrap: bool,
+    fill: float | None,
+) -> Array:
+    """
+    *array* gathered once per distinct *offset*, each gather kept where the offset is that amount.
+
+    An offset over other dimensions than *over* gathers along two dimensions
+    at once, which a sparse (CSR) term cannot select without densifying.
+    """
+    amounts = offset.to_series().dropna().unique().tolist() or [0]
+    terms: list[Array] = []
+    reached: list[xr.DataArray] = []
+    for amount in amounts:
+        moved = _gather(array, over, int(amount), partition, wrap, fill)
+        kept = moved.where(offset == amount)
+        terms.append(_filled(kept, 0.0))
+        reached.append(~kept.isnull())
+    return _merged(terms).where(reduce(operator.or_, reached))
 
 
 def _gather_by_offset(
