@@ -189,6 +189,7 @@ def _combine(node: _Binary, ctx: Context) -> Value:
     left, right = evaluate(first, ctx), evaluate(second, ctx)
     kind = type(node).__name__.lower()
     if isinstance(left, Term) or isinstance(right, Term):
+        left, right = _off_rows(left, ctx), _off_rows(right, ctx)
         if isinstance(node, ms.Add):
             a, b = constant_of(left), constant_of(right)
             refuse_made(kind, (node,), op, a, b, ctx)
@@ -204,6 +205,26 @@ def _combine(node: _Binary, ctx: Context) -> Value:
                 f"coordinates, so the data was attached against other labels than the model was built on."
             )
     return refuse_made(kind, (node,), op, a, b, ctx)
+
+
+def _off_rows(value: Value, ctx: Context) -> Value:
+    """*value* with an infinity no built row reads set to zero, so a term's zero there does not make a NaN that core linopy refuses."""
+    if (
+        ctx.rows is None
+        or not isinstance(value, xr.DataArray)
+        or value.dtype.kind not in "fc"
+    ):
+        return value
+    infinite = np.isinf(value)
+    if not bool(infinite.any()):
+        return value
+    other = [d for d in ctx.rows.dims if d not in value.dims]
+    read = ctx.rows.any(other) if other else ctx.rows
+    off = infinite & ~read
+    if not bool(off.any()):
+        return value
+    ctx.memo.masked += 1
+    return value.where(~off, 0.0)
 
 
 def _paired(left: Value, right: Value) -> tuple[Value, Value]:
