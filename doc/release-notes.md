@@ -128,6 +128,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `LinearExpression(data, model)` no longer raises on a `.sel` over full coordinates. ([\#1144](https://github.com/PyPSA/linopy/pull/1144))
 - `LinearExpression.from_constant` builds on the model's store, so a sparse model's constant stays sparse and adding it emits no `PerformanceWarning`. ([\#PR](https://github.com/PyPSA/linopy/pull/PR))
 - `Model.from_spec(..., sparse=True)` keeps a `shift` whose offset differs per entity sparse, without a `PerformanceWarning`. ([\#PR](https://github.com/PyPSA/linopy/pull/PR))
+- A sparse expression added to, multiplied or divided by a constant over new dimensions stays sparse instead of densifying. ([\#PR](https://github.com/PyPSA/linopy/pull/PR))
 - `add_piecewise_formulation` no longer raises on a dimension labelled by tuples, e.g. `(period, timestep)` snapshots. ([\#1140](https://github.com/PyPSA/linopy/pull/1140))
 - The repr of a long expression shows the last terms of a `QuadraticExpression` after the `...` and prints the constant once. ([\#1023](https://github.com/PyPSA/linopy/pull/1023))
 

@@ -254,14 +254,11 @@ CASES: dict[str, Case] = {
     "sub-join-outer": Case(grid, lambda e: e.sub(SHIFTED_A, join="outer"), KEPT),
     "mul-join-inner": Case(grid, lambda e: e.mul(SHIFTED_A, join="inner"), KEPT),
     "add-join-left": Case(grid, lambda e: e.add(SHIFTED_A, join="left"), KEPT),
-    "add-array-new-dim": Case(
-        grid, lambda e: e + OVER_C, "add(constant over new dimensions)"
-    ),
-    "mul-array-new-dim": Case(
-        grid, lambda e: e * OVER_C, "mul(constant over new dimensions)"
-    ),
-    "div-array-new-dim": Case(
-        grid, lambda e: e / OVER_C, "truediv(constant over new dimensions)"
+    "add-array-new-dim": Case(grid, lambda e: e + OVER_C, KEPT),
+    "mul-array-new-dim": Case(grid, lambda e: e * OVER_C, KEPT),
+    "div-array-new-dim": Case(grid, lambda e: e / OVER_C, KEPT),
+    "add-array-new-dim-join-outer": Case(
+        grid, lambda e: e.add(SHIFTED_A * OVER_C, join="outer"), KEPT
     ),
     "neg": Case(grid, lambda e: -e, KEPT),
     "mul-scalar": Case(grid, lambda e: e * 3, KEPT),

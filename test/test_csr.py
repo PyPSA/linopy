@@ -1565,10 +1565,6 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
         lambda e, c: c.m.add_constraints(e >= 1).update(coeffs=2.0),
         r"update\(coeffs=, variables=\)",
     ),
-    "new-dim": (
-        lambda e, c: e * xr.DataArray([1.0, 2.0], coords=[LOC]),
-        r"mul\(constant over new dimensions\)",
-    ),
     "groupby-fallback": (
         lambda e, c: e.groupby(halves(e)).sum(use_fallback=True),
         r"groupby.sum\(grouper without a sparse path\)",
@@ -2007,12 +2003,13 @@ def test_elementwise_operand_errors_match_dense(kind: str, op: str) -> None:
 
 
 @pytest.mark.parametrize("op", ["mul", "add"])
-def test_elementwise_operand_over_new_dim_falls_back_to_dense(op: str) -> None:
+def test_elementwise_operand_over_new_dim_keeps_the_backing(op: str) -> None:
     sparse, dense = sparse_and_dense("grouped")
     x = xr.DataArray([1.0, 2.0], coords=[LOC])
     func = ELEMENTWISE_OPS[op]
-    res = func(sparse, x)
-    assert not res.is_sparse
+    with no_densify():
+        res = func(sparse, x)
+    assert res.is_sparse
     assert_linequal(res, func(dense, x))
 
 

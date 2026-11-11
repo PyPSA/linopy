@@ -458,6 +458,32 @@ RELATION_SUMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
             "shift-in-groups-by-an-entity-offset": "edge='wrap', within=season_of[s]",
         }.items()
     },
+    "cases-beside-data-over-more-dimensions": (
+        {
+            "dimensions": {
+                "t": {"dtype": "int", "ordered": True},
+                "e": {"dtype": "str"},
+            },
+            "parameters": {
+                "lag": {"dims": ["e"], "dtype": "int"},
+                "v": {"dims": ["t"]},
+            },
+            "variables": {"x": {"dims": ["e"]}},
+            "expressions": {
+                "summed": {
+                    "dims": ["e", "t"],
+                    "cases": {"lagged": {"when": "lag > 0", "expression": "x"}},
+                    "otherwise": "v",
+                }
+            },
+        },
+        {
+            "t": TT,
+            "e": E,
+            "lag": pd.DataFrame({"e": E, "lag": [0, 1, 1]}),
+            "v": pd.DataFrame({"t": TT, "v": V}),
+        },
+    ),
 }
 
 
