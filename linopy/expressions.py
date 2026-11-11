@@ -2509,7 +2509,7 @@ class LinearExpression(BaseExpression):
         if isinstance(store, DenseStore):
             store = DenseStore(store.ds.copy(deep=False), self._model)
         obj = type(self)._from_store(store, self._model)
-        obj._attrs = dict(self._attrs)
+        obj._attrs = dict(self.attrs)
         return obj
 
     def isel(self, *args: Any, **kwargs: Any) -> Self:
