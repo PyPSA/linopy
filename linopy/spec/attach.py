@@ -218,7 +218,8 @@ def _from_dataset(program: ms.Program, data: xr.Dataset) -> dict[str, Any]:
     out.update({str(k): v for k, v in data.data_vars.items()})
     for dim, members in combined(program).items():
         if dim in out:
-            out[dim] = pd.DataFrame(list(out[dim]), columns=list(members))
+            rows = pd.DataFrame(list(out[dim]), columns=list(members))
+            out[dim] = rows.astype({m: out[m].dtype for m in members if m in out})
     for name, rel in program.relations.items():
         if name not in out or len(rel.key) != 1 or len(rel.values) != 1:
             continue
@@ -275,8 +276,9 @@ def reached_dimensions(program: ms.Program) -> set[str]:
 def _master_coords(
     program: ms.Program, sources: Mapping[str, Any], keys: frozenset[str]
 ) -> dict[str, pd.Index]:
-    reached = reached_dimensions(program)
     over = combined(program)
+    given = (over[d] for d in over if d in keys)
+    reached = reached_dimensions(program).union(*given)
     coords: dict[str, pd.Index] = {}
     for dim in sorted(program.dimensions, key=lambda d: d in over):
         if dim in over and dim in keys:
@@ -284,13 +286,18 @@ def _master_coords(
         elif dim in keys:
             coords[dim] = _index(dim, sources[dim], program.dimensions[dim])
         elif dim in reached:
-            raise SpecDataError(
-                f"dimension '{dim}' has no index: pass its labels under key '{dim}' as "
-                f"{_DIMENSION_SHAPES}. The index is what says which labels exist, and without "
-                f"one a mistyped label is indistinguishable from a new one. "
-                + _UNIQUE_HINT.format(dim=dim)
-            )
+            raise no_index(dim)
     return coords
+
+
+def no_index(dim: str) -> SpecDataError:
+    """The refusal for a dimension the spec reads and the sources give no labels for."""
+    return SpecDataError(
+        f"dimension '{dim}' has no index: pass its labels under key '{dim}' as "
+        f"{_DIMENSION_SHAPES}. The index is what says which labels exist, and without "
+        f"one a mistyped label is indistinguishable from a new one. "
+        + _UNIQUE_HINT.format(dim=dim)
+    )
 
 
 def _index(dim: str, obj: Any, declared: ms.Dimension) -> pd.Index:
@@ -381,6 +388,8 @@ def _member_labels(
     what: str, member: str, labels: pd.Index, known: pd.Index
 ) -> pd.Index:
     """*labels* as *known* holds them, refusing a label *known* lacks."""
+    if not len(labels):
+        return known[:0]
     _refuse_label_type(what, member, labels, known)
     found = known.get_indexer(labels)
     if (found < 0).any():

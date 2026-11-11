@@ -147,9 +147,10 @@ sources["efficiency"] = pd.DataFrame(
 A table over a multi-dimension carries the member columns in its place, and a
 row at a combination the dimension does not list is refused. A grid is a
 `DataArray` over the tuple labels, or one stacked over the members with
-`DataArray.stack(connection=["unit", "bus"])`. A sum over a member groups the
-listed combinations and builds no grid over every combination; a constraint
-over the members reads a multi-dimension on that grid.
+`DataArray.stack(connection=["unit", "bus"])`. `sum(x, over=unit)` groups the
+listed combinations and builds no grid over every combination of the members.
+A sum through a relation on a member, and a constraint or a `where:` over the
+members, read a multi-dimension on that grid.
 
 !!! note
 
@@ -383,7 +384,10 @@ before a solve raises `AttributeError`, one that reads a `refused` hole
 carry the data a model was built with `store=True` like any other
 parameter. Object parameters, such as a `str`
 parameter with a hole, keep their `NaN` holes on both the `netcdf4` and the
-`scipy` engine; an object parameter mixing types is refused on write.
+`scipy` engine; an object parameter mixing types is refused on write. A
+netCDF file cannot hold the tuple labels of a
+[multi-dimension](#the-source-contract), so a model over one cannot be written:
+keep its sources to rebuild it.
 
 The restored model is a plain linopy model with its solution and parameters,
 so `evaluate(spec, restored)` works on it directly if it was built with

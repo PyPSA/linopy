@@ -275,6 +275,15 @@ def test_a_grid_over_a_multi_dimension_may_be_stacked() -> None:
             "exactly the columns ['bus', 'unit', 'output']",
             id="a-parameter-table-without-member-columns",
         ),
+        pytest.param(
+            {
+                "output": pd.DataFrame(
+                    {"unit": ["u2"] * 2, "bus": ["b2"] * 2, "output": [True] * 2}
+                )
+            },
+            "connection=('b2', 'u2') (2 rows)",
+            id="a-parameter-row-twice-shows-the-whole-label",
+        ),
     ],
 )
 def test_data_a_multi_dimension_cannot_take_is_refused(
@@ -292,3 +301,52 @@ def test_synthetic_sources_list_a_strict_subset_of_the_combinations() -> None:
         warnings.simplefilter("ignore")
         m = Model.from_spec({**MULTI, "constraints": {}}, sources)
     assert m.variables["flow"].sizes["connection"] == 5
+
+
+@pytest.mark.parametrize(
+    ("spec", "dropped", "fragment"),
+    [
+        pytest.param(
+            {
+                "dimensions": MULTI["dimensions"],
+                "variables": {"x": {"dims": ["bus", "unit"], "where": "connection"}},
+            },
+            "connection",
+            "dimension 'connection' has no index",
+            id="a-multi-dimension-read-only-by-a-condition",
+        ),
+        pytest.param(
+            {"dimensions": MULTI["dimensions"], "parameters": {"p": {"dims": ["bus"]}}},
+            "unit",
+            "dimension 'unit' has no index",
+            id="a-member-of-a-given-multi-dimension",
+        ),
+    ],
+)
+def test_a_dimension_without_its_source_is_refused(
+    spec: dict[str, Any], dropped: str, fragment: str
+) -> None:
+    sources = {k: v for k, v in SOURCES.items() if k != dropped}
+    with pytest.raises(SpecDataError, match=fragment):
+        Model.from_spec(spec, sources)
+
+
+def test_an_empty_multi_dimension_over_an_int_member_rebuilds_from_its_stored_data() -> (
+    None
+):
+    spec = {
+        "dimensions": {
+            "unit": {"dtype": "int"},
+            "bus": {},
+            "connection": {"over": ["unit", "bus"]},
+        },
+        "variables": {"flow": {"dims": ["connection"]}},
+    }
+    empty = pd.DataFrame(
+        {"unit": pd.Series([], dtype=int), "bus": pd.Series([], dtype=object)}
+    )
+    m = Model.from_spec(
+        spec, {"unit": [1, 2], "bus": BUS, "connection": empty}, store=True
+    )
+    rebuilt = Model.from_spec(spec, m.parameters, store=True)
+    assert rebuilt.variables["flow"].sizes["connection"] == 0

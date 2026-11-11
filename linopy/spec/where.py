@@ -11,6 +11,7 @@ import xarray as xr
 from mathspec import program as ms
 
 from linopy.spec import frames, operators
+from linopy.spec.attach import no_index
 from linopy.spec.context import Array, Context
 from linopy.spec.errors import SpecDataError
 
@@ -98,6 +99,8 @@ def _condition(node: ms.Condition, ctx: Context) -> xr.DataArray:
     if isinstance(node, ms.RelationDefined):
         return ctx.relations[node.name].defined
     if isinstance(node, ms.DimensionDefined):
+        if node.name not in ctx.coords:
+            raise no_index(node.name)
         index = ctx.coords[node.name]
         return xr.DataArray(np.ones(len(index), dtype=bool), coords=[index])
     if isinstance(node, ms.ReframedCondition):

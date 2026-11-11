@@ -31,7 +31,7 @@ def shown(labels: Sequence[Any], limit: int = 5) -> str:
 
 def coordinate(dims: Sequence[str], key: Hashable) -> str:
     """One coordinate as ``dim=label`` pairs."""
-    row = key if isinstance(key, tuple) else (key,)
+    row = key if isinstance(key, tuple) and (len(dims) > 1 or len(key) == 1) else (key,)
     return ", ".join(f"{d}={v!r}" for d, v in zip(dims, row))
 
 
