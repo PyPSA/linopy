@@ -875,6 +875,22 @@ class LinearExpressionRolling:
         return LinearExpression(ds, self.model)
 
 
+def _log_extra_rhs_dims(rhs: DataArray, dims: Iterable[Hashable]) -> None:
+    """Log the dims a constant rhs adds to the expression's, each a copy of its rows."""
+    if extra_dims := set(rhs.dims) - set(dims):
+        logger.warning(
+            f"Constant RHS contains dimensions {extra_dims} not present "
+            f"in the expression, which might lead to inefficiencies. "
+            f"Consider collapsing the dimensions by taking min/max."
+        )
+
+
+def _over_new_dims(const: DataArray, dims: Iterable[str]) -> bool:
+    """Whether ``const`` adds labelled dims to ``dims``, which the sparse arithmetic spreads the cells over."""
+    new = set(const.dims) - set(dims)
+    return bool(new) and not new & set(HELPER_DIMS) and new <= set(const.indexes)
+
+
 def _grid_of(ds: Dataset | DataArray, dims: tuple[str, ...]) -> Grid | None:
     """
     The grid of ``ds`` over ``dims``, or None if ``ds`` leaves it: other or
@@ -1818,13 +1834,7 @@ class BaseExpression(ABC):
     def _broadcast_rhs(self, rhs: ConstantLike) -> DataArray:
         """Broadcast a constant RHS onto the expression's coordinates."""
         rhs = broadcast_to_coords(rhs, coords=self.coords, strict=False)
-        extra_dims = set(rhs.dims) - set(self.coord_dims)
-        if extra_dims:
-            logger.warning(
-                f"Constant RHS contains dimensions {extra_dims} not present "
-                f"in the expression, which might lead to inefficiencies. "
-                f"Consider collapsing the dimensions by taking min/max."
-            )
+        _log_extra_rhs_dims(rhs, self.coord_dims)
         return rhs
 
     def reset_const(self) -> Self:
@@ -2684,6 +2694,9 @@ class LinearExpression(BaseExpression):
         rhs = as_constant(rhs)
         if join is not None or not isinstance(rhs, CONSTANT_TYPES):
             return self.sub(rhs, join=join).to_constraint(sign, 0)
+        if isinstance(rhs, DataArray) and _over_new_dims(rhs, store.dims):
+            _log_extra_rhs_dims(rhs, store.dims)
+            return self.sub(rhs).to_constraint(sign, 0)
         rhs_da = constraints.rhs_on_grid(store, rhs)
         if isinstance(rhs_da, str):
             return self._fallback(rhs_da).to_constraint(sign, rhs, join)

@@ -1557,7 +1557,7 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
         r"matmul\(operand sharing no dimension",
     ),
     "rhs": (
-        lambda e, c: e <= xr.DataArray([1.0, 2.0], coords=[LOC]),
+        lambda e, c: e <= xr.DataArray([1.0, 2.0], dims="pt"),
         r"to_constraint\(rhs over dimensions outside the grid\)",
     ),
     "set-blocks": (set_blocks, "`set_blocks`"),

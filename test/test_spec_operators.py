@@ -35,7 +35,7 @@ from linopy import (  # noqa: E402
     QuadraticExpression,
 )
 from linopy.spec import SpecDataError, evaluate  # noqa: E402
-from linopy.testing import assert_linequal  # noqa: E402
+from linopy.testing import assert_conequal, assert_linequal  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # operators, built as a constraint and folded as a named expression
@@ -507,6 +507,26 @@ def test_a_relation_sum_keeps_the_backing_and_matches_dense(
     summed = m.expressions["summed"]
     assert summed.is_sparse == backend.sparse
     assert_linequal(summed, Model.from_spec(spec, data).expressions["summed"])
+
+
+def test_a_rhs_over_a_dimension_the_term_lacks_keeps_the_backing(
+    backend: Model,
+) -> None:
+    """A sparse term met a rhs over another dimension by densifying."""
+    spec = {
+        "dimensions": {"t": {"dtype": "int", "ordered": True}, "e": {"dtype": "str"}},
+        "parameters": {"cap": {"dims": ["t", "e"]}},
+        "variables": {"x": {"dims": ["t"]}},
+        "constraints": {"limit": {"dims": ["t", "e"], "expression": "2 * x <= cap"}},
+    }
+    cap = xr.DataArray(np.arange(12.0).reshape(4, 3), coords=[TT, E], name="cap")
+    data = {"t": TT, "e": E, "cap": cap}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", PerformanceWarning)
+        m = Model.from_spec(spec, data, sparse=backend.sparse)
+    limit = m.constraints["limit"]
+    assert limit.lhs.is_sparse == backend.sparse
+    assert_conequal(limit, Model.from_spec(spec, data).constraints["limit"])
 
 
 # ---------------------------------------------------------------------------

@@ -388,8 +388,11 @@ CASES: dict[str, Case] = {
         "to_constraint(non-scalar sign)",
     ),
     "to-constraint-rhs-off-grid": Case(
+        grid, lambda e: e.to_constraint("<=", OVER_C), KEPT
+    ),
+    "to-constraint-rhs-unlabelled-off-grid": Case(
         grid,
-        lambda e: e.to_constraint("<=", OVER_C),
+        lambda e: e.to_constraint("<=", xr.DataArray([1.0, 2.0], dims="c")),
         "to_constraint(rhs over dimensions outside the grid)",
     ),
     "groupby-series": Case(grid, lambda e: e.groupby(SERIES).sum(), KEPT),
