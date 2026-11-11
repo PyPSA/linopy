@@ -189,12 +189,30 @@ def at(
     if any(not len(expression.indexes[d]) for d in positions):
         onto = {str(d): present.indexes[d] for d in present.dims}
         return _zeros(expression, tuple(positions), onto).where(present)
-    picked = expression.isel(positions)
+    picked = expression.isel(_keyed(positions, present))
     joined = [d for d in positions if d not in picked.dims]
     picked = picked.drop_vars(joined).assign_coords(present.coords)
     if bool(present.all()):
         return picked
     return picked.where(present)
+
+
+def _keyed(
+    positions: Mapping[str, xr.DataArray], present: xr.DataArray
+) -> dict[str, xr.DataArray]:
+    """
+    *positions* labelled by the key dimensions they do not read along.
+
+    A read left unlabelled makes dimensions without coordinates, which a
+    sparse (CSR) term cannot hold; one read along its own key dimension
+    stays unlabelled, as a coordinate there would conflict with the operand's.
+    """
+    return {
+        d: p.assign_coords(
+            {k: present.indexes[k] for k in p.dims if k not in positions}
+        )
+        for d, p in positions.items()
+    }
 
 
 def positions_of(labels: xr.DataArray, index: pd.Index) -> xr.DataArray:

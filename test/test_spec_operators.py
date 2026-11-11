@@ -458,6 +458,14 @@ RELATION_SUMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
             "shift-in-groups-by-an-entity-offset": "edge='wrap', within=season_of[s]",
         }.items()
     },
+    "at-of-a-term": (
+        with_(
+            GROUPED_SPEC,
+            variables={"out": {"dims": ["generator"], "bounds": {"lower": 0}}},
+            expressions={"summed": "out + at(2 * imports, by=gen_bus[bus])"},
+        ),
+        grouped_sources(pd.Series([3.0, 4.0], index=GENS)),
+    ),
     "cases-beside-data-over-more-dimensions": (
         {
             "dimensions": {
