@@ -1004,6 +1004,26 @@ def test_a_quadratic_objective_builds() -> None:
     assert isinstance(m.objective.expression, linopy.QuadraticExpression)
 
 
+@pytest.mark.parametrize(
+    ("k", "quadratic"),
+    [
+        pytest.param([0.0, 0.0, 0.0], False, id="zeroed"),
+        pytest.param([0.0, 0.0, 2.0], True, id="kept"),
+    ],
+)
+def test_an_objective_is_quadratic_only_where_the_data_keeps_a_product(
+    k: list[float], quadratic: bool
+) -> None:
+    """A quadratic cost whose coefficients are all zero left a QuadraticExpression objective."""
+    spec = with_(
+        QUADRATIC_SPEC,
+        constraints={"cap": {"dims": ["t"], "expression": "x + y <= 5"}},
+        objective={"sense": "maximize", "expression": "sum(k * x * y + x, over=t)"},
+    )
+    m = Model.from_spec(spec, {"t": T, "k": xr.DataArray(k, coords=[T])})
+    assert isinstance(m.objective.expression, linopy.QuadraticExpression) is quadratic
+
+
 def test_a_named_expression_reading_a_dual_is_not_built() -> None:
     """A dual needs a solved model, so the body cannot be folded at build time."""
     spec = {**yaml_dict(), "expressions": {"price": "dual(power_balance)"}}
