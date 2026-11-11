@@ -753,3 +753,43 @@ def test_a_window_width_no_member_carries_is_a_window_of_nothing() -> None:
         "probe_sum_back_group_width"
     ]
     assert bool(folded.isnull().all())
+
+
+def test_a_lookup_into_an_empty_dimension_reads_nothing() -> None:
+    """`at` gathered by position, and an empty target has no position 0 to stand in for a hole."""
+    spec = {
+        "dimensions": {"outage": {}, "line": {}, "transformer": {}},
+        "relations": {
+            "Outage_line": {"key": "outage", "values": "line", "missing": "absent"},
+            "Outage_transformer": {
+                "key": "outage",
+                "values": "transformer",
+                "missing": "absent",
+            },
+        },
+        "variables": {"s": {"dims": ["line"]}, "t": {"dims": ["transformer"]}},
+        "expressions": {
+            "flow": {
+                "dims": ["outage"],
+                "cases": {
+                    "line": {
+                        "when": "Outage_line",
+                        "expression": "at(s, by=Outage_line[line])",
+                    }
+                },
+                "otherwise": "at(t, by=Outage_transformer[transformer])",
+            }
+        },
+        "constraints": {"cap": {"dims": ["outage"], "expression": "flow <= 1"}},
+    }
+    sources = {
+        "outage": ["a"],
+        "line": ["a"],
+        "transformer": pd.Index([], dtype=object),
+        "Outage_line": pd.DataFrame({"outage": ["a"], "line": ["a"]}),
+        "Outage_transformer": pd.DataFrame(
+            {"outage": [], "transformer": []}, dtype=object
+        ),
+    }
+    m = Model.from_spec(spec, sources)
+    assert int((m.constraints["cap"].labels != -1).sum()) == 1

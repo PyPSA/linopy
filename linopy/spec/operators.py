@@ -185,7 +185,11 @@ def at(
     to read over the relation's key. A key tuple *present* leaves out reads
     nothing, and its row keeps the operand's own absence rather than a zero.
     """
-    picked = as_expression(array).isel(positions)
+    expression = as_expression(array)
+    if any(not len(expression.indexes[d]) for d in positions):
+        onto = {str(d): present.indexes[d] for d in present.dims}
+        return _zeros(expression, tuple(positions), onto).where(present)
+    picked = expression.isel(positions)
     joined = [d for d in positions if d not in picked.dims]
     picked = picked.drop_vars(joined).assign_coords(present.coords)
     if bool(present.all()):
