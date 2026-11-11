@@ -61,7 +61,7 @@ def sum_over(array: Array, over: str) -> Array:
             array = array.fillna(0)
         return array.sum(over, skipna=False)
     if any(not array.sizes[dim] for dim in array.coord_dims if dim != over):
-        return _zeros(array, (over,))
+        return zeros(array, (over,))
     return array.sum(over)
 
 
@@ -83,7 +83,7 @@ def grouped_sum(
     """
     rows = pd.RangeIndex(len(next(iter(joined.values()))), name=_ROW)
     if not len(rows):
-        return _zeros(array, tuple(joined), onto)
+        return zeros(array, tuple(joined), onto)
     expression = as_expression(array)
     positions = {
         d: xr.DataArray(expression.indexes[d].get_indexer(labels), coords=[rows])
@@ -153,23 +153,23 @@ def _scattered(
     )
 
 
-def _zeros(
+def zeros(
     array: Array, without: tuple[str, ...], extra: Mapping[str, pd.Index] | None = None
 ) -> Array:
     """The constant zero over the operand's dimensions but *without*, and *extra*: data, or a term of its model."""
-    kept = [d for d in _coord_dims(array) if d not in without]
+    kept = [d for d in coord_dims(array) if d not in without]
     coords = {**{d: array.indexes[d] for d in kept}, **(extra or {})}
-    zeros = xr.DataArray(
+    out = xr.DataArray(
         np.zeros([len(index) for index in coords.values()]),
         coords=coords,
         dims=list(coords),
     )
     if isinstance(array, xr.DataArray):
-        return zeros
-    return LinearExpression.from_constant(array.model, zeros)
+        return out
+    return LinearExpression.from_constant(array.model, out)
 
 
-def _coord_dims(array: Array) -> list[str]:
+def coord_dims(array: Array) -> list[str]:
     """The dimensions the operand is labelled over, without a term's own ``_term``."""
     dims = array.dims if isinstance(array, xr.DataArray) else array.coord_dims
     return [str(d) for d in dims]

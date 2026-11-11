@@ -12,7 +12,7 @@ import xarray as xr
 from mathspec import program as ms
 
 from linopy.expressions import LinearExpression, QuadraticExpression
-from linopy.spec import operators
+from linopy.spec import frames, operators
 from linopy.spec.context import Array, Context, Term, Value, as_expression
 from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.where import admitted, evaluate_where, groups_of, looked_up
@@ -77,6 +77,8 @@ def _evaluated(node: ms.Expression, ctx: Context) -> Value:
         return _sum(node, ctx)
     if isinstance(node, ms.Join):
         return looked_up(_operand(node.operand, ctx), node.columns, ctx)
+    if isinstance(node, ms.Reframe):
+        return frames.reframed(_operand(node.operand, ctx), node.dims, ctx)
     if isinstance(node, ms.Translate):
         return _moved(node, _operand(node.operand, ctx), ctx, node.fill)
     if isinstance(node, ms.WindowSum):
@@ -103,6 +105,12 @@ def _sum(
     plain = [axis.dimension for axis in node.over if axis.column is None]
     if isinstance(operand, ms.Join) and operand.columns.axes:
         summed = _through(value(operand.operand), operand.columns, ctx)
+    elif isinstance(operand, ms.Reframe) and (
+        spread := frames.scattering(operand.dims, operand.operand.dims, ctx)
+    ):
+        summed = frames.scattered_sum(value(operand.operand), spread, plain, ctx)
+        members = ctx.program.dimensions[spread].over
+        plain = [d for d in plain if d not in members]
     else:
         summed = value(operand)
     for dimension in plain:
@@ -431,6 +439,8 @@ def _marks(
         return cast(xr.DataArray, _sum(node, ctx, lambda o: of(o).fillna(0.0)))
     if isinstance(node, ms.Join):
         return cast(xr.DataArray, looked_up(of(node.operand), node.columns, ctx))
+    if isinstance(node, ms.Reframe):
+        return cast(xr.DataArray, frames.reframed(of(node.operand), node.dims, ctx))
     if isinstance(node, ms.Translate | ms.WindowSum):
         operand = of(node.operand)
         if isinstance(node, ms.WindowSum):

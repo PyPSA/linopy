@@ -127,6 +127,30 @@ with mathspec's semantics: an unnamed key column is joined on and kept, and
 `by=` may name a list of columns. `within=` partitions by one value column
 of a relation keyed by the stepped dimension alone.
 
+**Multi-dimensions.** A dimension declared `over: [unit, bus]` lists the
+combinations of its members that exist. Its source is a table with exactly
+one column per member and one row per combination, or a `pandas.MultiIndex`
+whose level names are the members. Every label must be a member of its
+column's dimension, and each combination appears once. linopy labels the
+dimension with tuples of member labels, in the order of the members sorted by
+name, so `connection` above has labels such as `("b1", "u1")`:
+
+```python
+# connection: {over: [unit, bus]}
+sources["connection"] = pd.DataFrame({"unit": ["u1", "u1"], "bus": ["b1", "b2"]})
+# efficiency: {dims: [connection, snapshot]}
+sources["efficiency"] = pd.DataFrame(
+    {"unit": ["u1"], "bus": ["b2"], "snapshot": [0], "efficiency": [0.9]}
+)
+```
+
+A table over a multi-dimension carries the member columns in its place, and a
+row at a combination the dimension does not list is refused. A grid is a
+`DataArray` over the tuple labels, or one stacked over the members with
+`DataArray.stack(connection=["unit", "bus"])`. A sum over a member groups the
+listed combinations and builds no grid over every combination; a constraint
+over the members reads a multi-dimension on that grid.
+
 !!! note
 
     A parameter, unlike a relation, is laid out on the full grid of its dimensions once a declaration reads it, so its memory follows the grid, not the rows of its table; `store=True` stores that grid. Reduce sparse data on a large grid before attaching it, e.g. pass `sum(c, over=t)` as its own parameter, summed with pandas.
