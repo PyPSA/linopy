@@ -105,6 +105,8 @@ PYPSA_DATA: dict[str, Any] = {
         for c in (*COMMITTED, "StorageUnit", "Store")
     },
     "CVaR_alpha": 0.5,
+    "Generator_marginal_cost_curve_p": np.nan,
+    "Generator_marginal_cost_curve_cost": np.nan,
     **dict.fromkeys(PYPSA_SCHEDULES, 0.0),
     "Line_loss_offset": 0.0,
     "Transformer_loss_offset": 0.0,
