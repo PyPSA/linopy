@@ -7,6 +7,7 @@ expressions and the assumptions checked against the data.
 from __future__ import annotations
 
 import glob
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +45,11 @@ import linopy  # noqa: E402
 from linopy import Model  # noqa: E402
 from linopy.spec import SpecDataError, evaluate  # noqa: E402
 from linopy.spec.api import lower  # noqa: E402
-from linopy.testing import assert_conequal, synthetic_sources  # noqa: E402
+from linopy.testing import (  # noqa: E402
+    assert_conequal,
+    assert_linequal,
+    synthetic_sources,
+)
 
 REFUSED: dict[str, tuple[type[Exception], str]] = {
     "operators/shift_by_parameter.yaml": (
@@ -1051,6 +1056,26 @@ def test_an_objective_is_quadratic_only_where_the_data_keeps_a_product(
     )
     m = Model.from_spec(spec, {"t": T, "k": xr.DataArray(k, coords=[T])})
     assert isinstance(m.objective.expression, linopy.QuadraticExpression) is quadratic
+
+
+@pytest.mark.parametrize("product", ["x * y * k", "k * (x * y)"])
+def test_a_product_the_data_zeroes_keeps_a_sparse_objective_sparse(
+    backend: Model, product: str
+) -> None:
+    """A product the data zeroes stayed a quadratic, which has no sparse backing, so every term it met densified."""
+    spec = with_(
+        QUADRATIC_SPEC,
+        constraints={"cap": {"dims": ["t"], "expression": "x + y <= 5"}},
+        objective={"sense": "maximize", "expression": f"sum({product} + x, over=t)"},
+    )
+    data = {"t": T, "k": xr.DataArray([0.0, 0.0, 0.0], coords=[T])}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", linopy.PerformanceWarning)
+        m = Model.from_spec(spec, data, sparse=backend.sparse)
+    objective = m.objective.expression
+    assert isinstance(objective, linopy.LinearExpression)
+    assert objective.is_sparse == backend.sparse
+    assert_linequal(objective, Model.from_spec(spec, data).objective.expression)
 
 
 def test_a_named_expression_reading_a_dual_is_not_built() -> None:
