@@ -133,6 +133,7 @@ PYPSA_DATA: dict[str, Any] = {
     "StorageUnit_state_of_charge_initial_per_period": False,
     "Store_e_initial_per_period": False,
     "period_weight_years": 1.0,
+    "Generator_marginal_cost_curve_p": np.nan,
 }
 
 
