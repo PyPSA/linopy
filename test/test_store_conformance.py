@@ -560,6 +560,15 @@ def test_const_assign_rejects(backend: Model, value: str, assigner: str) -> None
     assert expr.is_sparse == backend.sparse
 
 
+@pytest.mark.parametrize("assigner", list(CONST_ASSIGNERS))
+def test_const_assign_keeps_absent_cells_absent(backend: Model, assigner: str) -> None:
+    expr = grid(backend).where(OVER_A != 2.0)
+    want = grid(Model()).where(OVER_A != 2.0)
+    res = CONST_ASSIGNERS[assigner](expr, 3 * expr.const) or expr
+    want.const = 3 * want.const
+    assert_equivalent(res, want)
+
+
 def test_nan_constant_operand_rejects(backend: Model) -> None:
     expr = grid(backend)
     with no_densify(), pytest.raises(ValueError, match="NaN found"):
