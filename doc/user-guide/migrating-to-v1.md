@@ -22,8 +22,10 @@ surfaces as an error at build time instead of a wrong number at solve time. The
 per-case bug catalogue is in [issue \#714](https://github.com/PyPSA/linopy/issues/714).
 
 linopy 1.0 removed legacy directly, without a release that made v1 the default.
-`linopy.options["semantics"]` is a deprecated no-op: `"v1"` emits a
-`FutureWarning`, any other value raises, and the option is removed in 1.1.
+Setting `linopy.options["semantics"]` is a deprecated no-op: `"v1"` emits a
+`FutureWarning`, any other value raises, and setting it is removed in 1.1.
+Reading it returns `"v1"` without a warning, so a library that checks it to
+support both 0.10 and 1.x keeps working.
 [`linopy.LinopySemanticsWarning`][linopy.config.LinopySemanticsWarning] is no longer emitted.
 
 ## Who this affects
