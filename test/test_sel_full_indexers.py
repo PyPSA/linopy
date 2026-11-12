@@ -211,6 +211,11 @@ def test_full_sel_is_independent(m: Model, x: Variable) -> None:
     assert "note" not in con.attrs
 
 
+def test_full_sel_of_expression_from_dataset(m: Model, x: Variable) -> None:
+    expr = LinearExpression((2 * x + 1)._to_dataset(), m)
+    assert_linequal(expr.sel(a=[10, 20, 30]), expr)
+
+
 def test_is_full_indexer() -> None:
     labels = [10, 20, 30]
     assert is_full_indexer(A, labels)

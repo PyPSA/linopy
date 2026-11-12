@@ -10,9 +10,9 @@ from __future__ import annotations
 from typing import Any
 
 SEMANTICS_DEPRECATION = (
-    'linopy.options["semantics"] is deprecated and has no effect: the v1 '
-    "convention is the only behaviour. Drop the setting; it is removed in "
-    "linopy 1.1."
+    'Setting linopy.options["semantics"] is deprecated and has no effect: '
+    "the v1 convention is the only behaviour. Drop the setting; it is "
+    "removed in linopy 1.1."
 )
 SEMANTICS_MIGRATION = (
     "The legacy semantics were removed in linopy 1.0 and v1 is the only "
@@ -59,7 +59,6 @@ class OptionSettings:
 
     def get_value(self, name: str) -> Any:
         if name == "semantics":
-            _warn_semantics()
             return "v1"
         if name in self._defaults:
             return self._current_values[name]
