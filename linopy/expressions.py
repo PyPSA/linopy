@@ -904,18 +904,21 @@ def _const_grid(grid: Grid, const: DataArray) -> Grid | None:
 
 def _check_full_const(value: Any, like: DataArray) -> None:
     """
-    Raise if the constant ``value`` holds a NaN (§5) or, aligned to ``like``,
-    leaves a cell of ``like`` uncovered.
+    Raise if the constant ``value``, aligned to ``like``, is missing at a cell
+    where ``like`` is present: a NaN (§5) or an uncovered coordinate. A NaN
+    where ``like`` is absent keeps that cell absent.
     """
     value = DataArray(value)
+    missing = value.broadcast_like(like).isnull() & like.notnull()
+    if not missing.any():
+        return
     if value.isnull().any():
         check_user_nan("`const`")
-    if value.broadcast_like(like).isnull().any():
-        raise ValueError(
-            "The assigned `const` does not cover every coordinate of the "
-            "expression. Reindex it to the expression's coordinates first, "
-            "e.g. with .reindex_like(expr.const, fill_value=0)."
-        )
+    raise ValueError(
+        "The assigned `const` does not cover every coordinate of the "
+        "expression. Reindex it to the expression's coordinates first, "
+        "e.g. with .reindex_like(expr.const, fill_value=0)."
+    )
 
 
 def _densified_operand(other: DataArray, reason: str) -> DataArray:
@@ -2141,8 +2144,9 @@ class BaseExpression(ABC):
         """
         Assign the data variables ``fields``, replacing existing ones wholesale.
 
-        An assigned ``const`` must be NaN-free and cover every coordinate of
-        the expression, as for the ``const`` setter.
+        An assigned ``const`` must cover every present cell of the expression
+        without NaN, as for the ``const`` setter; NaN at an absent cell keeps it
+        absent.
         """
         if "const" in fields:
             _check_full_const(fields["const"], self.const)
@@ -2509,7 +2513,7 @@ class LinearExpression(BaseExpression):
         if isinstance(store, DenseStore):
             store = DenseStore(store.ds.copy(deep=False), self._model)
         obj = type(self)._from_store(store, self._model)
-        obj._attrs = dict(self._attrs)
+        obj._attrs = dict(self.attrs)
         return obj
 
     def isel(self, *args: Any, **kwargs: Any) -> Self:

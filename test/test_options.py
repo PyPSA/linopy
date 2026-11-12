@@ -100,17 +100,18 @@ def test_context_restores_on_exception(options: OptionSettings) -> None:
     assert options.get_value("a") == 1
 
 
-@pytest.mark.parametrize("access", ["set", "get"])
-def test_semantics_v1_is_deprecated_noop(options: OptionSettings, access: str) -> None:
+def test_semantics_v1_is_deprecated_noop(options: OptionSettings) -> None:
     with pytest.warns(FutureWarning, match="semantics.*deprecated") as rec:
-        if access == "set":
-            options["semantics"] = "v1"
-        else:
-            assert options["semantics"] == "v1"
+        options["semantics"] = "v1"
     assert rec[0].filename == __file__
     assert "semantics" not in repr(options)
     options.reset()
     assert options.get_value("a") == 1
+
+
+@pytest.mark.filterwarnings("error")
+def test_semantics_reads_v1_silently(options: OptionSettings) -> None:
+    assert options["semantics"] == options.get_value("semantics") == "v1"
 
 
 @pytest.mark.parametrize("value", ["legacy", "other"])
