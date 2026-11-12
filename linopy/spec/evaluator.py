@@ -11,6 +11,7 @@ import numpy as np
 import xarray as xr
 from mathspec import program as ms
 
+from linopy.constants import FACTOR_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec import operators
 from linopy.spec.context import Array, Context, Term, Value, as_expression
@@ -193,7 +194,8 @@ def _combine(node: _Binary, ctx: Context) -> Value:
         if isinstance(node, ms.Add):
             a, b = constant_of(left), constant_of(right)
             refuse_made(kind, (node,), op, a, b, ctx)
-        return op(*_paired(left, right))
+        made = op(*_paired(left, right))
+        return _without_dead_terms(made) if isinstance(node, ms.Multiply) else made
     if not isinstance(left, xr.DataArray) and not isinstance(right, xr.DataArray):
         return op(left, right)
     a, b = xr.DataArray(left), xr.DataArray(right)
@@ -205,6 +207,22 @@ def _combine(node: _Binary, ctx: Context) -> Value:
                 f"coordinates, so the data was attached against other labels than the model was built on."
             )
     return refuse_made(kind, (node,), op, a, b, ctx)
+
+
+def _without_dead_terms(made: Value) -> Value:
+    """
+    A quadratic *made* whose terms the data zeroes throughout, as its constant.
+
+    A quadratic has no sparse (CSR) backing, so one left standing densifies
+    every sparse term it meets; its constant is built on the model's store.
+    """
+    if not isinstance(made, QuadraticExpression):
+        return made
+    data = made.data
+    live = (data.coeffs != 0) & (data.vars != -1).any(FACTOR_DIM)
+    if bool(live.any()):
+        return made
+    return LinearExpression.from_constant(made.model, data.const)
 
 
 def _off_rows(value: Value, ctx: Context) -> Value:

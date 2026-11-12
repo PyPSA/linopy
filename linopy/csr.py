@@ -685,15 +685,18 @@ class CSRStore(Store):
         reindex: bool = False,
     ) -> CSRStore | Reason:
         """
-        See :meth:`Store.combine`; ``const`` and ``factor`` must lie on the
-        grid dims, the auxiliary coordinates are those ``const`` carries.
+        See :meth:`Store.combine`; the cells are spread over the dims
+        ``const`` adds to the grid, the auxiliary coordinates are those
+        ``const`` carries.
         """
-        dims = self.grid.dims
-        if set(const.dims) != set(dims):
-            return f"{op.__name__}(constant over new dimensions)"
+        new = [str(d) for d in const.dims if d not in self.grid.dims]
+        dims = (*self.grid.dims, *new)
         const = const.transpose(*dims)
         grid = Grid.from_dataset(const, dims)
-        store = self.reindex(grid) if reindex else self
+        if new:
+            store = self.broadcast(grid)
+        else:
+            store = self.reindex(grid) if reindex else self
         if factor is not None:
             factor = factor.broadcast_like(const).transpose(*dims)
             store = store._scaled_terms(factor.to_numpy().reshape(-1), op)

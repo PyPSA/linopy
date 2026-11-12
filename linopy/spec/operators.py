@@ -189,12 +189,57 @@ def at(
     if any(not len(expression.indexes[d]) for d in positions):
         onto = {str(d): present.indexes[d] for d in present.dims}
         return _zeros(expression, tuple(positions), onto).where(present)
-    picked = expression.isel(positions)
+    if isinstance(expression, LinearExpression) and expression.is_sparse:
+        if set(positions) & set(present.dims):
+            return _at_by_rows(expression, positions, present)
+    picked = expression.isel(_keyed(positions, present))
     joined = [d for d in positions if d not in picked.dims]
     picked = picked.drop_vars(joined).assign_coords(present.coords)
     if bool(present.all()):
         return picked
     return picked.where(present)
+
+
+def _at_by_rows(
+    expression: LinearExpression,
+    positions: Mapping[str, xr.DataArray],
+    present: xr.DataArray,
+) -> LinearExpression:
+    """
+    :func:`at` of a sparse term read along a dimension of its own key, as a sum of one row per key tuple.
+
+    Read in place, the dimension keeps the labels it is read at as a
+    coordinate over the whole key, which a sparse (CSR) term cannot hold.
+    """
+    keys = [str(d) for d in present.dims]
+    held = np.nonzero(present.transpose(*keys).to_numpy())
+    grouped = {k: present.indexes[k][at_k].to_numpy() for k, at_k in zip(keys, held)}
+    joined = {k: grouped[k] for k in keys if k in expression.indexes}
+    for d, p in positions.items():
+        read = p.broadcast_like(present).transpose(*keys).to_numpy()[held]
+        joined[d] = expression.indexes[d][read].to_numpy()
+    onto = {k: present.indexes[k] for k in keys}
+    summed = cast(LinearExpression, grouped_sum(expression, joined, grouped, onto))
+    live = cast(xr.DataArray, at(~expression.isnull(), positions, present)) == 1
+    return summed.where(present & live)
+
+
+def _keyed(
+    positions: Mapping[str, xr.DataArray], present: xr.DataArray
+) -> dict[str, xr.DataArray]:
+    """
+    *positions* labelled by the key dimensions they do not read along.
+
+    A read left unlabelled makes dimensions without coordinates, which a
+    sparse (CSR) term cannot hold; one read along its own key dimension
+    stays unlabelled, as a coordinate there would conflict with the operand's.
+    """
+    return {
+        d: p.assign_coords(
+            {k: present.indexes[k] for k in p.dims if k not in positions}
+        )
+        for d, p in positions.items()
+    }
 
 
 def positions_of(labels: xr.DataArray, index: pd.Index) -> xr.DataArray:
@@ -353,9 +398,37 @@ def _gather(
     fill: float | None,
 ) -> Array:
     """*array* translated by *offset* along *over*, or inside each group of *partition*."""
+    sparse = isinstance(array, LinearExpression) and array.is_sparse
+    if sparse and isinstance(offset, xr.DataArray) and set(offset.dims) - {over}:
+        return _per_offset(array, over, offset, partition, wrap, fill)
     if partition is None:
         return _gather_by_offset(array, over, offset, wrap, fill)
     return _gather_in_groups(array, over, offset, partition, wrap, fill)
+
+
+def _per_offset(
+    array: Array,
+    over: str,
+    offset: xr.DataArray,
+    partition: Groups | None,
+    wrap: bool,
+    fill: float | None,
+) -> Array:
+    """
+    *array* gathered once per distinct *offset*, each gather kept where the offset is that amount.
+
+    An offset over other dimensions than *over* gathers along two dimensions
+    at once, which a sparse (CSR) term cannot select without densifying.
+    """
+    amounts = offset.to_series().dropna().unique().tolist() or [0]
+    terms: list[Array] = []
+    reached: list[xr.DataArray] = []
+    for amount in amounts:
+        moved = _gather(array, over, int(amount), partition, wrap, fill)
+        kept = moved.where(offset == amount)
+        terms.append(_filled(kept, 0.0))
+        reached.append(~kept.isnull())
+    return _merged(terms).where(reduce(operator.or_, reached))
 
 
 def _gather_by_offset(

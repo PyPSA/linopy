@@ -35,7 +35,7 @@ from linopy import (  # noqa: E402
     QuadraticExpression,
 )
 from linopy.spec import SpecDataError, evaluate  # noqa: E402
-from linopy.testing import assert_linequal  # noqa: E402
+from linopy.testing import assert_conequal, assert_linequal  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # operators, built as a constraint and folded as a named expression
@@ -390,6 +390,7 @@ def test_a_relation_into_its_own_dimension_joins_on_it(
         assert folded.values.tolist() == pytest.approx(want)
 
 
+E = pd.Index(["e1", "e2", "e3"], name="e")
 RELATION_SUMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
     "into-another-dim": (
         with_(
@@ -414,6 +415,109 @@ RELATION_SUMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
             "next_of": pd.DataFrame({"t": TT, "next": [1, 2, 2, 0]}),
         },
     ),
+    "beside-a-relation-that-maps-nothing": (
+        with_(
+            GROUPED_SPEC,
+            variables={"out": {"dims": ["generator"], "bounds": {"lower": 0}}},
+            expressions={
+                "summed": "imports + sum(out, over=generator, by=gen_bus[bus])"
+            },
+        ),
+        {
+            **grouped_sources(pd.Series([3.0, 4.0], index=GENS)),
+            "gen_bus": pd.DataFrame({"generator": [], "bus": []}, dtype=object),
+        },
+    ),
+    **{
+        name: (
+            {
+                "dimensions": {
+                    "t": {"dtype": "int", "ordered": True},
+                    "s": {"dtype": "str"},
+                    "e": {"dtype": "str"},
+                },
+                "relations": {
+                    "season_of": {"key": "t", "values": "s", "missing": "absent"}
+                },
+                "parameters": {"lag": {"dims": ["e"], "dtype": "int"}},
+                "variables": {"x": {"dims": ["t", "e"]}},
+                "expressions": {
+                    "summed": f"x + shift(2 * x, along=t, offset=lag, {edge})"
+                },
+            },
+            {
+                "t": TT,
+                "s": S,
+                "e": E,
+                "season_of": pd.DataFrame({"t": TT, "s": ["a", "a", "b", "b"]}),
+                "lag": pd.DataFrame({"e": E, "lag": [0, 1, 1]}),
+            },
+        )
+        for name, edge in {
+            "shift-by-an-entity-offset": "edge=0",
+            "shift-in-groups-by-an-entity-offset": "edge='wrap', within=season_of[s]",
+        }.items()
+    },
+    "at-of-a-term": (
+        with_(
+            GROUPED_SPEC,
+            variables={"out": {"dims": ["generator"], "bounds": {"lower": 0}}},
+            expressions={"summed": "out + at(2 * imports, by=gen_bus[bus])"},
+        ),
+        grouped_sources(pd.Series([3.0, 4.0], index=GENS)),
+    ),
+    "at-along-its-own-key": (
+        {
+            "dimensions": {
+                "t": {"dtype": "int", "ordered": True},
+                "e": {"dtype": "str"},
+            },
+            "relations": {
+                "source_of": {
+                    "key": ["e", "t"],
+                    "values": {"source": "t"},
+                    "missing": "absent",
+                }
+            },
+            "variables": {"x": {"dims": ["e", "t"]}},
+            "expressions": {
+                "summed": "at(shift(2 * x, along=t, offset=1), by=source_of[source])"
+            },
+        },
+        {
+            "t": TT,
+            "e": E,
+            "source_of": pd.DataFrame(
+                {"e": ["e1", "e1", "e3"], "t": [1, 3, 0], "source": [0, 2, 3]}
+            ),
+        },
+    ),
+    "cases-beside-data-over-more-dimensions": (
+        {
+            "dimensions": {
+                "t": {"dtype": "int", "ordered": True},
+                "e": {"dtype": "str"},
+            },
+            "parameters": {
+                "lag": {"dims": ["e"], "dtype": "int"},
+                "v": {"dims": ["t"]},
+            },
+            "variables": {"x": {"dims": ["e"]}},
+            "expressions": {
+                "summed": {
+                    "dims": ["e", "t"],
+                    "cases": {"lagged": {"when": "lag > 0", "expression": "x"}},
+                    "otherwise": "v",
+                }
+            },
+        },
+        {
+            "t": TT,
+            "e": E,
+            "lag": pd.DataFrame({"e": E, "lag": [0, 1, 1]}),
+            "v": pd.DataFrame({"t": TT, "v": V}),
+        },
+    ),
 }
 
 
@@ -429,6 +533,26 @@ def test_a_relation_sum_keeps_the_backing_and_matches_dense(
     summed = m.expressions["summed"]
     assert summed.is_sparse == backend.sparse
     assert_linequal(summed, Model.from_spec(spec, data).expressions["summed"])
+
+
+def test_a_rhs_over_a_dimension_the_term_lacks_keeps_the_backing(
+    backend: Model,
+) -> None:
+    """A sparse term met a rhs over another dimension by densifying."""
+    spec = {
+        "dimensions": {"t": {"dtype": "int", "ordered": True}, "e": {"dtype": "str"}},
+        "parameters": {"cap": {"dims": ["t", "e"]}},
+        "variables": {"x": {"dims": ["t"]}},
+        "constraints": {"limit": {"dims": ["t", "e"], "expression": "2 * x <= cap"}},
+    }
+    cap = xr.DataArray(np.arange(12.0).reshape(4, 3), coords=[TT, E], name="cap")
+    data = {"t": TT, "e": E, "cap": cap}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", PerformanceWarning)
+        m = Model.from_spec(spec, data, sparse=backend.sparse)
+    limit = m.constraints["limit"]
+    assert limit.lhs.is_sparse == backend.sparse
+    assert_conequal(limit, Model.from_spec(spec, data).constraints["limit"])
 
 
 # ---------------------------------------------------------------------------
