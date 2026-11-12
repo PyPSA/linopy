@@ -561,13 +561,18 @@ def test_advance_without_selection_keeps_the_window() -> None:
 
 
 def knapsack_model() -> Model:
-    """A binary knapsack that HiGHS does not solve at its first incumbent."""
-    items = pd.RangeIndex(12, name="item")
-    weight = xr.DataArray(np.arange(12) * 37 % 41 + 5, coords=[items])
-    value = xr.DataArray(np.arange(12) * 29 % 43 + 5, coords=[items])
+    """
+    A binary knapsack that HiGHS does not solve at its first incumbent.
+
+    Values are strongly correlated with weights, which defeats the primal
+    heuristics of HiGHS 1.15 and 1.16 alike.
+    """
+    items = pd.RangeIndex(30, name="item")
+    weight = xr.DataArray(np.arange(30) * 37 % 41 + 5, coords=[items])
+    value = weight + 10
     m = Model()
     x = m.add_variables(binary=True, coords=[items], name="x")
-    m.add_constraints((weight * x).sum() <= 60, name="cap")
+    m.add_constraints((weight * x).sum() <= 373, name="cap")
     m.add_objective(-(value * x).sum())
     return m
 
