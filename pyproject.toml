@@ -98,8 +98,8 @@ benchmarks = [
 ]
 solvers = [
     "gurobipy",
-    "highspy>=1.5.0,!=1.14.0; python_version < '3.12'",
-    "highspy>=1.7.1,!=1.14.0; python_version >= '3.12'",
+    "highspy>=1.5.0,!=1.14.0,!=1.16.0; python_version < '3.12'",
+    "highspy>=1.7.1,!=1.14.0,!=1.16.0; python_version >= '3.12'",
     "cplex; platform_system != 'Darwin'",
     "mosek",
     "mindoptpy",
