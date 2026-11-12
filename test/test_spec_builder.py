@@ -133,6 +133,7 @@ PYPSA_DATA: dict[str, Any] = {
     "StorageUnit_state_of_charge_initial_per_period": False,
     "Store_e_initial_per_period": False,
     "period_weight_years": 1.0,
+    "Generator_marginal_cost_curve_p": np.nan,
 }
 
 
@@ -1002,6 +1003,26 @@ def test_a_quadratic_objective_builds() -> None:
     )
     m = Model.from_spec(spec, {"t": T, "k": xr.zeros_like(FULL_C)})
     assert isinstance(m.objective.expression, linopy.QuadraticExpression)
+
+
+@pytest.mark.parametrize(
+    ("k", "quadratic"),
+    [
+        pytest.param([0.0, 0.0, 0.0], False, id="zeroed"),
+        pytest.param([0.0, 0.0, 2.0], True, id="kept"),
+    ],
+)
+def test_an_objective_is_quadratic_only_where_the_data_keeps_a_product(
+    k: list[float], quadratic: bool
+) -> None:
+    """A quadratic cost whose coefficients are all zero left a QuadraticExpression objective."""
+    spec = with_(
+        QUADRATIC_SPEC,
+        constraints={"cap": {"dims": ["t"], "expression": "x + y <= 5"}},
+        objective={"sense": "maximize", "expression": "sum(k * x * y + x, over=t)"},
+    )
+    m = Model.from_spec(spec, {"t": T, "k": xr.DataArray(k, coords=[T])})
+    assert isinstance(m.objective.expression, linopy.QuadraticExpression) is quadratic
 
 
 def test_a_named_expression_reading_a_dual_is_not_built() -> None:

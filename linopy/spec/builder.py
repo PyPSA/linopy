@@ -242,7 +242,32 @@ def _objective(ctx: Context) -> None:
         raise SpecDataError(
             "the objective carries no variable term once the data is attached, so there is nothing to optimize"
         )
-    ctx.model.add_objective(expr, overwrite=True, sense=_SENSE[declared.sense])
+    ctx.model.add_objective(
+        _linear_if_no_product(expr), overwrite=True, sense=_SENSE[declared.sense]
+    )
+
+
+def _linear_if_no_product(expr: Term) -> Term:
+    """
+    A quadratic *expr* whose products the data zeroes, as the linear expression it is.
+
+    A spec states a quadratic cost once, and data whose quadratic coefficients
+    are all zero leaves only linear terms; the objective is then linear, so a
+    solver without quadratic support takes it and it can be read as a
+    constraint's left-hand side.
+    """
+    if not isinstance(expr, QuadraticExpression):
+        return expr
+    data = expr.data
+    first = data.vars.isel({FACTOR_DIM: 0})
+    second = data.vars.isel({FACTOR_DIM: 1})
+    product = (first != -1) & (second != -1) & (data.coeffs != 0)
+    if bool(product.any()):
+        return expr
+    vars_ = xr.where(first != -1, first, second)
+    coeffs = data.coeffs.where(vars_ != -1, 0)
+    linear = xr.Dataset({"coeffs": coeffs, "vars": vars_, "const": data.const})
+    return LinearExpression(linear, expr.model)
 
 
 def _expressions(ctx: Context) -> None:
