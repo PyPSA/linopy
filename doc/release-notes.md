@@ -124,6 +124,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `Variable.fix` accepts NaN or non-binary fix values at masked positions of a binary variable. `Variables.fix` validates all variables before fixing any.
 - `Model.from_spec` no longer raises on an `at()` lookup into an empty dimension. ([\#1141](https://github.com/PyPSA/linopy/pull/1141))
 - `Model.from_spec` builds a linear objective when the data sets all quadratic coefficients to zero. ([\#1141](https://github.com/PyPSA/linopy/pull/1141))
+- `Model.from_spec` no longer refuses an infinite parameter times a variable absent there, where no row is built. ([\#1143](https://github.com/PyPSA/linopy/pull/1143))
 - `add_piecewise_formulation` no longer raises on a dimension labelled by tuples, e.g. `(period, timestep)` snapshots. ([\#1140](https://github.com/PyPSA/linopy/pull/1140))
 - The repr of a long expression shows the last terms of a `QuadraticExpression` after the `...` and prints the constant once. ([\#1023](https://github.com/PyPSA/linopy/pull/1023))
 

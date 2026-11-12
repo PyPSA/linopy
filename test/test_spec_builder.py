@@ -698,6 +698,34 @@ def test_arithmetic_is_not_refused_on_a_row_masked_out() -> None:
     assert int(m.constraints["row"].labels.sel(t=0)) == -1
 
 
+GATED_ON = {
+    "variables": {
+        "on": {
+            "dims": ["t"],
+            "where": "a < 2",
+            "missing": 0,
+            "bounds": {"lower": 0, "upper": 1},
+        }
+    }
+}
+
+
+def test_an_infinity_times_a_term_absent_there_is_not_refused_on_a_row_masked_out() -> (
+    None
+):
+    """``a * on`` read 0 * inf at t=0, a NaN core linopy refused though no row built there."""
+    spec = with_(quotient("x <= a * on", where="a < 2"), **GATED_ON)
+    m = Model.from_spec(spec, INF_AT_0)
+    assert m.constraints["row"].labels.values.tolist()[0] == -1, (
+        "the row at t=0 is masked out"
+    )
+
+
+def test_an_infinity_times_a_term_absent_there_is_refused_on_a_built_row() -> None:
+    with pytest.raises(ValueError, match="produced NaN"):
+        Model.from_spec(with_(quotient("x <= a * on"), **GATED_ON), INF_AT_0)
+
+
 def test_arithmetic_masked_out_for_one_row_is_refused_for_the_next_reading_it() -> None:
     masked = quotient("x + a / b >= 1", where="b > 0")
     spec = with_(
