@@ -199,7 +199,8 @@ def synthetic_sources(spec: SpecLike, n: int = 3) -> dict[str, Any]:
     a mapping or a ``mathspec.Spec``.
 
     Labels are numbered after their dimension, parameters a ramp rising along
-    every dimension,
+    every dimension, and a multi-dimension lists every other combination of its
+    members, those whose label positions add up to an even number,
     and each relation holds a row for every key tuple, each value column
     cycling through the labels it maps into on its own stride, so that a sum
     grouping by several columns reaches every group.
@@ -214,8 +215,13 @@ def synthetic_sources(spec: SpecLike, n: int = 3) -> dict[str, Any]:
     program = normalize_spec(spec)
 
     sources: dict[str, Any] = {
-        dim: _labels(dim, decl.dtype, n) for dim, decl in program.dimensions.items()
+        dim: _labels(dim, decl.dtype, n)
+        for dim, decl in program.dimensions.items()
+        if not decl.over
     }
+    for dim, decl in program.dimensions.items():
+        if decl.over:
+            sources[dim] = _combinations(decl.over, sources)
     for name, relation in program.relations.items():
         labels = [sources[relation.dim(role)] for role in relation.key]
         grid = pd.MultiIndex.from_product(labels, names=relation.key)
@@ -228,6 +234,12 @@ def synthetic_sources(spec: SpecLike, n: int = 3) -> dict[str, Any]:
     for name, parameter in program.parameters.items():
         sources[name] = _parameter(name, parameter, sources, n)
     return sources
+
+
+def _combinations(members: tuple[str, ...], sources: dict[str, Any]) -> pd.DataFrame:
+    """Every other combination of *members*' labels, as the table of a multi-dimension."""
+    grid = pd.MultiIndex.from_product([sources[m] for m in members], names=members)
+    return grid[sum(grid.codes) % 2 == 0].to_frame(index=False)
 
 
 def _labels(name: str, dtype: str | None, n: int) -> pd.Index:
@@ -243,7 +255,8 @@ def _parameter(
     name: str, declared: ms.Parameter, sources: dict[str, Any], n: int
 ) -> Any:
     dims = declared.dims
-    shape = [n] * len(dims)
+    coords = {d: _axis(d, sources) for d in dims}
+    shape = [len(coords[d]) for d in dims]
     if declared.dtype == "bool":
         values: Any = np.ones(shape, dtype=bool)
     elif declared.dtype == "int":
@@ -256,4 +269,13 @@ def _parameter(
         values = np.array(1.0)
     if not dims:
         return values.item()
-    return xr.DataArray(values, coords={d: sources[d] for d in dims}, dims=list(dims))
+    return xr.DataArray(values, coords=coords, dims=list(dims))
+
+
+def _axis(dim: str, sources: dict[str, Any]) -> pd.Index:
+    """The labels of *dim*: a multi-dimension's combinations as tuples."""
+    labels = sources[dim]
+    if not isinstance(labels, pd.DataFrame):
+        return labels
+    rows = list(labels.itertuples(index=False, name=None))
+    return pd.Index(rows, dtype=object, tupleize_cols=False, name=dim)

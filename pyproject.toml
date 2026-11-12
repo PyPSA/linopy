@@ -109,7 +109,7 @@ solvers = [
     "knitro>=15.1.0",
 ]
 spec = [
-    "mathspec @ git+https://github.com/energy-models/mathspec.git@18bd11b62a2529dd237047755598a85aa495c6f3 ; python_version >= '3.12'",
+    "mathspec @ git+https://github.com/energy-models/mathspec.git@4d889421cb8900b6708f1125e5809019e74e2f42 ; python_version >= '3.12'",
     "pyarrow",
 ]
 # GPU-only solvers kept separate to avoid env clutter.

@@ -127,6 +127,31 @@ with mathspec's semantics: an unnamed key column is joined on and kept, and
 `by=` may name a list of columns. `within=` partitions by one value column
 of a relation keyed by the stepped dimension alone.
 
+**Multi-dimensions.** A dimension declared `over: [unit, bus]` lists the
+combinations of its members that exist. Its source is a table with exactly
+one column per member and one row per combination, or a `pandas.MultiIndex`
+whose level names are the members. Every label must be a member of its
+column's dimension, and each combination appears once. linopy labels the
+dimension with tuples of member labels, in the order of the members sorted by
+name, so `connection` above has labels such as `("b1", "u1")`:
+
+```python
+# connection: {over: [unit, bus]}
+sources["connection"] = pd.DataFrame({"unit": ["u1", "u1"], "bus": ["b1", "b2"]})
+# efficiency: {dims: [connection, snapshot]}
+sources["efficiency"] = pd.DataFrame(
+    {"unit": ["u1"], "bus": ["b2"], "snapshot": [0], "efficiency": [0.9]}
+)
+```
+
+A table over a multi-dimension carries the member columns in its place, and a
+row at a combination the dimension does not list is refused. A grid is a
+`DataArray` over the tuple labels, or one stacked over the members with
+`DataArray.stack(connection=["unit", "bus"])`. `sum(x, over=unit)` groups the
+listed combinations and builds no grid over every combination of the members.
+A sum through a relation on a member, and a constraint or a `where:` over the
+members, read a multi-dimension on that grid.
+
 !!! note
 
     A parameter, unlike a relation, is laid out on the full grid of its dimensions once a declaration reads it, so its memory follows the grid, not the rows of its table; `store=True` stores that grid. Reduce sparse data on a large grid before attaching it, e.g. pass `sum(c, over=t)` as its own parameter, summed with pandas.
@@ -359,7 +384,10 @@ before a solve raises `AttributeError`, one that reads a `refused` hole
 carry the data a model was built with `store=True` like any other
 parameter. Object parameters, such as a `str`
 parameter with a hole, keep their `NaN` holes on both the `netcdf4` and the
-`scipy` engine; an object parameter mixing types is refused on write.
+`scipy` engine; an object parameter mixing types is refused on write. A
+netCDF file cannot hold the tuple labels of a
+[multi-dimension](#the-source-contract), so a model over one cannot be written:
+keep its sources to rebuild it.
 
 The restored model is a plain linopy model with its solution and parameters,
 so `evaluate(spec, restored)` works on it directly if it was built with

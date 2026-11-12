@@ -18,7 +18,10 @@ Each kind of data takes one shape, and anything else is refused rather than
 guessed at. A table is a pandas or polars DataFrame carrying its labels in
 columns named after the dimensions or roles, never in its index, and no
 column beyond those it is read for. A grid is a DataArray over the declared
-dimensions. A dimension is a flat sequence of unique labels.
+dimensions. A dimension is a flat sequence of unique labels. A multi-dimension
+is a table of the combinations it lists, one column per member, and its
+labels are tuples of member labels in the order of its members; a table over
+it carries the member columns in its place.
 """
 
 from __future__ import annotations
@@ -183,7 +186,8 @@ class Attached:
         if name not in self.keys:
             raise SpecDataError(f"no data provided for parameter '{name}'")
         declared = self.program.parameters[name]
-        lay_out = _as_array(name, declared, self.sources[name], self.coords)
+        over = combined(self.program)
+        lay_out = _as_array(name, declared, self.sources[name], self.coords, over)
         if declared.dtype != "bool":
             return lay_out
 
@@ -212,6 +216,10 @@ def _from_dataset(program: ms.Program, data: xr.Dataset) -> dict[str, Any]:
     """
     out: dict[str, Any] = {str(k): v for k, v in data.indexes.items()}
     out.update({str(k): v for k, v in data.data_vars.items()})
+    for dim, members in combined(program).items():
+        if dim in out:
+            rows = pd.DataFrame(list(out[dim]), columns=list(members))
+            out[dim] = rows.astype({m: out[m].dtype for m in members if m in out})
     for name, rel in program.relations.items():
         if name not in out or len(rel.key) != 1 or len(rel.values) != 1:
             continue
@@ -250,28 +258,46 @@ def _warn_near_misses(keys: frozenset[str], program: ms.Program) -> None:
 # ---------------------------------------------------------------------------
 
 
+def combined(program: ms.Program) -> dict[str, tuple[str, ...]]:
+    """The members of each multi-dimension of *program*, by its name."""
+    return {d: dim.over for d, dim in program.dimensions.items() if dim.over}
+
+
 def reached_dimensions(program: ms.Program) -> set[str]:
     p = program
     sections = (p.parameters, p.variables, p.constraints, p.relations)
-    return {d for section in sections for decl in section.values() for d in decl.dims}
+    reached = {
+        d for section in sections for decl in section.values() for d in decl.dims
+    }
+    over = combined(program)
+    return reached.union(*(over[d] for d in reached if d in over))
 
 
 def _master_coords(
     program: ms.Program, sources: Mapping[str, Any], keys: frozenset[str]
 ) -> dict[str, pd.Index]:
-    reached = reached_dimensions(program)
+    over = combined(program)
+    given = (over[d] for d in over if d in keys)
+    reached = reached_dimensions(program).union(*given)
     coords: dict[str, pd.Index] = {}
-    for dim in program.dimensions:
-        if dim in keys:
+    for dim in sorted(program.dimensions, key=lambda d: d in over):
+        if dim in over and dim in keys:
+            coords[dim] = _combinations(dim, sources[dim], over[dim], coords)
+        elif dim in keys:
             coords[dim] = _index(dim, sources[dim], program.dimensions[dim])
         elif dim in reached:
-            raise SpecDataError(
-                f"dimension '{dim}' has no index: pass its labels under key '{dim}' as "
-                f"{_DIMENSION_SHAPES}. The index is what says which labels exist, and without "
-                f"one a mistyped label is indistinguishable from a new one. "
-                + _UNIQUE_HINT.format(dim=dim)
-            )
+            raise no_index(dim)
     return coords
+
+
+def no_index(dim: str) -> SpecDataError:
+    """The refusal for a dimension the spec reads and the sources give no labels for."""
+    return SpecDataError(
+        f"dimension '{dim}' has no index: pass its labels under key '{dim}' as "
+        f"{_DIMENSION_SHAPES}. The index is what says which labels exist, and without "
+        f"one a mistyped label is indistinguishable from a new one. "
+        + _UNIQUE_HINT.format(dim=dim)
+    )
 
 
 def _index(dim: str, obj: Any, declared: ms.Dimension) -> pd.Index:
@@ -320,6 +346,59 @@ def _index(dim: str, obj: Any, declared: ms.Dimension) -> pd.Index:
             + _UNIQUE_HINT.format(dim=dim)
         )
     return index
+
+
+def _combinations(
+    dim: str, obj: Any, members: tuple[str, ...], coords: Mapping[str, pd.Index]
+) -> pd.Index:
+    """
+    The combinations the table *obj* lists, as labels of the multi-dimension *dim*.
+
+    Each label is the tuple of its member labels, in the order of *members*,
+    each taken from its member's index so it compares equal to it.
+    """
+    obj = _pandas(obj)
+    if isinstance(obj, pd.MultiIndex):
+        obj = obj.to_frame(index=False)
+    if not isinstance(obj, pd.DataFrame):
+        raise SpecDataError(
+            f"dimension '{dim}' combines {list(members)}, so its labels are the combinations its "
+            f"table lists, and it arrived as {type(obj).__name__}. Pass a pandas or polars "
+            f"DataFrame with the columns {list(members)}, one row per combination, or a pandas "
+            f"MultiIndex with those level names."
+        )
+    what = f"dimension '{dim}'"
+    _check_table(what, obj, members)
+    if bool(obj.isna().any(axis=None)):
+        raise SpecDataError(
+            f"{what} lists a combination with no label, null or NaN, in a member column. "
+            f"Each row names one label of each of {list(members)}."
+        )
+    labels = [_member_labels(what, m, pd.Index(obj[m]), coords[m]) for m in members]
+    index = pd.Index(list(zip(*labels)), dtype=object, tupleize_cols=False, name=dim)
+    if index.has_duplicates:
+        raise SpecDataError(
+            f"{what} lists {shown(_twice(index))} more than once. A combination is one label of "
+            f"'{dim}', so each row of its table appears once."
+        )
+    return index
+
+
+def _member_labels(
+    what: str, member: str, labels: pd.Index, known: pd.Index
+) -> pd.Index:
+    """*labels* as *known* holds them, refusing a label *known* lacks."""
+    if not len(labels):
+        return known[:0]
+    _refuse_label_type(what, member, labels, known)
+    found = known.get_indexer(labels)
+    if (found < 0).any():
+        raise SpecDataError(
+            f"{what} has label(s) in member '{member}' that are not coordinates of it: "
+            f"{shown(labels[found < 0].unique().tolist())}.\n  {member} has: "
+            f"{shown(known.tolist(), 10)}\nFix the label, or add it to sources['{member}']."
+        )
+    return known[found]
 
 
 def _pandas(obj: Any) -> Any:
@@ -543,14 +622,16 @@ def _as_array(
     declared: ms.Parameter,
     obj: Any,
     coords: Mapping[str, pd.Index],
+    over: Mapping[str, tuple[str, ...]],
 ) -> Callable[[], Parameter]:
     """*obj* checked as the data of parameter *name*, and the call laying it out on *coords*."""
     obj = _pandas(obj)
     dims = declared.dims
+    multi = {d: over[d] for d in dims if d in over}
     if isinstance(obj, xr.DataArray):
-        return _from_dense(name, declared, obj, coords)
+        return _from_dense(name, declared, _unstacked_index(obj, multi), coords)
     if dims and isinstance(obj, pd.DataFrame):
-        return _from_table(name, declared, obj, coords)
+        return _from_table(name, declared, obj, coords, multi)
     if not dims and isinstance(obj, _SCALARS):
         return _from_scalar(name, declared, obj)
     if not dims:
@@ -561,7 +642,7 @@ def _as_array(
         )
     raise SpecDataError(
         f"parameter '{name}': cannot read {type(obj).__name__} as values over {list(dims)}; "
-        f"pass a pandas or polars DataFrame with exactly the columns {[*dims, name]}, or a "
+        f"pass a pandas or polars DataFrame with exactly the columns {_columns(dims, multi, name)}, or a "
         f"DataArray over {list(dims)}."
     )
 
@@ -609,6 +690,30 @@ def _from_dense(
     return functools.partial(_aligned, arr.transpose(*dims), onto)
 
 
+def _unstacked_index(
+    arr: xr.DataArray, multi: Mapping[str, tuple[str, ...]]
+) -> xr.DataArray:
+    """*arr* with a stacked MultiIndex over a multi-dimension read as its tuple labels, members in declared order."""
+    for dim, members in multi.items():
+        index = arr.indexes.get(dim)
+        if isinstance(index, pd.MultiIndex) and set(index.names) == set(members):
+            tuples = pd.Index(
+                list(index.reorder_levels(list(members))),
+                dtype=object,
+                tupleize_cols=False,
+                name=dim,
+            )
+            arr = arr.drop_vars([dim, *members]).assign_coords({dim: tuples})
+    return arr
+
+
+def _columns(
+    dims: Sequence[str], multi: Mapping[str, tuple[str, ...]], name: str
+) -> list[str]:
+    """The columns a table of *dims* carries: each multi-dimension's members in its place, then the values."""
+    return [*(c for d in dims for c in multi.get(d, (d,))), name]
+
+
 def _check_dense_dtype(name: str, declared: str, arr: xr.DataArray) -> None:
     """Refuse values of another type than declared, accepting floats with a hole for an ``int`` or ``bool`` grid."""
     held = {"int": "whole numbers", "bool": "0 or 1"}
@@ -631,15 +736,20 @@ def _from_table(
     declared: ms.Parameter,
     df: pd.DataFrame,
     coords: Mapping[str, pd.Index],
+    multi: Mapping[str, tuple[str, ...]],
 ) -> Callable[[], Parameter]:
     """
     A table of rows, one column per dim and the values under the parameter's name.
 
     A coordinate the table leaves out is a missing row; a row holding no value
-    is refused, since it says the coordinate exists and denies it at once.
+    is refused, since it says the coordinate exists and denies it at once. A
+    multi-dimension is read off its member columns, and a row at a combination
+    it does not list is refused.
     """
     dims = declared.dims
-    _check_table(f"parameter '{name}'", df, [*dims, name])
+    _check_table(f"parameter '{name}'", df, _columns(dims, multi, name))
+    for dim, members in multi.items():
+        df = _stacked(name, df, dim, members, coords)
     series = df.set_index(list(dims))[name]
     if series.empty:
         series = series.astype(_EMPTY_DTYPES[declared.dtype])
@@ -661,6 +771,28 @@ def _from_table(
         positions.append(_positions(name, d, labels, index))
     at = np.ravel_multi_index(positions, tuple(len(i) for i in onto.values()))
     return functools.partial(_on_grid, at, series.to_numpy(), onto)
+
+
+def _stacked(
+    name: str,
+    df: pd.DataFrame,
+    dim: str,
+    members: tuple[str, ...],
+    coords: Mapping[str, pd.Index],
+) -> pd.DataFrame:
+    """*df* with the member columns of *dim* read as one column of its labels, refusing a combination it does not list."""
+    what = f"parameter '{name}'"
+    labels = [_member_labels(what, m, pd.Index(df[m]), coords[m]) for m in members]
+    combinations = pd.Index(list(zip(*labels)), dtype=object, tupleize_cols=False)
+    unlisted = combinations[~combinations.isin(coords[dim])]
+    if len(unlisted):
+        raise SpecDataError(
+            f"{what} has row(s) at combinations of {list(members)} that '{dim}' does not list: "
+            f"{coordinates_shown(members, unlisted.unique()[:3])}. An entry over '{dim}' has a row "
+            f"only at a combination its table lists. Drop the rows, or add the combinations to "
+            f"sources['{dim}']."
+        )
+    return df.drop(columns=list(members)).assign(**{dim: combinations})
 
 
 def _positions(name: str, dim: str, labels: pd.Index, index: pd.Index) -> np.ndarray:
