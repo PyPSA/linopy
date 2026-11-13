@@ -2352,7 +2352,7 @@ class LinearExpression(BaseExpression):
     @property
     def is_constant(self) -> bool:
         """True if the expression contains no variables."""
-        return self._store.nterm == 0
+        return self._store.is_constant
 
     @property
     def coord_dims(self) -> tuple[Hashable, ...]:

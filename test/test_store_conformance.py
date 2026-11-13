@@ -569,6 +569,22 @@ def test_const_assign_keeps_absent_cells_absent(backend: Model, assigner: str) -
     assert_equivalent(res, want)
 
 
+IS_CONSTANT: dict[str, tuple[Callable[[Model], LinearExpression], bool]] = {
+    "from_constant": (lambda m: LinearExpression.from_constant(m, OVER_A), True),
+    "scalar_constant": (lambda m: LinearExpression.from_constant(m, 0), True),
+    "terms_reduced_away": (lambda m: (single(m) * 0) @ OVER_A, True),
+    "variable": (single, False),
+    "variable_plus_constant": (lambda m: single(m) + 1, False),
+    "zero_cells": (zero_size, False),
+}
+
+
+@pytest.mark.parametrize("case", list(IS_CONSTANT))
+def test_is_constant(backend: Model, case: str) -> None:
+    build, want = IS_CONSTANT[case]
+    assert build(backend).is_constant is want
+
+
 def test_nan_constant_operand_rejects(backend: Model) -> None:
     expr = grid(backend)
     with no_densify(), pytest.raises(ValueError, match="NaN found"):
