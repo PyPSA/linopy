@@ -10,6 +10,8 @@ to is a :data:`Value`: a number, an array or a linopy term.
 
 from __future__ import annotations
 
+import os
+
 from collections import Counter
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass, field
@@ -23,6 +25,8 @@ from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.model import Model
 from linopy.spec.attach import Parameter, Table
 from linopy.variables import Variable
+
+PROTO = frozenset(os.environ.get("LINOPY_SPEC_PROTO", "").split(","))
 
 Term = Variable | LinearExpression | QuadraticExpression
 Array = xr.DataArray | Term

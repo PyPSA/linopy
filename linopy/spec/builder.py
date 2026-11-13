@@ -21,7 +21,7 @@ from mathspec import program as ms
 
 from linopy.constants import FACTOR_DIM, TERM_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression
-from linopy.spec.context import Context, Term, Value, as_expression
+from linopy.spec.context import PROTO, Context, Term, Value, as_expression
 from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.evaluator import (
     carried,
@@ -32,7 +32,7 @@ from linopy.spec.evaluator import (
     refuse_made,
     without_strays,
 )
-from linopy.spec.where import as_linopy_mask, evaluate_where
+from linopy.spec.where import any_row, as_linopy_mask, evaluate_where
 from linopy.variables import Variable
 
 _FLIPPED: dict[str, ms.ConstraintSense] = {"==": "==", "<=": ">=", ">=": "<="}
@@ -58,6 +58,10 @@ def build(ctx: Context) -> None:
     _expressions(ctx)
 
 
+def _empty(dims: tuple[str, ...], ctx: Context) -> bool:
+    return any(len(ctx.coords[d]) == 0 for d in dims)
+
+
 def _check_assumptions(ctx: Context) -> None:
     """
     Refuse the data wherever an assumption of the program does not hold.
@@ -68,6 +72,8 @@ def _check_assumptions(ctx: Context) -> None:
     a missing row on either side of a comparison reads as false there.
     """
     for name, assumption in ctx.program.assumptions.items():
+        if "short" in PROTO and not any_row(assumption.where, ctx):
+            continue
         admitted = evaluate_where(assumption.where, ctx)
         held = evaluate_where(assumption.holds, ctx)
         failing = admitted & ~held
@@ -80,6 +86,15 @@ def _check_assumptions(ctx: Context) -> None:
 
 def _variables(ctx: Context) -> None:
     for name, declared in ctx.program.variables.items():
+        if "empty" in PROTO and _empty(declared.dims, ctx):
+            ctx.memo.skipped(*(b for b in (declared.lower, declared.upper) if b is not None))
+            ctx.model.add_variables(
+                coords={d: ctx.coords[d] for d in declared.dims},
+                name=name,
+                binary=declared.domain == "binary",
+                integer=declared.domain == "integer",
+            )
+            continue
         rows = evaluate_where(declared.where, ctx)
         for bound in (declared.lower, declared.upper):
             if bound is not None:
@@ -118,6 +133,12 @@ def _sos(ctx: Context) -> None:
 
 def _constraints(ctx: Context) -> None:
     for name, row in ctx.program.constraints.items():
+        if "empty" in PROTO and _empty(row.dims, ctx):
+            ctx.memo.skipped(row.lhs, row.rhs)
+            continue
+        if "short" in PROTO and not any_row(row.where, ctx):
+            ctx.memo.skipped(row.lhs, row.rhs)
+            continue
         rows = evaluate_where(row.where, ctx)
         if not bool(rows.any()):
             ctx.memo.skipped(row.lhs, row.rhs)
@@ -277,8 +298,12 @@ def _expressions(ctx: Context) -> None:
     A data-only body has no linopy term to hold, and one reading a ``dual``
     needs a solved model: both are left to :func:`linopy.spec.evaluate`.
     """
+    if "noexpr" in PROTO:
+        return
     for name, declared in ctx.program.expressions.items():
         body = declared.expression
+        if "empty" in PROTO and _empty(declared.dims, ctx):
+            continue
         refuse_holes(f"expression '{name}'", [body], ctx)
         if not ms.carries_variable(body) or any(
             isinstance(n, ms.Dual) for n in ms.walk(body)

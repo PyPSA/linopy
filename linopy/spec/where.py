@@ -11,7 +11,7 @@ import xarray as xr
 from mathspec import program as ms
 
 from linopy.spec import operators
-from linopy.spec.context import Array, Context
+from linopy.spec.context import PROTO, Array, Context
 from linopy.spec.errors import SpecDataError
 
 _COMPARISONS: dict[str, Callable[..., xr.DataArray]] = {
@@ -29,6 +29,29 @@ def evaluate_where(mask: ms.Mask | None, ctx: Context) -> xr.DataArray:
     if mask is None:
         return xr.DataArray(True)
     return _node(mask.root, ctx)
+
+
+def any_row(mask: ms.Mask | None, ctx: Context) -> bool:
+    """Whether *mask* admits a row, its conjuncts read left to right until one admits none."""
+    if mask is None:
+        return True
+    conjuncts = []
+    stack = [mask.root]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ms.ConditionReference):
+            stack.append(node.body)
+        elif isinstance(node, ms.And):
+            stack += [node.right, node.left]
+        else:
+            conjuncts.append(node)
+    kept: xr.DataArray | None = None
+    for node in conjuncts:
+        value = _node(node, ctx)
+        kept = value if kept is None else kept & value
+        if not bool(kept.any()):
+            return False
+    return True
 
 
 def admitted(name: str, ctx: Context) -> xr.DataArray:

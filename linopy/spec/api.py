@@ -31,7 +31,7 @@ from linopy.spec.attach import (
     reached_dimensions,
 )
 from linopy.spec.builder import build
-from linopy.spec.context import Context, Memo, uses_of
+from linopy.spec.context import PROTO, Context, Memo, uses_of
 from linopy.spec.errors import SpecDataError, shown, unknown
 from linopy.spec.evaluator import fold
 from linopy.spec.where import admitted
@@ -78,8 +78,11 @@ def _build(model: Model, program: ms.Program, sources: Sources, store: bool) -> 
     """
     attached = attach(program, sources)
     relations = _storable(attached) if store else {}
-    laid_out = {name: attached.check(name) for name in program.parameters}
-    raw = functools.cache(lambda name: laid_out[name]())
+    if "lazy" in PROTO and not store:
+        raw = functools.cache(lambda name: attached.check(name)())
+    else:
+        laid_out = {name: attached.check(name) for name in program.parameters}
+        raw = functools.cache(lambda name: laid_out[name]())
     if store:
         unfilled = {name: raw(name).values for name in program.parameters}
         model.parameters = xr.Dataset(unfilled | relations, coords=attached.coords)
@@ -229,6 +232,11 @@ def lower(spec: SpecLike) -> ms.Program:
     return to_spec(spec).expand("piecewise").program
 
 
+@functools.lru_cache(maxsize=8)
+def _lowered(spec: Spec) -> ms.Program:
+    return lower(spec)
+
+
 def normalize_spec(spec: SpecLike) -> ms.Program:
     """
     *spec* lowered: a ``Path`` is read, a ``str`` is YAML text, a mapping is a spec as a dict, a ``Spec`` is used as it is.
@@ -259,7 +267,7 @@ def normalize_spec(spec: SpecLike) -> ms.Program:
             "from_spec takes the spec as a path, YAML text, a mapping or a mathspec.Spec, "
             f"not a {type(spec).__name__}."
         )
-    program = lower(spec)
+    program = _lowered(spec) if "cache" in PROTO and isinstance(spec, Spec) else lower(spec)
     if not (program.dimensions or program.parameters or program.variables):
         raise SpecDataError(
             "the spec declares nothing: no dimension, no parameter and no variable. "
