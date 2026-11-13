@@ -32,7 +32,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 
 - `Solver.from_file(name, problem_fn, options=...)` solves an existing LP/MPS file without a linopy model and leaves the file untouched. ([\#996](https://github.com/PyPSA/linopy/pull/996))
 - `LinearExpression.from_coo(model, coords, rows, vars, coeffs)` builds an expression from COO triplets (cell position, variable label, coefficient) on a coordinate grid.
-- `LinearExpression.to_coo()` returns the live terms of an expression as COO triplets, the inverse of `from_coo`. A sparse expression is read without a dense copy. (PRLINK)
+- `LinearExpression.to_coo()` returns the live terms of an expression as COO triplets, the inverse of `from_coo`. A sparse expression is read without a dense copy. ([\#1156](https://github.com/PyPSA/linopy/pull/1156))
 - `@`/`dot` contract a `DataArray` backed by a [pydata/sparse](https://sparse.pydata.org) array without densifying. Where no sparse path exists, e.g. for a `QuadraticExpression`, it densifies with a `PerformanceWarning`; `warn_on_densify=False` silences it.
 - `linopy.options["warn_on_absorbed_terms"] = True` emits an `AbsorbedTermsWarning` wherever an absent operand drops the present terms of another, e.g. in `p - r.reindex(unit=units)`. ([\#1135](https://github.com/PyPSA/linopy/issues/1135))
 - `linopy.testing.assert_equivalent` compares two linear expressions independently of their backing (dense or sparse) and term layout. ([\#1044](https://github.com/PyPSA/linopy/issues/1044))
