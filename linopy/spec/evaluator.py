@@ -102,13 +102,31 @@ def _sum(
     value = functools.partial(_operand, ctx=ctx) if of is None else of
     operand = node.operand
     plain = [axis.dimension for axis in node.over if axis.column is None]
-    if isinstance(operand, ms.Join) and operand.columns.axes:
-        summed = _through(value(operand.operand), operand.columns, ctx)
+    through = operand if isinstance(operand, ms.Join) and operand.columns.axes else None
+    inner = operand if through is None else through.operand
+    if of is None and any(len(ctx.coords[d]) == 0 for d in inner.dims):
+        ctx.memo.skipped(operand)
+        return _nothing_summed(node, ctx)
+    if through is None:
+        summed = value(inner)
     else:
-        summed = value(operand)
+        summed = _through(value(inner), through.columns, ctx)
     for dimension in plain:
         summed = operators.sum_over(summed, dimension)
     return summed
+
+
+def _nothing_summed(node: ms.Sum, ctx: Context) -> Array:
+    """The sum of an operand without a cell: the constant zero over the dims of *node*, a term where the operand holds a variable."""
+    as_term = not ctx.solved and ms.carries_variable(node.operand)
+
+    def zero() -> Array:
+        coords = {d: ctx.coords[d] for d in node.dims}
+        shape = [len(index) for index in coords.values()]
+        zeros = xr.DataArray(np.zeros(shape), coords=coords, dims=list(coords))
+        return LinearExpression.from_constant(ctx.model, zeros) if as_term else zeros
+
+    return ctx.memo.kept(("nothing summed", node.dims, as_term), zero)
 
 
 def _through(array: Array, columns: ms.JoinColumns, ctx: Context) -> Array:

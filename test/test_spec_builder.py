@@ -1337,6 +1337,31 @@ def test_a_declaration_without_a_row_reads_no_parameter() -> None:
     assert list(m.constraints) == []
 
 
+OVER_NOTHING: dict[str, dict[str, Any]] = {
+    "a summed term": {
+        "objective": {"sense": "minimize", "expression": "sum(x) + sum(y * limit)"}
+    },
+    "summed data": {
+        "constraints": {
+            "capped": {"dims": ["g"], "expression": "x <= 1 + sum(limit, over=h)"}
+        }
+    },
+    "an assumption": {"assumptions": {"bounded": {"holds": "bound > 0"}}},
+}
+
+
+@pytest.mark.parametrize("entries", OVER_NOTHING.values(), ids=list(OVER_NOTHING))
+def test_what_is_over_a_dimension_without_a_coordinate_reads_no_parameter(
+    entries: dict[str, Any],
+) -> None:
+    data = dead_rows_data()
+    spec = with_(DEAD_ROWS, **entries)
+    m = solved(spec, data, store=False)
+    assert set(data.read) & set(DEAD_ROWS["parameters"]) == {"on"}
+    assert list(m.constraints) == list(entries.get("constraints", {}))
+    assert m.objective.value == pytest.approx(0.0)
+
+
 @pytest.mark.parametrize("store", [False, True])
 def test_the_data_of_an_unread_parameter_is_checked_only_when_stored(
     store: bool,
