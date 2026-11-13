@@ -156,6 +156,9 @@ def _constraints(ctx: Context) -> None:
         if any(term.sizes[d] == 0 for d in term.coord_dims):
             continue
         _check_live(name, row, term, other, rows, ctx)
+        sides = [term, other] if isinstance(other, Term) else [term]
+        if all(as_expression(side).is_constant for side in sides):
+            continue
         if isinstance(other, xr.DataArray):
             const = constant_of(term)
             refuse_made(
