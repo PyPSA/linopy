@@ -197,3 +197,33 @@ def test_to_coo_leaves_out_masked_zero_and_absent_terms(m: Model) -> None:
     assert rows.tolist() == [0, 2, 3, 5]
     assert vars_.tolist() == live.ravel().tolist()
     assert coeffs.tolist() == [1.0] * 4
+
+
+def test_to_coo_dtypes(m: Model) -> None:
+    _, vars_, coeffs = (2 * m.variables["p"]).to_coo()
+    assert vars_.dtype == m._dtypes["labels"]
+    assert coeffs.dtype == float
+
+
+def test_to_coo_active_leaves_out_masked_constraint_rows(m: Model) -> None:
+    p = m.variables["p"]
+    mask = xr.DataArray([True, False, True], coords=[TIME])
+    con = m.add_constraints(2 * p >= 0, mask=mask, name="c")
+    rows, vars_, coeffs = con.lhs.to_coo(active=con.labels.values.ravel() != -1)
+    df = con.to_polars()
+    assert sorted(vars_.tolist()) == sorted(df["vars"].to_list())
+    assert np.unique(rows).size == df["labels"].n_unique()
+    assert coeffs.tolist() == [2.0] * len(df)
+
+
+def test_to_coo_active_shape(m: Model) -> None:
+    with pytest.raises(ValueError, match="one boolean per cell"):
+        m.variables["p"].to_linexpr().to_coo(active=np.ones(2, dtype=bool))
+
+
+def test_to_coo_cell_without_live_terms_comes_back_absent(m: Model) -> None:
+    expr = 0 * m.variables["f"] + 3
+    rows, vars_, coeffs = expr.to_coo()
+    assert rows.size == 0
+    back = LinearExpression.from_coo(m, [TIME, LINE], rows, vars_, coeffs)
+    assert back.const.isnull().all()

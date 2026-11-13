@@ -3066,12 +3066,8 @@ class LinearExpression(BaseExpression):
         columns, dropping absent cells and zero coefficients like the dense
         long format.
         """
-        counts, vars_, coeffs = self._store.terms()
-        return {
-            "const": np.repeat(self._store.const, counts),
-            "coeffs": coeffs.astype(float),
-            "vars": vars_.astype(self.model._dtypes["labels"]),
-        }
+        rows, vars_, coeffs = self.to_coo()
+        return {"const": self._store.const[rows], "coeffs": coeffs, "vars": vars_}
 
     def linear_terms(self) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -3503,17 +3499,30 @@ class LinearExpression(BaseExpression):
         store = CSRStore.from_labels(terms, model).aggregate(grid, rows_)
         return cls._from_store(store if model.sparse else store.to_dense(), model)
 
-    def to_coo(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def to_coo(
+        self, active: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Return the live terms of the expression as COO triplets.
 
-        The inverse of :meth:`from_coo`: ``rows[k]`` is the flat C-order
-        position of a cell on the grid of :attr:`coord_dims`, ``vars[k]`` the
-        variable label and ``coeffs[k]`` the coefficient of one of its terms.
-        A term is live when its cell is present, its label is not ``-1`` and
-        its coefficient is nonzero. The terms come in cell order and a sparse
-        (CSR) expression is read without a dense copy. The constant is not
-        part of the triplets.
+        ``rows[k]`` is the flat C-order position of a cell on the grid of
+        :attr:`coord_dims`, ``vars[k]`` the variable label and ``coeffs[k]``
+        the coefficient of one of its terms. A term is live when its cell is
+        present and, if given, ``active``, its label is not ``-1`` and its
+        coefficient is nonzero. The terms come in cell order, their order
+        within a cell is unspecified and a variable may appear more than once
+        in a cell. A sparse (CSR) expression is read without a dense copy.
+        The constant is not part of the triplets.
+
+        :meth:`from_coo` rebuilds the terms from the triplets. A cell without
+        live terms comes back absent, as it has no triplet.
+
+        Parameters
+        ----------
+        active : numpy.ndarray, optional
+            One boolean per cell in the order of ``rows``; terms of inactive
+            cells are left out. For the left-hand side of a constraint, pass
+            ``con.labels.values.ravel() != -1`` to leave out masked rows.
 
         Returns
         -------
@@ -3529,8 +3538,20 @@ class LinearExpression(BaseExpression):
         >>> rows.tolist(), vars.tolist(), coeffs.tolist()
         ([0, 1], [0, 1], [2.0, 2.0])
         """
-        counts, vars_, coeffs = self._store.terms()
-        return np.repeat(np.arange(counts.size), counts), vars_, coeffs
+        n_cells = self._store.n_cells
+        if active is not None and active.shape != (n_cells,):
+            raise ValueError(
+                f"active must hold one boolean per cell, shape ({n_cells},), "
+                f"got shape {active.shape}."
+            )
+        counts, vars_, coeffs = self._store.terms(active=active)
+        rows = np.repeat(np.arange(n_cells), counts)
+        labels_dtype = self.model._dtypes["labels"]
+        return (
+            rows,
+            vars_.astype(labels_dtype, copy=False),
+            coeffs.astype(float, copy=False),
+        )
 
 
 class QuadraticExpression(BaseExpression):
