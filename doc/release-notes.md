@@ -125,6 +125,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `Model.from_spec` no longer raises on an `at()` lookup into an empty dimension. ([\#1141](https://github.com/PyPSA/linopy/pull/1141))
 - `Model.from_spec` builds a linear objective when the data sets all quadratic coefficients to zero. ([\#1141](https://github.com/PyPSA/linopy/pull/1141))
 - `Model.from_spec` no longer refuses an infinite parameter times a variable absent there, where no row is built. ([\#1143](https://github.com/PyPSA/linopy/pull/1143))
+- `Model.from_spec` adds no constraint where every variable of it is masked, where it raised that both sides are constant. ([\#1154](https://github.com/PyPSA/linopy/pull/1154))
 - `LinearExpression(data, model)` no longer raises on a `.sel` over full coordinates. ([\#1144](https://github.com/PyPSA/linopy/pull/1144))
 - `LinearExpression.from_constant` builds on the model's store, so a sparse model's constant stays sparse and adding it emits no `PerformanceWarning`. ([\#1145](https://github.com/PyPSA/linopy/pull/1145))
 - `Model.from_spec(..., sparse=True)` keeps a `shift` whose offset differs per entity sparse, without a `PerformanceWarning`. ([\#1145](https://github.com/PyPSA/linopy/pull/1145))
