@@ -503,8 +503,9 @@ class Model:
 
         Parameters
         ----------
-        spec : str, pathlib.Path, dict or mathspec.Spec
-            The spec: a path, YAML text, a mapping or a loaded ``Spec``. A
+        spec : str, pathlib.Path, dict, mathspec.Spec or linopy.spec.Lowered
+            The spec: a path, YAML text, a mapping, a loaded ``Spec``, or
+            one lowered before by :func:`linopy.spec.lowered`. A
             ``str`` is always YAML text; pass a file as a ``pathlib.Path``.
             A one-line ``str`` ending in ``.yaml`` or ``.yml`` reads like a
             file name and is refused.

@@ -199,6 +199,14 @@ spec, the model and the data. Requires `pip install "linopy[spec]"` (Python \>= 
     options:
       heading_level: 3
 
+::: linopy.spec.lowered
+    options:
+      heading_level: 3
+
+::: linopy.spec.Lowered
+    options:
+      heading_level: 3
+
 ::: linopy.spec.SpecDataError
     options:
       heading_level: 3
