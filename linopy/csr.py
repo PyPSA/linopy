@@ -544,6 +544,10 @@ class CSRStore(Store):
     def dataarray(self, values: np.ndarray, name: str) -> DataArray:
         return self.grid.dataarray(values, name=name)
 
+    @property
+    def is_constant(self) -> bool:
+        return self.n_cells > 0 and not self.csr.nnz
+
     def has_terms(self) -> np.ndarray:
         return np.diff(self.csr.indptr) > 0
 

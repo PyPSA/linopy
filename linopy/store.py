@@ -183,6 +183,14 @@ class Store(ABC):
     def has_terms(self) -> np.ndarray:
         """Per cell, whether it holds a term, the constant ignored."""
 
+    @property
+    @abstractmethod
+    def is_constant(self) -> bool:
+        """
+        Whether the layout has no term slot, or it has cells and none of them
+        holds a term.
+        """
+
     @abstractmethod
     def cell(self, indices: tuple[Any, ...]) -> tuple[np.ndarray, np.ndarray, float]:
         """Coefficients, variable labels and constant of the cell at ``indices``."""
@@ -718,6 +726,12 @@ class DenseStore(Store):
     def dataarray(self, values: np.ndarray, name: str) -> DataArray:
         const = transposed(self.ds.const, self.dims)
         return const.copy(deep=False, data=values.reshape(const.shape)).rename(name)
+
+    @property
+    def is_constant(self) -> bool:
+        if not self.nterm:
+            return True
+        return self.n_cells > 0 and bool(self._term_views()[1].max() < 0)
 
     def has_terms(self) -> np.ndarray:
         vars_ = self._term_views()[1]
