@@ -1330,34 +1330,31 @@ def dead_rows_data(**overrides: Any) -> Recorded:
 
 def test_a_declaration_without_a_row_reads_no_parameter() -> None:
     data = dead_rows_data()
-    m = Model.from_spec(DEAD_ROWS, data, check_unread=False)
+    m = Model.from_spec(DEAD_ROWS, data)
     assert set(data.read) & set(DEAD_ROWS["parameters"]) == {"on"}
     assert list(m.variables) == ["x", "y"]
     assert m.variables["y"].size == 0
     assert list(m.constraints) == []
 
 
-@pytest.mark.parametrize("check_unread", [True, False])
-def test_an_unread_parameter_is_checked_unless_asked_not_to(check_unread: bool) -> None:
+@pytest.mark.parametrize("store", [False, True])
+def test_the_data_of_an_unread_parameter_is_checked_only_when_stored(
+    store: bool,
+) -> None:
     stray = xr.DataArray([1.0], coords=[pd.Index(["nowhere"], name="g")])
     data = dead_rows_data(cap=stray)
-    if not check_unread:
-        Model.from_spec(DEAD_ROWS, data, check_unread=False)
+    if not store:
+        Model.from_spec(DEAD_ROWS, data)
         return
     with pytest.raises(SpecDataError, match="cap"):
-        Model.from_spec(DEAD_ROWS, data)
+        Model.from_spec(DEAD_ROWS, data, store=True)
 
 
 def test_an_unread_parameter_still_needs_its_key() -> None:
     data = dead_rows_data()
     del data["cap"]
     with pytest.raises(SpecDataError, match="no data provided for parameter 'cap'"):
-        Model.from_spec(DEAD_ROWS, data, check_unread=False)
-
-
-def test_storing_refuses_to_leave_a_parameter_unread() -> None:
-    with pytest.raises(ValueError, match="check_unread=True"):
-        Model.from_spec(DEAD_ROWS, dead_rows_data(), store=True, check_unread=False)
+        Model.from_spec(DEAD_ROWS, data)
 
 
 @pytest.mark.parametrize(

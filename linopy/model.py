@@ -490,7 +490,6 @@ class Model:
         sources: Mapping[str, Any] | Dataset,
         store: bool = False,
         expressions: bool = True,
-        check_unread: bool = True,
         **model_kwargs: Any,
     ) -> Model:
         """
@@ -528,12 +527,6 @@ class Model:
             Add the named expressions holding a variable term to
             ``model.expressions``. A build is faster without them, and
             :func:`linopy.spec.evaluate` reads them either way.
-        check_unread : bool, default True
-            Check the data of every parameter, also of one that no built
-            variable, constraint, objective or expression reads. Without,
-            such a parameter is never read from ``sources``, which saves
-            deriving it, and only its key has to be there. Not with
-            ``store=True``, which reads every parameter.
         **model_kwargs
             Passed to :class:`Model`, such as ``sparse=True``.
 
@@ -557,7 +550,7 @@ class Model:
         from linopy.spec.api import build_into
 
         model = cls(**model_kwargs)
-        build_into(model, spec, sources, store, expressions, check_unread)
+        build_into(model, spec, sources, store, expressions)
         return model
 
     @property

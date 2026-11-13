@@ -164,7 +164,14 @@ class Attached:
             coordinate, a null value in a table row, values of another type
             than declared.
         """
-        return self.check(name)()
+        if name not in self.program.parameters:
+            raise unknown("parameter", name, self.program.parameters)
+        self.require([name])
+        declared = self.program.parameters[name]
+        arr, present = _as_array(name, declared, self.sources[name], self.coords)()
+        if declared.dtype != "bool" or bool(present.all()):
+            return Parameter(arr, present)
+        return Parameter(arr.astype(float), present)
 
     def require(self, names: Iterable[str]) -> None:
         """
@@ -178,33 +185,6 @@ class Attached:
         for name in names:
             if name not in self.keys:
                 raise SpecDataError(f"no data provided for parameter '{name}'")
-
-    def check(self, name: str) -> Callable[[], Parameter]:
-        """
-        Refuse the data of parameter *name* as :meth:`read` would, and return the call laying it out on ``coords``.
-
-        The check reads the data's rows or cells and leaves the grid to the
-        call, so a parameter no declaration reads is checked without a grid.
-
-        Raises
-        ------
-        KeyError, SpecDataError
-            What :meth:`read` raises.
-        """
-        if name not in self.program.parameters:
-            raise unknown("parameter", name, self.program.parameters)
-        if name not in self.keys:
-            raise SpecDataError(f"no data provided for parameter '{name}'")
-        declared = self.program.parameters[name]
-        lay_out = _as_array(name, declared, self.sources[name], self.coords)
-        if declared.dtype != "bool":
-            return lay_out
-
-        def read() -> Parameter:
-            arr, present = lay_out()
-            return Parameter(arr if bool(present.all()) else arr.astype(float), present)
-
-        return read
 
 
 # ---------------------------------------------------------------------------
