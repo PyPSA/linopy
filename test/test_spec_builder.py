@@ -796,6 +796,17 @@ def test_a_fully_masked_constraint_adds_no_group_and_reads_a_nan_dual() -> None:
     assert evaluate(spec, m, "price")["price"].isnull().all()
 
 
+@pytest.mark.parametrize("expression", ["x <= 4", "x <= 2 * x", "x + x <= x"])
+def test_a_constraint_of_masked_variables_alone_adds_no_group(expression: str) -> None:
+    spec = with_(
+        SCALAR_SWITCH,
+        constraints={"cap": {"dims": ["i"], "expression": expression}},
+    )
+    m = solved(spec, {"i": [1, 2], "on": False})
+    assert list(m.constraints) == []
+    assert m.objective.value == pytest.approx(4.0)
+
+
 @pytest.mark.parametrize("expression", ["y <= 5", "5 >= y"], ids=["left", "flipped"])
 def test_a_constraint_is_framed_in_the_name_order_of_its_dims(expression: str) -> None:
     spec = {
