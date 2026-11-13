@@ -41,12 +41,32 @@ def admits_a_row(mask: ms.Mask | None, ctx: Context) -> bool:
     """
     if mask is None:
         return True
+    if is_empty(mask, ctx):
+        return False
     kept = xr.DataArray(True)
     for node in _conjuncts(mask.root):
         kept = kept & _node(node, ctx)
         if not bool(kept.any()):
             return False
     return True
+
+
+def is_empty(mask: ms.Mask, ctx: Context) -> bool:
+    """Whether *mask* is read over a dimension without a coordinate, so it has no row to admit."""
+    return any(len(ctx.coords[d]) == 0 for d in _dims(mask.root))
+
+
+def _dims(node: ms.Condition) -> frozenset[str]:
+    """The dimensions the array of *node* is over: those of its own leaves, less what a count sums away."""
+    if isinstance(node, ms.ConditionReference):
+        return _dims(node.body)
+    if isinstance(node, ms.Not):
+        return _dims(node.operand)
+    if isinstance(node, ms.And | ms.Or):
+        return _dims(node.left) | _dims(node.right)
+    if isinstance(node, ms.DimensionComparison | ms.DimensionPosition):
+        return frozenset({node.name})
+    return frozenset(getattr(node, "dims", ()))
 
 
 def _conjuncts(node: ms.Condition) -> Iterator[ms.Condition]:
@@ -144,6 +164,9 @@ def looked_up(arr: Array, columns: ms.JoinColumns, ctx: Context) -> Array:
     """
     table = ctx.relations[columns.name]
     present = table.defined
+    along = tuple(columns.dim(role) for role in columns.joined)
+    if not len(table.rows):
+        return operators.nothing_read(arr, along, present)
     positions = {}
     for role in columns.joined:
         dim = columns.dim(role)

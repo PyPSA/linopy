@@ -32,7 +32,12 @@ from linopy.spec.evaluator import (
     refuse_made,
     without_strays,
 )
-from linopy.spec.where import admits_a_row, as_linopy_mask, evaluate_where
+from linopy.spec.where import (
+    admits_a_row,
+    as_linopy_mask,
+    evaluate_where,
+    is_empty,
+)
 from linopy.variables import Variable
 
 _FLIPPED: dict[str, ms.ConstraintSense] = {"==": "==", "<=": ">=", ">=": "<="}
@@ -78,7 +83,7 @@ def _check_assumptions(ctx: Context) -> None:
     a missing row on either side of a comparison reads as false there.
     """
     for name, assumption in ctx.program.assumptions.items():
-        if not admits_a_row(assumption.where, ctx):
+        if is_empty(assumption.holds, ctx) or not admits_a_row(assumption.where, ctx):
             continue
         admitted = evaluate_where(assumption.where, ctx)
         held = evaluate_where(assumption.holds, ctx)

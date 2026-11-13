@@ -168,10 +168,24 @@ class Attached:
             raise unknown("parameter", name, self.program.parameters)
         self.require([name])
         declared = self.program.parameters[name]
-        arr, present = _as_array(name, declared, self.sources[name], self.coords)()
+        source = (
+            self._nothing(declared) if self._is_empty(declared) else self.sources[name]
+        )
+        arr, present = _as_array(name, declared, source, self.coords)()
         if declared.dtype != "bool" or bool(present.all()):
             return Parameter(arr, present)
         return Parameter(arr.astype(float), present)
+
+    def _is_empty(self, declared: ms.Parameter) -> bool:
+        """Whether a dimension of the parameter has no coordinate, so it holds no value."""
+        return any(d in self.coords and not len(self.coords[d]) for d in declared.dims)
+
+    def _nothing(self, declared: ms.Parameter) -> xr.DataArray:
+        """The data of a parameter without a value: an empty array over its dimensions, which stands in for its source."""
+        coords = {d: self.coords[d] for d in declared.dims}
+        shape = [len(index) for index in coords.values()]
+        values = np.empty(shape, dtype=_EMPTY_DTYPES.get(declared.dtype, float))
+        return xr.DataArray(values, coords=coords, dims=list(coords))
 
     def require(self, names: Iterable[str]) -> None:
         """

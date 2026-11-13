@@ -187,17 +187,26 @@ def at(
     """
     expression = as_expression(array)
     if any(not len(expression.indexes[d]) for d in positions):
-        onto = {str(d): present.indexes[d] for d in present.dims}
-        return _zeros(expression, tuple(positions), onto).where(present)
+        return nothing_read(expression, tuple(positions), present)
     if isinstance(expression, LinearExpression) and expression.is_sparse:
         if set(positions) & set(present.dims):
             return _at_by_rows(expression, positions, present)
+    if isinstance(expression, xr.DataArray):
+        expression = expression.drop_vars(
+            [d for d in positions if d in expression.coords]
+        )
     picked = expression.isel(_keyed(positions, present))
-    joined = [d for d in positions if d not in picked.dims]
+    joined = [d for d in positions if d not in picked.dims and d in picked.coords]
     picked = picked.drop_vars(joined).assign_coords(present.coords)
     if bool(present.all()):
         return picked
     return picked.where(present)
+
+
+def nothing_read(array: Array, along: tuple[str, ...], present: xr.DataArray) -> Array:
+    """:func:`at` of *array* read *along* dimensions where no key tuple reads a value: absent wherever *present* leaves a tuple out."""
+    onto = {str(d): present.indexes[d] for d in present.dims}
+    return _zeros(as_expression(array), along, onto).where(present)
 
 
 def _at_by_rows(
