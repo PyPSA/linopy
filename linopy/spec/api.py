@@ -46,9 +46,21 @@ EVOLVING_MESSAGE = (
 )
 
 
-def build_into(model: Model, spec: SpecLike, sources: Sources, store: bool) -> None:
+def build_into(
+    model: Model,
+    spec: SpecLike,
+    sources: Sources,
+    store: bool,
+    expressions: bool,
+    check_unread: bool,
+) -> None:
     """
-    Build *spec* with *sources* into the fresh *model*, with *store* its data into ``model.parameters``.
+    Build *spec* with *sources* into the fresh *model*.
+
+    With *store* its data goes into ``model.parameters``, with *expressions*
+    its named expressions into ``model.expressions``, and with
+    *check_unread* the data of a parameter no built declaration reads is
+    checked too.
 
     Raises
     ------
@@ -60,14 +72,28 @@ def build_into(model: Model, spec: SpecLike, sources: Sources, store: bool) -> N
         numbers break, or a constraint row the data empties. With *store*,
         a relation ``model.parameters`` cannot hold, refused before anything
         is stored.
+    ValueError
+        *store* without *check_unread*: storing reads every parameter.
     NotImplementedError
         A constraint multiplies two variable-carrying operands.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE, stacklevel=4)
-    _build(model, normalize_spec(spec), sources, store)
+    if store and not check_unread:
+        raise ValueError(
+            "store=True reads every parameter into model.parameters, so it takes "
+            "check_unread=True."
+        )
+    _build(model, normalize_spec(spec), sources, store, expressions, check_unread)
 
 
-def _build(model: Model, program: ms.Program, sources: Sources, store: bool) -> None:
+def _build(
+    model: Model,
+    program: ms.Program,
+    sources: Sources,
+    store: bool,
+    expressions: bool,
+    check_unread: bool,
+) -> None:
     """
     The body of :func:`build_into`, in a frame of its own.
 
@@ -78,12 +104,16 @@ def _build(model: Model, program: ms.Program, sources: Sources, store: bool) -> 
     """
     attached = attach(program, sources)
     relations = _storable(attached) if store else {}
-    laid_out = {name: attached.check(name) for name in program.parameters}
-    raw = functools.cache(lambda name: laid_out[name]())
+    if check_unread:
+        laid_out = {name: attached.check(name) for name in program.parameters}
+        raw = functools.cache(lambda name: laid_out[name]())
+    else:
+        attached.require(program.parameters)
+        raw = functools.cache(attached.read)
     if store:
         unfilled = {name: raw(name).values for name in program.parameters}
         model.parameters = xr.Dataset(unfilled | relations, coords=attached.coords)
-    build(_context(attached, model, raw, solved=False))
+    build(_context(attached, model, raw, solved=False), expressions)
 
 
 def _storable(attached: Attached) -> dict[str, xr.DataArray]:
@@ -226,7 +256,13 @@ def lower(spec: SpecLike) -> ms.Program:
         spec = f"{spec}\n"
     elif isinstance(spec, Mapping):
         spec = dict(spec)
-    return to_spec(spec).expand("piecewise").program
+    return _lowered(to_spec(spec))
+
+
+@functools.lru_cache(maxsize=8)
+def _lowered(spec: Spec) -> ms.Program:
+    """The program of *spec*, kept for the next build of an equal spec: a spec and its program are immutable."""
+    return spec.expand("piecewise").program
 
 
 def normalize_spec(spec: SpecLike) -> ms.Program:

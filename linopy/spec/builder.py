@@ -32,19 +32,23 @@ from linopy.spec.evaluator import (
     refuse_made,
     without_strays,
 )
-from linopy.spec.where import as_linopy_mask, evaluate_where
+from linopy.spec.where import admits_a_row, as_linopy_mask, evaluate_where
 from linopy.variables import Variable
 
 _FLIPPED: dict[str, ms.ConstraintSense] = {"==": "==", "<=": ">=", ">=": "<="}
 _SENSE = {"minimize": "min", "maximize": "max"}
 
 
-def build(ctx: Context) -> None:
+def build(ctx: Context, expressions: bool = True) -> None:
     """
     Add every declaration of the program to the model of *ctx*.
 
-    Variables, special-ordered sets, constraints, the objective and the
-    named expressions holding a variable term, in that order. The program's
+    Variables, special-ordered sets, constraints, the objective and, with
+    *expressions*, the named expressions holding a variable term, in that
+    order. A declaration without a row costs next to nothing: a variable
+    over a dimension without a coordinate is added with its bounds unread,
+    and a constraint over one, or one whose ``where`` admits no row, is
+    skipped unread, as is an assumption admitted nowhere. The program's
     assumptions are checked once the variables exist, so a condition may
     read where one is defined. Each declaration refuses the missing
     ``refused`` rows its live rows read, a named expression's whether it is
@@ -55,7 +59,13 @@ def build(ctx: Context) -> None:
     _sos(ctx)
     _constraints(ctx)
     _objective(ctx)
-    _expressions(ctx)
+    if expressions:
+        _expressions(ctx)
+
+
+def _is_empty(dims: tuple[str, ...], ctx: Context) -> bool:
+    """Whether one of *dims* has no coordinate, so a declaration over them has no row."""
+    return any(len(ctx.coords[d]) == 0 for d in dims)
 
 
 def _check_assumptions(ctx: Context) -> None:
@@ -68,6 +78,8 @@ def _check_assumptions(ctx: Context) -> None:
     a missing row on either side of a comparison reads as false there.
     """
     for name, assumption in ctx.program.assumptions.items():
+        if not admits_a_row(assumption.where, ctx):
+            continue
         admitted = evaluate_where(assumption.where, ctx)
         held = evaluate_where(assumption.holds, ctx)
         failing = admitted & ~held
@@ -80,16 +92,25 @@ def _check_assumptions(ctx: Context) -> None:
 
 def _variables(ctx: Context) -> None:
     for name, declared in ctx.program.variables.items():
-        rows = evaluate_where(declared.where, ctx)
-        for bound in (declared.lower, declared.upper):
-            if bound is not None:
+        bounds = [b for b in (declared.lower, declared.upper) if b is not None]
+        lower: float | xr.DataArray = -np.inf
+        upper: float | xr.DataArray = np.inf
+        mask = None
+        if _is_empty(declared.dims, ctx):
+            ctx.memo.skipped(*bounds)
+        else:
+            rows = evaluate_where(declared.where, ctx)
+            for bound in bounds:
                 refuse_holes(f"variable '{name}'", [bound], ctx, rows)
+            lower = _bound(declared.lower, ctx, -np.inf)
+            upper = _bound(declared.upper, ctx, np.inf)
+            mask = as_linopy_mask(rows)
         ctx.model.add_variables(
-            lower=_bound(declared.lower, ctx, -np.inf),
-            upper=_bound(declared.upper, ctx, np.inf),
+            lower=lower,
+            upper=upper,
             coords={d: ctx.coords[d] for d in declared.dims},
             name=name,
-            mask=as_linopy_mask(rows),
+            mask=mask,
             binary=declared.domain == "binary",
             integer=declared.domain == "integer",
         )
@@ -118,10 +139,10 @@ def _sos(ctx: Context) -> None:
 
 def _constraints(ctx: Context) -> None:
     for name, row in ctx.program.constraints.items():
-        rows = evaluate_where(row.where, ctx)
-        if not bool(rows.any()):
+        if _is_empty(row.dims, ctx) or not admits_a_row(row.where, ctx):
             ctx.memo.skipped(row.lhs, row.rhs)
             continue
+        rows = evaluate_where(row.where, ctx)
         mask = as_linopy_mask(rows)
         scoped = replace(ctx, rows=rows, subject=f"constraint '{name}'")
         refuse_holes(scoped.subject, [row.lhs, row.rhs], ctx, rows)

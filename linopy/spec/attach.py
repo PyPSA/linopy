@@ -26,7 +26,7 @@ from __future__ import annotations
 import difflib
 import functools
 import warnings
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
@@ -165,6 +165,19 @@ class Attached:
             than declared.
         """
         return self.check(name)()
+
+    def require(self, names: Iterable[str]) -> None:
+        """
+        Refuse the first of the parameters *names* that ``sources`` holds no data for, reading none.
+
+        Raises
+        ------
+        SpecDataError
+            A parameter without data.
+        """
+        for name in names:
+            if name not in self.keys:
+                raise SpecDataError(f"no data provided for parameter '{name}'")
 
     def check(self, name: str) -> Callable[[], Parameter]:
         """
