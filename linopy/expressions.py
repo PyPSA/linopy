@@ -3503,6 +3503,35 @@ class LinearExpression(BaseExpression):
         store = CSRStore.from_labels(terms, model).aggregate(grid, rows_)
         return cls._from_store(store if model.sparse else store.to_dense(), model)
 
+    def to_coo(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Return the live terms of the expression as COO triplets.
+
+        The inverse of :meth:`from_coo`: ``rows[k]`` is the flat C-order
+        position of a cell on the grid of :attr:`coord_dims`, ``vars[k]`` the
+        variable label and ``coeffs[k]`` the coefficient of one of its terms.
+        A term is live when its cell is present, its label is not ``-1`` and
+        its coefficient is nonzero. The terms come in cell order and a sparse
+        (CSR) expression is read without a dense copy. The constant is not
+        part of the triplets.
+
+        Returns
+        -------
+        rows, vars, coeffs : numpy.ndarray
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> from linopy import Model
+        >>> m = Model()
+        >>> x = m.add_variables(coords=[pd.RangeIndex(2, name="t")], name="x")
+        >>> rows, vars, coeffs = (2 * x).to_coo()
+        >>> rows.tolist(), vars.tolist(), coeffs.tolist()
+        ([0, 1], [0, 1], [2.0, 2.0])
+        """
+        counts, vars_, coeffs = self._store.terms()
+        return np.repeat(np.arange(counts.size), counts), vars_, coeffs
+
 
 class QuadraticExpression(BaseExpression):
     """
