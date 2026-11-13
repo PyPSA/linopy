@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import operator
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import assert_never, cast
 
 import numpy as np
@@ -29,6 +29,35 @@ def evaluate_where(mask: ms.Mask | None, ctx: Context) -> xr.DataArray:
     if mask is None:
         return xr.DataArray(True)
     return _node(mask.root, ctx)
+
+
+def admits_a_row(mask: ms.Mask | None, ctx: Context) -> bool:
+    """
+    Whether *mask* admits a row; no mask admits every row.
+
+    The conditions ``AND`` joins are read left to right and the reading
+    stops at the first that leaves no row, so a declaration a flag switches
+    off costs that flag alone.
+    """
+    if mask is None:
+        return True
+    kept = xr.DataArray(True)
+    for node in _conjuncts(mask.root):
+        kept = kept & _node(node, ctx)
+        if not bool(kept.any()):
+            return False
+    return True
+
+
+def _conjuncts(node: ms.Condition) -> Iterator[ms.Condition]:
+    """The conditions *node* joins by ``AND``, left to right, a named condition read as its body."""
+    if isinstance(node, ms.ConditionReference):
+        yield from _conjuncts(node.body)
+    elif isinstance(node, ms.And):
+        yield from _conjuncts(node.left)
+        yield from _conjuncts(node.right)
+    else:
+        yield node
 
 
 def admitted(name: str, ctx: Context) -> xr.DataArray:

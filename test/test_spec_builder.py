@@ -1277,3 +1277,96 @@ def test_a_declared_assumption_is_checked_against_the_data(
         return
     with pytest.raises(SpecDataError, match=match):
         Model.from_spec(spec, {**CURVE_DATA, **CURVES})
+
+
+# ---------------------------------------------------------------------------
+# what a build skips: declarations without a row, and what it is asked to leave out
+# ---------------------------------------------------------------------------
+
+
+class Recorded(dict):
+    """Sources that record the keys read from them."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.read: list[str] = []
+
+    def __getitem__(self, key: str) -> Any:
+        self.read.append(key)
+        return super().__getitem__(key)
+
+
+DEAD_ROWS: dict[str, Any] = {
+    "dimensions": {"g": {}, "h": {}},
+    "parameters": {
+        "on": {"dims": ["g"], "dtype": "bool"},
+        "cap": {"dims": ["g"]},
+        "floor": {"dims": ["g"]},
+        "bound": {"dims": ["h"]},
+        "limit": {"dims": ["h"]},
+    },
+    "variables": {
+        "x": {"dims": ["g"], "bounds": {"lower": 0, "upper": 1}},
+        "y": {"dims": ["h"], "bounds": {"lower": 0, "upper": "bound"}},
+    },
+    "constraints": {
+        "gated": {"dims": ["g"], "where": "on AND cap > 0", "expression": "x <= cap"},
+        "nowhere": {"dims": ["h"], "expression": "y <= limit"},
+    },
+    "assumptions": {"floored": {"where": "on", "holds": "floor > 0"}},
+    "objective": {"sense": "minimize", "expression": "sum(x)"},
+}
+G2 = pd.Index(["a", "b"], name="g")
+H0 = pd.Index([], name="h", dtype=str)
+
+
+def dead_rows_data(**overrides: Any) -> Recorded:
+    over_g = xr.DataArray([1.0, 2.0], coords=[G2])
+    over_h = xr.DataArray(np.array([], dtype=float), coords=[H0])
+    off = xr.DataArray([False, False], coords=[G2])
+    data = {"g": G2, "h": H0, "on": off, "cap": over_g, "floor": over_g}
+    return Recorded(data | {"bound": over_h, "limit": over_h} | overrides)
+
+
+def test_a_declaration_without_a_row_reads_no_parameter() -> None:
+    data = dead_rows_data()
+    m = Model.from_spec(DEAD_ROWS, data)
+    assert set(data.read) & set(DEAD_ROWS["parameters"]) == {"on"}
+    assert list(m.variables) == ["x", "y"]
+    assert m.variables["y"].size == 0
+    assert list(m.constraints) == []
+
+
+@pytest.mark.parametrize("store", [False, True])
+def test_the_data_of_an_unread_parameter_is_checked_only_when_stored(
+    store: bool,
+) -> None:
+    stray = xr.DataArray([1.0], coords=[pd.Index(["nowhere"], name="g")])
+    data = dead_rows_data(cap=stray)
+    if not store:
+        Model.from_spec(DEAD_ROWS, data)
+        return
+    with pytest.raises(SpecDataError, match="cap"):
+        Model.from_spec(DEAD_ROWS, data, store=True)
+
+
+def test_an_unread_parameter_still_needs_its_key() -> None:
+    data = dead_rows_data()
+    del data["cap"]
+    with pytest.raises(SpecDataError, match="no data provided for parameter 'cap'"):
+        Model.from_spec(DEAD_ROWS, data)
+
+
+@pytest.mark.parametrize(
+    ("expressions", "held"), [(True, ["spend", "usage"]), (False, [])]
+)
+def test_named_expressions_are_added_unless_asked_not_to(
+    expressions: bool, held: list[str]
+) -> None:
+    m = solved(yaml_dict(), DISPATCH_DATA, expressions=expressions)
+    assert list(m.expressions) == held
+    assert set(evaluate(yaml_dict(), m, sources=DISPATCH_DATA)) == {"spend", "usage"}
+
+
+def test_an_equal_spec_is_lowered_once() -> None:
+    assert lower(yaml_dict()) is lower(yaml_dict())

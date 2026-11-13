@@ -2,8 +2,8 @@
 The memory a spec build takes for a table parameter over a large grid.
 
 A parameter is laid out on the full grid of its dimensions (#1072), so these
-tests pin the build's peak as a multiple of that grid: an unread parameter is
-checked without a grid, and a read one is laid out once. The peak is traced
+tests pin the build's peak as a multiple of that grid: an unread parameter
+takes no grid, and a read one is laid out once. The peak is traced
 with ``tracemalloc``, which sees numpy's allocations, so the tests run without
 pytest-memray's ``--memray``.
 """
@@ -23,7 +23,6 @@ import pytest
 pytest.importorskip("mathspec")
 
 from linopy import EvolvingAPIWarning, Model  # noqa: E402
-from linopy.spec import SpecDataError  # noqa: E402
 
 T = pd.Index(range(4000), name="t")
 G = pd.Index([f"g{i}" for i in range(1000)], name="g")
@@ -74,14 +73,6 @@ def test_an_unread_table_parameter_takes_no_grid(sparse: pd.DataFrame) -> None:
 def test_a_summed_table_parameter_is_laid_out_once(sparse: pd.DataFrame) -> None:
     used = peak(lambda: Model.from_spec(SUMMED, {"t": T, "g": G, "c": sparse}))
     assert used < 2.75 * GRID
-
-
-def test_an_unread_parameter_is_still_checked(sparse: pd.DataFrame) -> None:
-    stray = pd.concat([sparse, pd.DataFrame({"t": [0], "g": ["nowhere"], "c": [1.0]})])
-    with pytest.raises(SpecDataError, match="not coordinates of it"):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", EvolvingAPIWarning)
-            Model.from_spec(DECLARATIONS, {"t": T, "g": G, "c": stray})
 
 
 def test_a_build_frees_the_grids_it_read_when_it_returns(

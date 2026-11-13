@@ -489,6 +489,7 @@ class Model:
         spec: SpecLike,
         sources: Mapping[str, Any] | Dataset,
         store: bool = False,
+        expressions: bool = True,
         **model_kwargs: Any,
     ) -> Model:
         """
@@ -522,6 +523,10 @@ class Model:
             the model from them, edits included. An edit reaches the
             variables, constraints and objective only on that rebuild, while
             :func:`linopy.spec.evaluate` reads it at once.
+        expressions : bool, default True
+            Add the named expressions holding a variable term to
+            ``model.expressions``. A build is faster without them, and
+            :func:`linopy.spec.evaluate` reads them either way.
         **model_kwargs
             Passed to :class:`Model`, such as ``sparse=True``.
 
@@ -545,7 +550,7 @@ class Model:
         from linopy.spec.api import build_into
 
         model = cls(**model_kwargs)
-        build_into(model, spec, sources, store)
+        build_into(model, spec, sources, store, expressions)
         return model
 
     @property

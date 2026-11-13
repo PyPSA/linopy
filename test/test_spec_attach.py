@@ -1037,4 +1037,4 @@ def test_a_table_label_equal_to_a_coordinate_in_value_only_is_refused() -> None:
     rows = pd.DataFrame({"y": pd.Series([True], dtype=object), "p": [1.0]})
     attached = attach(program, {"y": pd.Index([1, 2], name="y"), "p": rows})
     with pytest.raises(SpecDataError, match="in value but not in type: True"):
-        attached.check("p")
+        attached.read("p")
