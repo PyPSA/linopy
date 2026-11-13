@@ -925,6 +925,26 @@ def test_a_sos2_curve_is_built_as_a_special_ordered_set() -> None:
     assert m.variables["cost_curve_lam"].attrs["sos_type"] == 2
 
 
+def test_rename_names_the_entries_a_curve_expands_into() -> None:
+    spec = with_(
+        CURVE_SPEC,
+        piecewise={
+            "cost_curve": {
+                "along": "bp",
+                "dims": ["snapshot", "generator"],
+                "links": {"p": ["p", "bp_x"], "op_cost": ["op_cost", "bp_y"]},
+                "method": "sos2",
+            }
+        },
+    )
+    data = {**CURVE_DATA, "bp_x": FULL_X, "bp_y": FULL_Y}
+    plain = Model.from_spec(spec, data)
+    m = Model.from_spec(spec, data, rename=lambda name: f"pw-{name}")
+    assert list(m.variables) == [f"pw-{name}" for name in plain.variables]
+    assert list(m.constraints) == [f"pw-{name}" for name in plain.constraints]
+    assert m.variables["pw-cost_curve_lam"].attrs["sos_type"] == 2
+
+
 # ---------------------------------------------------------------------------
 # a constant on the left is the same row, a power hides nothing
 # ---------------------------------------------------------------------------

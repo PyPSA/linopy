@@ -12,6 +12,7 @@ beyond the model is read as a function of the spec, the model and the data:
 from __future__ import annotations
 
 import functools
+from collections import Counter
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, TypeAlias
@@ -38,6 +39,7 @@ from linopy.spec.where import admitted
 
 SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
 Sources: TypeAlias = Mapping[str, Any] | xr.Dataset
+Rename: TypeAlias = Mapping[str, str] | Callable[[str], str]
 
 EVOLVING_MESSAGE = (
     "spec: Model.from_spec and linopy.spec.evaluate are newly added "
@@ -52,12 +54,14 @@ def build_into(
     sources: Sources,
     store: bool,
     expressions: bool,
+    rename: Rename | None = None,
 ) -> None:
     """
     Build *spec* with *sources* into the fresh *model*.
 
-    With *store* its data goes into ``model.parameters`` and with
-    *expressions* its named expressions into ``model.expressions``.
+    With *store* its data goes into ``model.parameters``, with
+    *expressions* its named expressions into ``model.expressions``, and
+    each variable and constraint under the name *rename* gives it.
 
     Raises
     ------
@@ -73,9 +77,11 @@ def build_into(
         cannot hold is refused before anything is stored.
     NotImplementedError
         A constraint multiplies two variable-carrying operands.
+    KeyError, ValueError
+        What :func:`_renamer` raises for *rename*.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE, stacklevel=4)
-    _build(model, normalize_spec(spec), sources, store, expressions)
+    _build(model, normalize_spec(spec), sources, store, expressions, rename)
 
 
 def _build(
@@ -84,6 +90,7 @@ def _build(
     sources: Sources,
     store: bool,
     expressions: bool,
+    rename: Rename | None,
 ) -> None:
     """
     The body of :func:`build_into`, in a frame of its own.
@@ -93,6 +100,7 @@ def _build(
     garbage collector runs. That frame holds no data, so the parameter grids
     read here are freed as soon as the build returns.
     """
+    named = _renamer(program, rename)
     attached = attach(program, sources)
     relations = _storable(attached) if store else {}
     attached.require(program.parameters)
@@ -100,7 +108,49 @@ def _build(
     if store:
         unfilled = {name: raw(name).values for name in program.parameters}
         model.parameters = xr.Dataset(unfilled | relations, coords=attached.coords)
-    build(_context(attached, model, raw, solved=False), expressions)
+    build(_context(attached, model, raw, solved=False, rename=named), expressions)
+
+
+def _renamer(program: ms.Program, rename: Rename | None) -> Callable[[str], str]:
+    """
+    The model name of each variable and constraint of *program*: what *rename* gives, its own name where it gives none.
+
+    *rename* is a mapping or a function, as :meth:`pandas.DataFrame.rename`
+    takes it. The entries a ``piecewise:`` curve expands into are named by
+    it too.
+
+    Raises
+    ------
+    KeyError
+        A key of a mapping *rename* names no variable or constraint of *program*.
+    ValueError
+        Two variables, or two constraints, take one name.
+    """
+    if rename is None:
+        return str
+    named = _mapped(program, rename) if isinstance(rename, Mapping) else rename
+    for section, entries in (
+        ("variables", program.variables),
+        ("constraints", program.constraints),
+    ):
+        taken = Counter(named(name) for name in entries)
+        twice = sorted(name for name, count in taken.items() if count > 1)
+        if twice:
+            raise ValueError(f"rename gives two {section} the name {twice[0]!r}")
+    return named
+
+
+def _mapped(program: ms.Program, rename: Mapping[str, str]) -> Callable[[str], str]:
+    declared = [*program.variables, *program.constraints]
+    stray = sorted(set(rename) - set(declared))
+    if stray:
+        raise unknown("variable or constraint", stray[0], declared)
+    mapping = dict(rename)
+
+    def named(name: str) -> str:
+        return mapping.get(name, name)
+
+    return named
 
 
 def _storable(attached: Attached) -> dict[str, xr.DataArray]:
@@ -132,7 +182,11 @@ def _is_storable(relation: ms.Relation) -> bool:
 
 
 def evaluate(
-    spec: SpecLike, model: Model, *names: str, sources: Sources | None = None
+    spec: SpecLike,
+    model: Model,
+    *names: str,
+    sources: Sources | None = None,
+    rename: Rename | None = None,
 ) -> dict[str, xr.DataArray]:
     """
     The named expressions *names* of *spec*, all in name order when none is named, folded over *model*.
@@ -141,6 +195,8 @@ def evaluate(
     *sources*, or from ``model.parameters`` when none is given, as
     ``Model.from_spec(..., store=True)`` writes it: a body over data alone
     needs no solve.
+    A model built with ``Model.from_spec(..., rename=...)`` is read with the
+    same *rename*.
 
     Raises
     ------
@@ -156,18 +212,23 @@ def evaluate(
         ``missing: refused`` parameter.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE)
-    return _folded(normalize_spec(spec), model, names, sources)
+    return _folded(normalize_spec(spec), model, names, sources, rename)
 
 
 def _folded(
-    program: ms.Program, model: Model, names: tuple[str, ...], sources: Sources | None
+    program: ms.Program,
+    model: Model,
+    names: tuple[str, ...],
+    sources: Sources | None,
+    rename: Rename | None,
 ) -> dict[str, xr.DataArray]:
     """The body of :func:`evaluate`, in a frame of its own for the reason :func:`_build` gives."""
     for name in names:
         if name not in program.expressions:
             raise unknown("expression", name, program.expressions)
+    named = _renamer(program, rename)
     attached = attach(program, _stored(program, model) if sources is None else sources)
-    ctx = _context(attached, model, attached.read, solved=True)
+    ctx = _context(attached, model, attached.read, solved=True, rename=named)
     return {name: fold(name, ctx) for name in names or program.expressions}
 
 
@@ -203,6 +264,7 @@ def _context(
     raw: Callable[[str], Parameter],
     *,
     solved: bool,
+    rename: Callable[[str], str],
 ) -> Context:
     program = attached.program
     tables = (model, program, attached.coords, attached.relations)
@@ -212,7 +274,7 @@ def _context(
         parameter = raw(name)
         return Parameter(fill(program, name, parameter), parameter.present)
 
-    conditions = Context(*tables, unmasked, solved=solved)
+    conditions = Context(*tables, unmasked, solved=solved, rename=rename)
 
     def read(name: str) -> Parameter:
         if program.parameters[name].where is None:
@@ -227,6 +289,7 @@ def _context(
         functools.cache(read),
         solved=solved,
         memo=Memo(uses=uses_of(program)),
+        rename=rename,
     )
 
 

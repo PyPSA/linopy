@@ -490,6 +490,7 @@ class Model:
         sources: Mapping[str, Any] | Dataset,
         store: bool = False,
         expressions: bool = True,
+        rename: Mapping[str, str] | Callable[[str], str] | None = None,
         **model_kwargs: Any,
     ) -> Model:
         """
@@ -527,6 +528,13 @@ class Model:
             Add the named expressions holding a variable term to
             ``model.expressions``. A build is faster without them, and
             :func:`linopy.spec.evaluate` reads them either way.
+        rename : mapping or function, optional
+            The model name of each variable and constraint, keyed by its
+            spec name, as :meth:`pandas.DataFrame.rename` takes it: a mapping
+            or a function. An entry a mapping leaves out keeps its spec
+            name, and the entries a ``piecewise:`` curve expands into are
+            named too. Expressions and duals in the spec keep reading spec
+            names. Pass the same *rename* to :func:`linopy.spec.evaluate`.
         **model_kwargs
             Passed to :class:`Model`, such as ``sparse=True``.
 
@@ -540,6 +548,10 @@ class Model:
             If *spec* is a one-line ``str`` ending in ``.yaml`` or ``.yml``.
         linopy.spec.SpecDataError
             If the data does not fit the spec.
+        KeyError
+            If a key of a mapping *rename* names no variable or constraint.
+        ValueError
+            If *rename* gives two variables, or two constraints, one name.
 
         Warns
         -----
@@ -550,7 +562,7 @@ class Model:
         from linopy.spec.api import build_into
 
         model = cls(**model_kwargs)
-        build_into(model, spec, sources, store, expressions)
+        build_into(model, spec, sources, store, expressions, rename)
         return model
 
     @property
