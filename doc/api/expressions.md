@@ -78,6 +78,10 @@ Linear combination of variables. Arithmetic on `Variable` /
     options:
       heading_level: 4
 
+::: linopy.expressions.LinearExpression.to_coo
+    options:
+      heading_level: 4
+
 ### Construction
 
 ::: linopy.expressions.LinearExpression.from_tuples
