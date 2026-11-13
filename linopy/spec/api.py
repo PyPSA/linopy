@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -36,7 +37,22 @@ from linopy.spec.errors import SpecDataError, shown, unknown
 from linopy.spec.evaluator import fold
 from linopy.spec.where import admitted
 
-SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
+
+@dataclass(frozen=True)
+class Lowered:
+    """
+    A spec lowered to the program linopy builds, as :func:`lowered` returns it.
+
+    Lowering parses every expression of a spec, which for a large one takes
+    longer than building a small model. A ``Lowered`` is built from without
+    lowering again and pickles, so a process can keep it on disk for the
+    next one.
+    """
+
+    program: ms.Program
+
+
+SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec | Lowered
 Sources: TypeAlias = Mapping[str, Any] | xr.Dataset
 
 EVOLVING_MESSAGE = (
@@ -239,6 +255,8 @@ def lower(spec: SpecLike) -> ms.Program:
     ``piecewise:`` is expanded: a special-ordered set stays a set, which
     linopy builds natively rather than as binaries.
     """
+    if isinstance(spec, Lowered):
+        return spec.program
     if isinstance(spec, str):
         spec = f"{spec}\n"
     elif isinstance(spec, Mapping):
@@ -252,9 +270,21 @@ def _lowered(spec: Spec) -> ms.Program:
     return spec.expand("piecewise").program
 
 
+def lowered(spec: SpecLike) -> Lowered:
+    """
+    *spec* lowered once, to pass to :meth:`linopy.Model.from_spec` or :func:`evaluate` in its place.
+
+    Raises
+    ------
+    TypeError, ValueError, FileNotFoundError, mathspec.errors.LanguageError, SpecDataError
+        What ``Model.from_spec`` raises for a spec it cannot lower.
+    """
+    return Lowered(normalize_spec(spec))
+
+
 def normalize_spec(spec: SpecLike) -> ms.Program:
     """
-    *spec* lowered: a ``Path`` is read, a ``str`` is YAML text, a mapping is a spec as a dict, a ``Spec`` is used as it is.
+    *spec* lowered: a ``Path`` is read, a ``str`` is YAML text, a mapping is a spec as a dict, a ``Spec`` is used as it is and a ``Lowered`` gives its program.
 
     Raises
     ------
@@ -277,7 +307,7 @@ def normalize_spec(spec: SpecLike) -> ms.Program:
                 f"from_spec reads a str as YAML text, and {spec!r} reads like a file name. "
                 f"Pass it as pathlib.Path({spec!r})."
             )
-    elif not isinstance(spec, Path | Mapping | Spec):
+    elif not isinstance(spec, Path | Mapping | Spec | Lowered):
         raise TypeError(
             "from_spec takes the spec as a path, YAML text, a mapping or a mathspec.Spec, "
             f"not a {type(spec).__name__}."

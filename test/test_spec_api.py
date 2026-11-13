@@ -6,6 +6,7 @@ and ``linopy.spec.evaluate`` reading a spec-built model.
 from __future__ import annotations
 
 import io
+import pickle
 import types
 import warnings
 from collections.abc import Callable
@@ -37,7 +38,7 @@ import linopy  # noqa: E402
 from linopy import LinearExpression, Model  # noqa: E402
 from linopy.spec import SpecDataError, evaluate  # noqa: E402
 from linopy.spec.api import lower  # noqa: E402
-from linopy.testing import synthetic_sources  # noqa: E402
+from linopy.testing import assert_model_equal, synthetic_sources  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # inputs and model integration
@@ -78,6 +79,13 @@ def test_synthetic_sources_take_every_spec_form(
     sources = synthetic_sources(form(path))
     assert sources.keys() == synthetic_sources(path).keys()
     assert list(Model.from_spec(path, sources).variables) == ["p"]
+
+
+def test_a_lowered_spec_builds_the_same_model_after_pickling() -> None:
+    kept = pickle.loads(pickle.dumps(linopy.spec.lowered(yaml_dict())))
+    m = solved(kept, DISPATCH_DATA)
+    assert_model_equal(m, solved(yaml_dict(), DISPATCH_DATA))
+    assert set(evaluate(kept, m)) == {"spend", "usage"}
 
 
 @pytest.mark.parametrize(
@@ -162,7 +170,12 @@ def test_from_spec_passes_model_kwargs() -> None:
 
 def test_the_spec_package_exports() -> None:
     assert isinstance(linopy.spec.attach, types.ModuleType)
-    assert set(linopy.spec.__all__) == {"SpecDataError", "evaluate"}
+    assert set(linopy.spec.__all__) == {
+        "Lowered",
+        "SpecDataError",
+        "evaluate",
+        "lowered",
+    }
     assert callable(linopy.spec.evaluate)
 
 
