@@ -121,7 +121,7 @@ def _through(array: Array, columns: ms.JoinColumns, ctx: Context) -> Array:
 
 
 def _variable(name: str, ctx: Context) -> Value:
-    variable = ctx.model.variables[name]
+    variable = ctx.model.variables[ctx.rename(name)]
     missing = ctx.program.variables[name].missing
     if not ctx.solved:
         return variable if missing == "absent" else variable.fillna(missing)
@@ -145,9 +145,10 @@ def _dual(constraint: str, ctx: Context) -> xr.DataArray:
             f"the dual of constraint '{constraint}' has no symbolic form, read `.solution`"
         )
     built = ctx.model.constraints.data
+    renamed = ctx.rename(constraint)
     reported: xr.DataArray | None = None
-    if constraint in built:
-        reported = built[constraint]._dual
+    if renamed in built:
+        reported = built[renamed]._dual
     elif any(c._dual is not None for c in built.values()):
         dims = ctx.program.constraints[constraint].dims
         shape = [len(ctx.coords[d]) for d in dims]
@@ -452,7 +453,7 @@ def _marks(
     if isinstance(node, ms.ParameterReference):
         return _parameter_marks(node, name, holes, ctx)
     if isinstance(node, ms.VariableReference):
-        labels = ctx.model.variables[node.name].labels
+        labels = ctx.model.variables[ctx.rename(node.name)].labels
         zeros = xr.zeros_like(labels, dtype=float)
         if ctx.program.variables[node.name].missing != "absent":
             return zeros

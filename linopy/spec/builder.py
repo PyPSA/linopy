@@ -109,7 +109,7 @@ def _variables(ctx: Context) -> None:
             lower=lower,
             upper=upper,
             coords={d: ctx.coords[d] for d in declared.dims},
-            name=name,
+            name=ctx.rename(name),
             mask=mask,
             binary=declared.domain == "binary",
             integer=declared.domain == "integer",
@@ -131,7 +131,7 @@ def _bound(
 def _sos(ctx: Context) -> None:
     for sos in ctx.program.sos.values():
         ctx.model.add_sos_constraints(
-            ctx.model.variables[sos.variable],
+            ctx.model.variables[ctx.rename(sos.variable)],
             sos_type=sos.sos_type,
             sos_dim=sos.along,
         )
@@ -166,7 +166,7 @@ def _constraints(ctx: Context) -> None:
             )
             term, other = carried(term, other)
         ctx.model.add_constraints(
-            _framed(term, row.dims), sense, other, name=name, mask=mask
+            _framed(term, row.dims), sense, other, name=ctx.rename(name), mask=mask
         )
 
 
