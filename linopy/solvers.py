@@ -2661,6 +2661,8 @@ class Gurobi(Solver["gurobipy.Env | dict[str, Any] | None"]):
         status.legacy_status = condition
 
         def get_solver_solution() -> Solution:
+            if m.SolCount == 0:
+                return Solution()
             objective = m.ObjVal
 
             # one bulk getAttr per vector rather than a property read per element

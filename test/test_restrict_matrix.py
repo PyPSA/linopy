@@ -593,14 +593,36 @@ def test_limited_mip_solve_returns_its_incumbent() -> None:
     assert incumbent is not None and incumbent > optimum
 
 
-def test_limited_mip_solve_without_incumbent_has_no_solution() -> None:
+@pytest.mark.parametrize(
+    ("solver_name", "options"),
+    [
+        ("highs", {"output_flag": False, "time_limit": 0.0}),
+        ("gurobi", {"OutputFlag": 0, "TimeLimit": 0.0}),
+    ],
+    ids=["highs", "gurobi"],
+)
+def test_limited_mip_solve_without_incumbent_has_no_solution(
+    solver_name: str, options: dict[str, Any]
+) -> None:
+    from linopy import licensed_solvers
+
+    if solver_name not in licensed_solvers:
+        pytest.skip(f"{solver_name} is not available with a license")
+
     window = knapsack_model().restrict(item=slice(None))
-    window.solve(solver_name="highs", output_flag=False, time_limit=0.0)
+    window.solve(solver_name=solver_name, **options)
 
     assert window.termination_condition == "time_limit"
     assert window.objective.value is None
     with pytest.raises(AttributeError, match="returned no solution"):
         window.solution
+
+    model = knapsack_model()
+    status, condition = model.solve(solver_name=solver_name, **options)
+    assert status == "ok"
+    assert condition == "time_limit"
+    assert model.objective.value is not None and np.isnan(model.objective.value)
+    assert "solution" not in model["x"].data
 
 
 def test_solve_updates_options_on_later_calls() -> None:
