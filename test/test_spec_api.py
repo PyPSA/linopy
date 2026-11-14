@@ -160,6 +160,59 @@ def test_from_spec_passes_model_kwargs() -> None:
     assert m.force_dim_names
 
 
+PRICED = with_(
+    yaml_dict(), expressions={"price": "dual(power_balance)", "spend": "sum(p * cost)"}
+)
+RENAMED = {"p": "Generator-p", "power_balance": "Bus-balance"}
+
+
+@pytest.mark.parametrize(
+    "rename", [RENAMED, RENAMED.__getitem__], ids=["mapping", "function"]
+)
+def test_rename_builds_and_evaluates_under_the_given_names(rename: Any) -> None:
+    plain = solved(PRICED, DISPATCH_DATA)
+    m = solved(PRICED, DISPATCH_DATA, rename=rename)
+    assert (list(m.variables), list(m.constraints)) == (
+        ["Generator-p"],
+        ["Bus-balance"],
+    )
+    xr.testing.assert_equal(
+        m.variables["Generator-p"].solution, plain.variables["p"].solution
+    )
+    got = evaluate(PRICED, m, rename=rename)
+    for name, value in evaluate(PRICED, plain).items():
+        xr.testing.assert_allclose(got[name], value)
+
+
+TWO_VARIABLES = with_(yaml_dict(), variables={"q": {"dims": ["snapshot"]}})
+
+
+@pytest.mark.parametrize(
+    ("spec", "rename", "error", "match"),
+    [
+        pytest.param(
+            yaml_dict(),
+            {"q": "x"},
+            KeyError,
+            "variable or constraint 'q'",
+            id="stray-key",
+        ),
+        pytest.param(
+            TWO_VARIABLES,
+            lambda _: "x",
+            ValueError,
+            "two variables",
+            id="one-name-twice",
+        ),
+    ],
+)
+def test_rename_is_refused_before_the_build(
+    spec: dict[str, Any], rename: Any, error: type[Exception], match: str
+) -> None:
+    with pytest.raises(error, match=match):
+        Model.from_spec(spec, DISPATCH_DATA, rename=rename)
+
+
 def test_the_spec_package_exports() -> None:
     assert isinstance(linopy.spec.attach, types.ModuleType)
     assert set(linopy.spec.__all__) == {"SpecDataError", "evaluate"}
