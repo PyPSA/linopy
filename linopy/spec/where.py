@@ -97,7 +97,7 @@ def _condition(node: ms.Condition, ctx: Context) -> xr.DataArray:
     if isinstance(node, ms.ParameterDefined):
         return _defined(node.name, ctx)
     if isinstance(node, ms.VariableDefined):
-        return ctx.model.variables[node.name].mask
+        return ctx.model.variables[ctx.rename(node.name)].mask
     if isinstance(node, ms.ParameterComparison):
         values = ctx.parameter(node.name).values
         return _compared(values, node.op, node.value) & values.notnull()

@@ -135,7 +135,8 @@ class Context:
     hole, which a comparison reads as false. ``rows``
     narrows the finiteness check to the rows a constraint builds, and
     ``subject`` names what is being built in its refusals. ``memo`` is
-    shared by every context replaced from one.
+    shared by every context replaced from one. ``rename`` gives the model
+    name of a variable or constraint the program declares.
     """
 
     model: Model
@@ -147,3 +148,4 @@ class Context:
     rows: xr.DataArray | None = None
     subject: str = "the spec"
     memo: Memo = field(default_factory=Memo, compare=False, repr=False)
+    rename: Callable[[str], str] = field(default=str, compare=False, repr=False)
