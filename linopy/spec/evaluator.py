@@ -14,7 +14,7 @@ from mathspec import program as ms
 from linopy.constants import FACTOR_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec import operators
-from linopy.spec.context import Array, Context, Term, Value, as_expression
+from linopy.spec.context import Array, Context, Term, Value, as_expression, is_empty
 from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.where import admitted, evaluate_where, groups_of, looked_up
 from linopy.variables import Variable
@@ -70,6 +70,8 @@ def _evaluated(node: ms.Expression, ctx: Context) -> Value:
         return _dual(node.constraint, ctx)
     if isinstance(node, ms.ParameterReference):
         return ctx.parameter(node.name).values
+    if not ctx.solved and _sums_nothing(node, ctx) and ms.carries_variable(node):
+        return _nothing_summed(node, ctx)
     if isinstance(node, ms.Negate):
         return -evaluate(node.operand, ctx)
     if isinstance(node, _Binary):
@@ -91,6 +93,42 @@ def _evaluated(node: ms.Expression, ctx: Context) -> Value:
     assert_never(node)
 
 
+def _sums_nothing(node: ms.Expression, ctx: Context) -> bool:
+    """Whether *node* is over a dimension without a coordinate, or sums an operand that is."""
+    return is_empty((node.operand if isinstance(node, ms.Sum) else node).dims, ctx)
+
+
+def _nothing_summed(node: ms.Expression, ctx: Context) -> LinearExpression:
+    """
+    A term over a dimension without a coordinate, or a sum of one: the constant zero.
+
+    No term under it is built, but what it reads beside its terms is evaluated
+    all the same, so its data is read, checked and refused as anywhere else.
+    """
+    _data_under(node, ctx)
+    return operators.constant_term(ctx.model, _zeros(node, ctx))
+
+
+def _data_under(node: ms.Expression, ctx: Context) -> None:
+    """
+    Evaluate what *node* reads beside its terms: the operands that hold no
+    variable, the conditions of its cases, the amount and partition of a
+    shift or window. A use of every other operand is consumed unbuilt.
+    """
+    if isinstance(node, ms.Cases):
+        for region in node.regions:
+            evaluate_where(region.when, ctx)
+    if isinstance(node, ms.Translate | ms.WindowSum):
+        _partition(node.partition, ctx)
+        _amount(_amount_of(node), ctx)
+    for operand in ms.children(node):
+        if not ms.carries_variable(operand):
+            evaluate(operand, ctx)
+            continue
+        ctx.memo.used(operand)
+        _data_under(operand, ctx)
+
+
 def _sum(
     node: ms.Sum, ctx: Context, of: Callable[[ms.Expression], Array] | None = None
 ) -> Array:
@@ -102,31 +140,13 @@ def _sum(
     value = functools.partial(_operand, ctx=ctx) if of is None else of
     operand = node.operand
     plain = [axis.dimension for axis in node.over if axis.column is None]
-    through = operand if isinstance(operand, ms.Join) and operand.columns.axes else None
-    inner = operand if through is None else through.operand
-    if of is None and any(len(ctx.coords[d]) == 0 for d in inner.dims):
-        ctx.memo.skipped(operand)
-        return _nothing_summed(node, ctx)
-    if through is None:
-        summed = value(inner)
+    if isinstance(operand, ms.Join) and operand.columns.axes:
+        summed = _through(value(operand.operand), operand.columns, ctx)
     else:
-        summed = _through(value(inner), through.columns, ctx)
+        summed = value(operand)
     for dimension in plain:
         summed = operators.sum_over(summed, dimension)
     return summed
-
-
-def _nothing_summed(node: ms.Sum, ctx: Context) -> Array:
-    """The sum of an operand without a cell: the constant zero over the dims of *node*, a term where the operand holds a variable."""
-    as_term = not ctx.solved and ms.carries_variable(node.operand)
-
-    def zero() -> Array:
-        coords = {d: ctx.coords[d] for d in node.dims}
-        shape = [len(index) for index in coords.values()]
-        zeros = xr.DataArray(np.zeros(shape), coords=coords, dims=list(coords))
-        return LinearExpression.from_constant(ctx.model, zeros) if as_term else zeros
-
-    return ctx.memo.kept(("nothing summed", node.dims, as_term), zero)
 
 
 def _through(array: Array, columns: ms.JoinColumns, ctx: Context) -> Array:

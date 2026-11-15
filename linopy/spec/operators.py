@@ -21,6 +21,7 @@ import xarray as xr
 
 from linopy.constants import TERM_DIM
 from linopy.expressions import LinearExpression, merge
+from linopy.model import Model
 from linopy.spec.context import Array, as_expression
 from linopy.spec.errors import SpecDataError
 
@@ -166,7 +167,27 @@ def _zeros(
     )
     if isinstance(array, xr.DataArray):
         return zeros
-    return LinearExpression.from_constant(array.model, zeros)
+    return constant_term(array.model, zeros)
+
+
+def constant_term(model: Model, constant: xr.DataArray) -> LinearExpression:
+    """
+    *constant* as a term of *model* without a variable, on the model's store.
+
+    It is laid out the way a term is, so nothing is aligned, which makes it
+    cheaper than :meth:`~linopy.expressions.LinearExpression.from_constant`.
+    """
+    dims = (*constant.dims, TERM_DIM)
+    slots = np.empty((*constant.shape, 0))
+    labels = slots.astype(model.dtypes["labels"])
+    data = constant.to_dataset(name="const").assign(
+        coeffs=(dims, slots), vars=(dims, labels)
+    )
+    term = LinearExpression(data, model)
+    if not model.sparse:
+        return term
+    store = term._store.to_sparse()
+    return term if isinstance(store, str) else term._from_store(store, model)
 
 
 def _coord_dims(array: Array) -> list[str]:
@@ -187,7 +208,8 @@ def at(
     """
     expression = as_expression(array)
     if any(not len(expression.indexes[d]) for d in positions):
-        return nothing_read(expression, tuple(positions), present)
+        onto = {str(d): present.indexes[d] for d in present.dims}
+        return _zeros(expression, tuple(positions), onto).where(present)
     if isinstance(expression, LinearExpression) and expression.is_sparse:
         if set(positions) & set(present.dims):
             return _at_by_rows(expression, positions, present)
@@ -203,10 +225,11 @@ def at(
     return picked.where(present)
 
 
-def nothing_read(array: Array, along: tuple[str, ...], present: xr.DataArray) -> Array:
-    """:func:`at` of *array* read *along* dimensions where no key tuple reads a value: absent wherever *present* leaves a tuple out."""
-    onto = {str(d): present.indexes[d] for d in present.dims}
-    return _zeros(as_expression(array), along, onto).where(present)
+def nothing_read(
+    array: Array, along: tuple[str, ...], onto: Mapping[str, pd.Index]
+) -> Array:
+    """:func:`at` of *array* read *along* dimensions through a relation keyed *onto* that has no row: absent throughout."""
+    return _zeros(as_expression(array), along, onto).where(xr.DataArray(False))
 
 
 def _at_by_rows(

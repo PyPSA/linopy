@@ -21,7 +21,7 @@ from mathspec import program as ms
 
 from linopy.constants import FACTOR_DIM, TERM_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression
-from linopy.spec.context import Context, Term, Value, as_expression
+from linopy.spec.context import Context, Term, Value, as_expression, is_empty
 from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.evaluator import (
     carried,
@@ -32,12 +32,7 @@ from linopy.spec.evaluator import (
     refuse_made,
     without_strays,
 )
-from linopy.spec.where import (
-    admits_a_row,
-    as_linopy_mask,
-    evaluate_where,
-    is_empty,
-)
+from linopy.spec.where import admits_a_row, as_linopy_mask, evaluate_where
 from linopy.variables import Variable
 
 _FLIPPED: dict[str, ms.ConstraintSense] = {"==": "==", "<=": ">=", ">=": "<="}
@@ -53,11 +48,11 @@ def build(ctx: Context, expressions: bool = True) -> None:
     order. A declaration without a row costs next to nothing: a variable
     over a dimension without a coordinate is added with its bounds unread,
     and a constraint over one, or one whose ``where`` admits no row, is
-    skipped unread, as is an assumption admitted nowhere. The program's
-    assumptions are checked once the variables exist, so a condition may
-    read where one is defined. Each declaration refuses the missing
-    ``refused`` rows its live rows read, a named expression's whether it is
-    built or left to :func:`linopy.spec.evaluate`.
+    skipped unread, as is an assumption admitted nowhere or over such a
+    dimension. The program's assumptions are checked once the variables
+    exist, so a condition may read where one is defined. Each declaration
+    refuses the missing ``refused`` rows its live rows read, a named
+    expression's whether it is built or left to :func:`linopy.spec.evaluate`.
     """
     _variables(ctx)
     _check_assumptions(ctx)
@@ -66,11 +61,6 @@ def build(ctx: Context, expressions: bool = True) -> None:
     _objective(ctx)
     if expressions:
         _expressions(ctx)
-
-
-def _is_empty(dims: tuple[str, ...], ctx: Context) -> bool:
-    """Whether one of *dims* has no coordinate, so a declaration over them has no row."""
-    return any(len(ctx.coords[d]) == 0 for d in dims)
 
 
 def _check_assumptions(ctx: Context) -> None:
@@ -83,10 +73,11 @@ def _check_assumptions(ctx: Context) -> None:
     a missing row on either side of a comparison reads as false there.
     """
     for name, assumption in ctx.program.assumptions.items():
-        if is_empty(assumption.holds, ctx) or not admits_a_row(assumption.where, ctx):
+        holds, where = assumption.holds, assumption.where
+        if is_empty(holds.dims, ctx) or not admits_a_row(where, ctx):
             continue
-        admitted = evaluate_where(assumption.where, ctx)
-        held = evaluate_where(assumption.holds, ctx)
+        admitted = evaluate_where(where, ctx)
+        held = evaluate_where(holds, ctx)
         failing = admitted & ~held
         if bool(failing.any()):
             raise SpecDataError(
@@ -101,7 +92,7 @@ def _variables(ctx: Context) -> None:
         lower: float | xr.DataArray = -np.inf
         upper: float | xr.DataArray = np.inf
         mask = None
-        if _is_empty(declared.dims, ctx):
+        if is_empty(declared.dims, ctx):
             ctx.memo.skipped(*bounds)
         else:
             rows = evaluate_where(declared.where, ctx)
@@ -144,7 +135,7 @@ def _sos(ctx: Context) -> None:
 
 def _constraints(ctx: Context) -> None:
     for name, row in ctx.program.constraints.items():
-        if _is_empty(row.dims, ctx) or not admits_a_row(row.where, ctx):
+        if is_empty(row.dims, ctx) or not admits_a_row(row.where, ctx):
             ctx.memo.skipped(row.lhs, row.rhs)
             continue
         rows = evaluate_where(row.where, ctx)

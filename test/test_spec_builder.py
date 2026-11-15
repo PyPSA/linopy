@@ -1357,41 +1357,75 @@ def test_a_declaration_without_a_row_reads_no_parameter() -> None:
     assert list(m.constraints) == []
 
 
-OVER_NOTHING: dict[str, dict[str, Any]] = {
-    "a summed term": {
-        "objective": {"sense": "minimize", "expression": "sum(x) + sum(y * limit)"}
-    },
-    "summed data": {
-        "constraints": {
-            "capped": {"dims": ["g"], "expression": "x <= 1 + sum(limit, over=h)"}
-        }
-    },
-    "an assumption": {"assumptions": {"bounded": {"holds": "bound > 0"}}},
+SUMMED_TERM = {
+    "objective": {"sense": "minimize", "expression": "sum(x) + sum(y * limit)"}
+}
+SUMMED_DATA = {
+    "constraints": {
+        "capped": {"dims": ["g"], "expression": "x <= 1 + sum(limit, over=h)"}
+    }
+}
+OVER_NOTHING: dict[str, tuple[dict[str, Any], set[str]]] = {
+    "a summed term": (SUMMED_TERM, {"on", "limit"}),
+    "summed data": (SUMMED_DATA, {"on", "limit"}),
+    "an assumption": ({"assumptions": {"bounded": {"holds": "bound > 0"}}}, {"on"}),
 }
 
 
-@pytest.mark.parametrize("entries", OVER_NOTHING.values(), ids=list(OVER_NOTHING))
-def test_what_is_over_a_dimension_without_a_coordinate_reads_no_parameter(
-    entries: dict[str, Any],
+@pytest.mark.parametrize(
+    ("entries", "read"), OVER_NOTHING.values(), ids=list(OVER_NOTHING)
+)
+def test_what_is_over_a_dimension_without_a_coordinate_is_zero(
+    entries: dict[str, Any], read: set[str]
 ) -> None:
     data = dead_rows_data()
-    spec = with_(DEAD_ROWS, **entries)
-    m = solved(spec, data, store=False)
-    assert set(data.read) & set(DEAD_ROWS["parameters"]) == {"on"}
+    m = solved(with_(DEAD_ROWS, **entries), data, store=False)
+    assert set(data.read) & set(DEAD_ROWS["parameters"]) == read
     assert list(m.constraints) == list(entries.get("constraints", {}))
     assert m.objective.value == pytest.approx(0.0)
 
 
-@pytest.mark.parametrize("store", [False, True])
-def test_the_data_of_an_unread_parameter_is_checked_only_when_stored(
-    store: bool,
+BAD_LIMITS = {
+    "a label it lacks": xr.DataArray([1.0], coords=[pd.Index(["h1"], name="h")]),
+    "text": xr.DataArray(np.array([], dtype=object), coords=[H0]),
+}
+
+
+@pytest.mark.parametrize("limit", BAD_LIMITS.values(), ids=list(BAD_LIMITS))
+@pytest.mark.parametrize("entries", [SUMMED_TERM, SUMMED_DATA], ids=["term", "data"])
+def test_data_over_a_dimension_without_a_coordinate_is_checked(
+    entries: dict[str, Any], limit: xr.DataArray
 ) -> None:
-    stray = xr.DataArray([1.0], coords=[pd.Index(["nowhere"], name="g")])
-    data = dead_rows_data(cap=stray)
+    with pytest.raises(SpecDataError, match="parameter 'limit'"):
+        Model.from_spec(with_(DEAD_ROWS, **entries), dead_rows_data(limit=limit))
+
+
+@pytest.mark.parametrize("labels", [[], ["h1"]], ids=["empty", "one"])
+def test_a_sum_keeps_its_dtype_over_a_dimension_without_a_coordinate(
+    labels: list[str],
+) -> None:
+    spec = {
+        "dimensions": {"h": {}},
+        "parameters": {"count": {"dims": ["h"], "dtype": "int"}},
+        "expressions": {"n": {"expression": "sum(count)"}},
+    }
+    h = pd.Index(labels, name="h", dtype=str)
+    count = xr.DataArray(np.ones(len(h), dtype=int), coords=[h])
+    folded = evaluate(spec, Model(), "n", sources={"h": h, "count": count})
+    assert folded["n"].dtype.kind == "i"
+
+
+@pytest.mark.parametrize("store", [False, True])
+@pytest.mark.parametrize(("name", "dim"), [("cap", "g"), ("limit", "h")])
+def test_the_data_of_an_unread_parameter_is_checked_only_when_stored(
+    store: bool, name: str, dim: str
+) -> None:
+    stray = xr.DataArray([1.0], coords=[pd.Index(["nowhere"], name=dim)])
+    data = dead_rows_data(**{name: stray})
     if not store:
         Model.from_spec(DEAD_ROWS, data)
         return
-    with pytest.raises(SpecDataError, match="cap"):
+    with pytest.raises(SpecDataError, match=name):
         Model.from_spec(DEAD_ROWS, data, store=True)
 
 

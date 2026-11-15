@@ -11,7 +11,7 @@ to is a :data:`Value`: a number, an array or a linopy term.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Hashable, Mapping
+from collections.abc import Callable, Hashable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast, overload
 
@@ -82,7 +82,7 @@ class Memo:
             if node not in self.inner:
                 self.inner[node] = tuple(ms.walk(node))
             for inner in self.inner[node]:
-                self._used(inner)
+                self.used(inner)
             return value
         masked = self.masked
         value = make()
@@ -92,15 +92,16 @@ class Memo:
         if pinned:
             self.uses.pop(node, None)
         else:
-            self._used(node)
+            self.used(node)
         return value
 
     def skipped(self, *roots: ms.Expression) -> None:
         """Consume the uses of every node under *roots*, a declaration left unbuilt."""
         for node in ms.walk(*roots):
-            self._used(node)
+            self.used(node)
 
-    def _used(self, node: ms.Expression) -> None:
+    def used(self, node: ms.Expression) -> None:
+        """Consume one use of *node*, its kept value dropped with the last."""
         left = self.uses.get(node)
         if left is None:
             return
@@ -149,3 +150,8 @@ class Context:
     subject: str = "the spec"
     memo: Memo = field(default_factory=Memo, compare=False, repr=False)
     rename: Callable[[str], str] = field(default=str, compare=False, repr=False)
+
+
+def is_empty(dims: Iterable[str], ctx: Context) -> bool:
+    """Whether one of *dims* has no coordinate, so what is over them has no cell."""
+    return any(not len(ctx.coords[d]) for d in dims)
