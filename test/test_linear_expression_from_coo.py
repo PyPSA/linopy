@@ -1,4 +1,4 @@
-"""Tests for :meth:`linopy.LinearExpression.from_coo`."""
+"""Tests for :meth:`linopy.LinearExpression.from_coo` and :meth:`~linopy.LinearExpression.to_coo`."""
 
 from __future__ import annotations
 
@@ -172,3 +172,58 @@ def test_constraint(m: Model) -> None:
     via_ops = m.add_constraints(balance_arithmetic(m) == 3, name="ops")
     assert_equivalent(via_coo.lhs, via_ops.lhs)
     xr.testing.assert_equal(via_coo.rhs, via_ops.rhs)
+
+
+def test_to_coo_gives_the_triplets_back_in_cell_order(m: Model) -> None:
+    rows, vars_, coeffs = balance_triplets(m)
+    expr = LinearExpression.from_coo(m, [TIME, BUS], rows, vars_, coeffs)
+    order = np.lexsort((vars_, rows))
+    got_rows, got_vars, got_coeffs = expr.to_coo()
+    back = np.lexsort((got_vars, got_rows))
+    assert got_rows.tolist() == sorted(rows.tolist())
+    assert got_vars[back].tolist() == vars_[order].tolist()
+    assert got_coeffs[back].tolist() == coeffs[order].tolist()
+    assert_equivalent(LinearExpression.from_coo(m, [TIME, BUS], *expr.to_coo()), expr)
+
+
+def test_to_coo_leaves_out_masked_zero_and_absent_terms(m: Model) -> None:
+    p = m.variables["p"]
+    keep = xr.DataArray([True, False, True], coords=[GEN])
+    expr = (p.where(keep) + 0 * p).where(
+        xr.DataArray([True, True, False], coords=[TIME])
+    )
+    rows, vars_, coeffs = expr.to_coo()
+    live = p.labels.transpose("time", "gen").values[:2, [0, 2]]
+    assert rows.tolist() == [0, 2, 3, 5]
+    assert vars_.tolist() == live.ravel().tolist()
+    assert coeffs.tolist() == [1.0] * 4
+
+
+def test_to_coo_dtypes(m: Model) -> None:
+    _, vars_, coeffs = (2 * m.variables["p"]).to_coo()
+    assert vars_.dtype == m._dtypes["labels"]
+    assert coeffs.dtype == float
+
+
+def test_to_coo_active_leaves_out_masked_constraint_rows(m: Model) -> None:
+    p = m.variables["p"]
+    mask = xr.DataArray([True, False, True], coords=[TIME])
+    con = m.add_constraints(2 * p >= 0, mask=mask, name="c")
+    rows, vars_, coeffs = con.lhs.to_coo(active=con.labels.values.ravel() != -1)
+    df = con.to_polars()
+    assert sorted(vars_.tolist()) == sorted(df["vars"].to_list())
+    assert np.unique(rows).size == df["labels"].n_unique()
+    assert coeffs.tolist() == [2.0] * len(df)
+
+
+def test_to_coo_active_shape(m: Model) -> None:
+    with pytest.raises(ValueError, match="one boolean per cell"):
+        m.variables["p"].to_linexpr().to_coo(active=np.ones(2, dtype=bool))
+
+
+def test_to_coo_cell_without_live_terms_comes_back_absent(m: Model) -> None:
+    expr = 0 * m.variables["f"] + 3
+    rows, vars_, coeffs = expr.to_coo()
+    assert rows.size == 0
+    back = LinearExpression.from_coo(m, [TIME, LINE], rows, vars_, coeffs)
+    assert back.const.isnull().all()
