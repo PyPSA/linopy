@@ -130,6 +130,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `Model.from_spec` builds a linear objective when the data sets all quadratic coefficients to zero. ([\#1141](https://github.com/PyPSA/linopy/pull/1141))
 - `Model.from_spec` no longer refuses an infinite parameter times a variable absent there, where no row is built. ([\#1143](https://github.com/PyPSA/linopy/pull/1143))
 - `Model.from_spec` adds no constraint where every variable of it is masked, where it raised that both sides are constant. ([\#1154](https://github.com/PyPSA/linopy/pull/1154))
+- `Model.from_spec` drops a constraint row that a stated edge value empties of every variable term, e.g. `sum(shift(x, along=t, offset=1, edge=0), over=k) == load` at the first `t`, with a warning when it holds (`0 == 0`), and refuses one that cannot hold (`0 == 5`) as such. A row emptied by an absent term, such as a shift without `edge=`, is still refused. ([\#1147](https://github.com/PyPSA/linopy/issues/1147))
 - `LinearExpression(data, model)` no longer raises on a `.sel` over full coordinates. ([\#1144](https://github.com/PyPSA/linopy/pull/1144))
 - `LinearExpression.from_constant` builds on the model's store, so a sparse model's constant stays sparse and adding it emits no `PerformanceWarning`. ([\#1145](https://github.com/PyPSA/linopy/pull/1145))
 - `Model.from_spec(..., sparse=True)` keeps a `shift` whose offset differs per entity sparse, without a `PerformanceWarning`. ([\#1145](https://github.com/PyPSA/linopy/pull/1145))

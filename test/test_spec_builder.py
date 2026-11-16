@@ -754,6 +754,51 @@ def test_a_dimension_with_no_members_empties_a_summed_row(row: str) -> None:
         Model.from_spec(spec, {"t": empty, "w": none, "c": none})
 
 
+def delayed(edge: str) -> dict[str, Any]:
+    """A balance over ``t`` that a delay of one empties of every variable term at ``t=0``."""
+    return {
+        "dimensions": {"t": {"dtype": "int", "ordered": True}, "k": {"dtype": "str"}},
+        "parameters": {"load": {"dims": ["t"]}},
+        "variables": {"x": {"dims": ["t", "k"], "bounds": {"lower": 0}}},
+        "constraints": {
+            "balance": {
+                "dims": ["t"],
+                "expression": f"sum(shift(x, along=t, offset=1{edge}), over=k) == load",
+            }
+        },
+        "objective": {"sense": "minimize", "expression": "sum(x, over=[t, k])"},
+    }
+
+
+def delayed_data(first: float) -> dict[str, Any]:
+    return {"t": T, "k": ["a"], "load": xr.DataArray([first, 10.0, 10.0], coords=[T])}
+
+
+def test_a_row_emptied_by_a_stated_edge_that_holds_is_only_warned_about() -> None:
+    with pytest.warns(UserWarning, match=r"constraint 'balance'.*trivially true"):
+        m = solved(delayed(", edge=0"), delayed_data(0.0))
+    assert m.termination_condition == "optimal"
+    assert (m.constraints["balance"].vars.sel(t=0) == -1).all()
+    assert float(m.solution["x"].sel(t=1).sum()) == pytest.approx(10.0)
+
+
+def test_a_row_emptied_by_a_stated_edge_that_cannot_hold_is_refused() -> None:
+    with pytest.raises(
+        SpecDataError,
+        match=r"constraint 'balance'.*cannot hold, the first at t=0, where it reads 0 == 5",
+    ):
+        Model.from_spec(delayed(", edge=0"), delayed_data(5.0))
+
+
+@pytest.mark.parametrize("first", [0.0, 5.0])
+def test_a_row_emptied_by_a_vacated_shift_is_refused(first: float) -> None:
+    """Without ``edge=`` the vacated term is absent, not a stated zero."""
+    with pytest.raises(
+        SpecDataError, match=r"(?s)constraint 'balance'.*Declare missing: 0"
+    ):
+        Model.from_spec(delayed(""), delayed_data(first))
+
+
 @pytest.mark.parametrize(("missing", "kept"), [("absent", False), (0, True)])
 def test_a_missing_row_in_a_where_reads_the_way_missing_says(
     missing: Any, kept: bool

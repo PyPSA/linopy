@@ -203,9 +203,11 @@ def _check_live(
 
     Such a row reads as ``0 sense rhs``: linopy carries no column there, the
     row leaves the problem and the constraint silently stops binding. Where
-    every variable of the row declares a ``missing:`` number, the constant
-    left is what the math says, so a row whose two sides are equal there is
-    warned about rather than refused.
+    every variable of the row declares a ``missing:`` number, or the spec
+    states every value the row can be left with (see :func:`_stated`), the
+    constant left is what the math says: a row whose two sides are equal there
+    is warned about, and one whose sides differ is refused as one that cannot
+    hold.
     An absent row is not emptied: absence spread through arithmetic, a masked
     variable or a vacated translation, takes the row with it. A bare variable
     term is never emptied: a row of it exists exactly where the variable does.
@@ -222,18 +224,21 @@ def _check_live(
         f"is attached, the first at {first_coordinates(dead, 3)}. Nothing is left to constrain there, so "
         f"the row leaves the problem without saying so."
     )
+    sides = (declared.lhs, declared.rhs)
     valued = all(
-        ctx.program.variables[v].missing != "absent"
-        for v in ms.variables_of(declared.lhs, declared.rhs)
-    )
-    if valued and not _binds(other, constant_of(term), dead):
+        ctx.program.variables[v].missing != "absent" for v in ms.variables_of(*sides)
+    ) or (not isinstance(other, Term) and all(_stated(side, ctx) for side in sides))
+    const = constant_of(term)
+    if valued and not _binds(other, const, dead):
         warnings.warn(
-            f"{said} Every variable there takes its missing: number and the two sides "
-            f"are equal, so the row is trivially true.",
+            f"{said} Every term there takes the value the spec states for it and the "
+            f"two sides are equal, so the row is trivially true.",
             UserWarning,
             stacklevel=2,
         )
         return
+    if valued:
+        said = _cannot_hold(name, declared, const, other, dead)
     supply = (
         "  Supply the rows of the variables, if the row is meant to bind."
         if valued
@@ -250,6 +255,69 @@ def _binds(other: Value, const: xr.DataArray, dead: xr.DataArray) -> bool:
     """Whether the side without the variable term differs from the constant *const* left on a row *dead* names."""
     differs = xr.DataArray(other) != const
     return bool((differs & dead).any())
+
+
+def _cannot_hold(
+    name: str,
+    declared: ms.Constraint,
+    const: xr.DataArray,
+    other: Value,
+    dead: xr.DataArray,
+) -> str:
+    """The refusal of the rows *dead* names whose constant *const* differs from *other*, the first one's comparison spelled out."""
+    failing = dead & (xr.DataArray(other) != const)
+    first = dict(
+        zip(
+            failing.dims,
+            np.unravel_index(int(np.argmax(failing.values)), failing.shape),
+        )
+    )
+    left, right = (
+        float(xr.DataArray(side).broadcast_like(failing).isel(first))
+        for side in (const, other)
+    )
+    sense = _FLIPPED[declared.sense] if flipped(declared) else declared.sense
+    return (
+        f"constraint '{name}': {int(failing.sum())} row(s) hold no variable term once the "
+        f"data is attached and cannot hold, the first at {first_coordinates(failing, 3)}, "
+        f"where it reads {left:g} {sense} {right:g}. Every term there takes the value "
+        f"the spec states for it, so the two sides are constants that differ."
+    )
+
+
+def _stated(node: ms.Expression, ctx: Context) -> bool:
+    """
+    Whether the spec states every value *node* can leave a row with.
+
+    A term under it is then present at every row or stands as a number the
+    spec gives: a variable without a ``where:``, or with a ``missing:`` number,
+    shifted only with an ``edge=`` number, times data that is never absent.
+    Anything that can leave a term absent is not stated, so a row emptied by
+    it is still refused: a shift without ``edge=``, a window, a lookup, a
+    partition, data that can be absent and a sum over no member.
+    """
+    summed = node.operand.dims if isinstance(node, ms.Sum) else ()
+    if is_empty((*node.dims, *summed), ctx):
+        return False
+    if isinstance(node, ms.VariableReference):
+        variable = ctx.program.variables[node.name]
+        return variable.where is None or variable.missing != "absent"
+    if isinstance(node, ms.ParameterReference):
+        return _never_absent(node.name, ctx)
+    if isinstance(node, ms.Translate):
+        if node.fill is None or node.partition is not None:
+            return False
+        if isinstance(node.offset, str) and not _never_absent(node.offset, ctx):
+            return False
+    elif isinstance(node, ms.WindowSum | ms.Join | ms.Dual):
+        return False
+    return all(_stated(child, ctx) for child in ms.children(node))
+
+
+def _never_absent(parameter: str, ctx: Context) -> bool:
+    """Whether *parameter* has a value at every coordinate: one ``missing:`` does not leave absent, under no ``where:``."""
+    declared = ctx.program.parameters[parameter]
+    return declared.missing != "absent" and declared.where is None
 
 
 def _objective(ctx: Context) -> None:
