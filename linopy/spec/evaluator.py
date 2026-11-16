@@ -14,7 +14,7 @@ import xarray as xr
 from mathspec import program as ms
 
 from linopy.constants import FACTOR_DIM
-from linopy.expressions import LinearExpression, QuadraticExpression
+from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.spec import operators
 from linopy.spec.context import (
     Array,
@@ -40,6 +40,7 @@ _Framed = TypeVar(
     "_Framed", bound=xr.DataArray | LinearExpression | QuadraticExpression
 )
 Shadow: TypeAlias = float | xr.DataArray
+_Sign: TypeAlias = Callable[[Value, Value], Value]
 
 
 class _Unmirrored(Exception):
@@ -572,6 +573,8 @@ def _combine(node: _Binary, ctx: Context) -> Value:
     read as an absence and silently drop the row, an infinity would stand in
     the problem. A hole beside a term becomes the term's absence.
     """
+    if isinstance(node, ms.Add) and _prunes(ctx) and _carries(node, ctx):
+        return _added(node, ctx)
     op = _OPERATORS[type(node)]
     first, second = _operands(node)
     if isinstance(node, ms.Add) and isinstance(second, ms.Negate):
@@ -611,6 +614,131 @@ def _combine(node: _Binary, ctx: Context) -> Value:
                 f"coordinates, so the data was attached against other labels than the model was built on."
             )
     return refuse_made(kind, (node,), op, a, b, ctx)
+
+
+def _chain(
+    node: ms.Expression, ctx: Context
+) -> tuple[ms.Expression, list[tuple[ms.Add, _Sign, ms.Expression]]]:
+    """
+    The chain of sums and differences ending in *node*: its first operand,
+    then per step the node, its sign and the operand it adds. The chain runs
+    down the left operands for as long as they are sums carrying a variable.
+    """
+    steps: list[tuple[ms.Add, _Sign, ms.Expression]] = []
+    while isinstance(node, ms.Add) and _carries(node, ctx):
+        sign, operand = operator.add, node.right
+        if isinstance(operand, ms.Negate):
+            sign, operand = operator.sub, operand.operand
+        steps.append((node, sign, operand))
+        node = node.left
+    return node, steps[::-1]
+
+
+def _added(node: ms.Add, ctx: Context) -> Value:
+    """
+    A chain of sums and differences that carries a variable, its terms merged in one step.
+
+    Where an operand holds an infinity or data, the constants are added
+    operand by operand in the order of the chain and refused as each step
+    of it is, and the result holds exactly that constant: no step refuses
+    operands that are finite throughout. Data adds to the constant alone,
+    in one step; a hole in it is the absence of the row.
+    """
+    first, steps = _chain(node, ctx)
+    ctx.memo.pruned += 1
+    operands = [(None, operator.add, first), *steps]
+    values = [_off_rows(evaluate(operand, ctx), ctx) for _, _, operand in operands]
+    const: xr.DataArray | None = None
+    if any(not isinstance(v, Term) or _holds_infinity(v) for v in values):
+        try:
+            const = _chain_constant(operands, values, ctx, exact=False)
+        except SpecDataError:
+            const = _chain_constant(operands, values, ctx, exact=True)
+    terms: list[LinearExpression | QuadraticExpression] = []
+    negate: list[bool] = []
+    data: Value | None = None
+    for (_, sign, _), value in zip(operands, values):
+        if isinstance(value, Term):
+            terms.append(as_expression(value))
+            negate.append(sign is operator.sub)
+        else:
+            signed = -value if sign is operator.sub else value
+            data = signed if data is None else data + signed
+    made: LinearExpression | QuadraticExpression
+    if all(type(term) is LinearExpression for term in terms):
+        if len(terms) == 1 and not negate[0]:
+            made = terms[0]
+        else:
+            made = merge(cast(list[LinearExpression], terms), negate=negate)
+    else:
+        signed_terms = (-t if flip else t for t, flip in zip(terms, negate))
+        made = functools.reduce(operator.add, signed_terms)
+    if data is None or const is None:
+        return made
+    return _with_constant(operator.add(*_paired(made, data)), const, ctx)
+
+
+def _holds_infinity(term: Term) -> bool:
+    """Whether the constant of *term* is an infinity at a row."""
+    if isinstance(term, Variable):
+        return False
+    if isinstance(term, LinearExpression):
+        return bool(np.isinf(term._store.const).any())
+    return bool(np.isinf(term.const.values).any())
+
+
+def _chain_constant(
+    operands: Sequence[tuple[ms.Add | None, _Sign, ms.Expression]],
+    values: Sequence[Value],
+    ctx: Context,
+    exact: bool,
+) -> xr.DataArray:
+    """
+    The constant a chain of sums adds up to, refused step by step as :func:`_combine` refuses a sum.
+
+    A bare variable adds a zero, also where it is masked, which refuses
+    whatever the chain built step by step refuses and at most more. *exact*
+    gives each partial sum the absences and the dims of the term built by
+    then, so it refuses exactly the same and names the same coordinates.
+    """
+    const = xr.DataArray(0.0)
+    over: dict[str, None] = {}
+    for (step, sign, operand), value in zip(operands, values):
+        part = xr.DataArray(
+            _constant_part(operand, value, ctx) if exact else constant_of(value)
+        )
+        if step is None:
+            const = part
+        else:
+            if exact and over:
+                dims = (*over, *(str(d) for d in const.dims if d not in over))
+                const = _full(const, dims, ctx)
+            const = refuse_made("add", (step,), sign, const, part, ctx)
+        if isinstance(value, Term):
+            over.update(dict.fromkeys(map(str, value.coord_dims)))
+    return const
+
+
+def _constant_part(operand: ms.Expression, value: Value, ctx: Context) -> Shadow:
+    """The constant *value* adds to a sum, NaN where it is absent."""
+    if isinstance(operand, ms.VariableReference) and isinstance(value, Variable):
+        return _variable_shadow(operand.name, ctx)
+    if isinstance(value, Term):
+        return _constant(value, ctx)
+    return cast(Shadow, value)
+
+
+def _with_constant(made: Value, const: xr.DataArray, ctx: Context) -> Value:
+    """The linear expression *made* holding exactly *const* wherever it is present."""
+    if not isinstance(made, LinearExpression):
+        return made
+    store = made._store
+    held = np.asarray(store.const).reshape(-1)
+    values = _full(const, tuple(store.dims), ctx).values.reshape(-1)
+    values[np.isnan(held)] = np.nan
+    if np.array_equal(values, held, equal_nan=True):
+        return made
+    return LinearExpression._from_store(store.assign_const(values), made.model)
 
 
 def _zeroes_decide(node: _Binary, left: Value, right: Value, ctx: Context) -> bool:

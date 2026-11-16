@@ -3891,6 +3891,7 @@ def merge(
     cls: type[GenericExpression],
     join: JoinOptions | None = None,
     fill_value: FillValueLike = None,
+    negate: Sequence[bool] | None = None,
     **kwargs: Any,
 ) -> GenericExpression: ...
 
@@ -3903,6 +3904,7 @@ def merge(
     cls: None = ...,
     join: JoinOptions | None = None,
     fill_value: FillValueLike = None,
+    negate: Sequence[bool] | None = None,
     **kwargs: Any,
 ) -> BaseExpression: ...
 
@@ -3914,6 +3916,7 @@ def merge(
     cls: type[BaseExpression] | None = None,
     join: JoinOptions | None = None,
     fill_value: FillValueLike = None,
+    negate: Sequence[bool] | None = None,
     **kwargs: Any,
 ) -> BaseExpression:
     """
@@ -3941,6 +3944,8 @@ def merge(
         Pass ``linopy.ABSENT`` to leave the positions the join creates absent
         instead of contributing the zero expression there. Requires an
         explicit ``join``.
+    negate : sequence of bool, optional
+        One flag per expression: a flagged expression enters subtracted.
     **kwargs
         Additional keyword arguments passed to xarray.concat. Defaults to
         {coords: "minimal", compat: "override"} or, in the special case described
@@ -3990,6 +3995,15 @@ def merge(
     model = exprs[0].model
     fill = join_fill(fill_value, 0.0)
     linear = issubclass(cls, LinearExpression)
+
+    if negate is not None and any(negate):
+        stores = [getattr(e, "_store", None) for e in exprs]
+        plain = dim == TERM_DIM and join is None and not kwargs
+        if plain and all(isinstance(s, DenseStore) for s in stores):
+            summed = DenseStore.signed_sum(cast(list[DenseStore], stores), negate)
+            if summed is not None:
+                return LinearExpression._from_store(summed, model)
+        exprs = [-e if flip else e for e, flip in zip(exprs, negate)]
 
     if linear and all(type(e) is LinearExpression for e in exprs):
         stores = [cast(LinearExpression, e)._store for e in exprs]
