@@ -37,7 +37,9 @@ class _FakeGurobiModel:
     def setParam(self, name: str, value: object) -> None:
         pass
 
-    def addMVar(self, shape: tuple[int, ...], *args: object, **kwargs: object) -> np.ndarray:
+    def addMVar(
+        self, shape: tuple[int, ...], *args: object, **kwargs: object
+    ) -> np.ndarray:
         self._vars = [SimpleNamespace(VarName=f"x{i}") for i in range(shape[0])]
         return np.zeros(shape[0])
 
@@ -104,7 +106,9 @@ def _install_fake_gurobipy(monkeypatch, model: _FakeGurobiModel) -> None:
     monkeypatch.setattr(Gurobi, "is_available", classmethod(lambda cls: True))
 
 
-def test_gurobi_time_limit_without_incumbent_returns_empty_solution(monkeypatch) -> None:
+def test_gurobi_time_limit_without_incumbent_returns_empty_solution(
+    monkeypatch,
+) -> None:
     model = _FakeGurobiModel(sol_count=0, status=9)
     _install_fake_gurobipy(monkeypatch, model)
 
