@@ -799,11 +799,15 @@ def test_groupby_sum_absence_conformance(case: str) -> None:
         if case == "mixed_absent_member":
             return expr.where(xr.DataArray([True, False, True, True], coords=[idx]))
         if case == "explicit_zero_coeff":
-            return (0.0 * x + 5.0).where(xr.DataArray([True, True, False, True], coords=[idx]))
+            return (0.0 * x + 5.0).where(
+                xr.DataArray([True, True, False, True], coords=[idx])
+            )
         return expr
 
     if case == "unaddressed_category":
-        groups = pd.Categorical(["g1", "g1", "g2", "g2"], categories=["g1", "g2", "g_empty"])
+        groups = pd.Categorical(
+            ["g1", "g1", "g2", "g2"], categories=["g1", "g2", "g_empty"]
+        )
     elif case == "all_masked_members":
         groups = ["g1", "g1", "g2", "g2"]
     else:
