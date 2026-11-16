@@ -627,6 +627,67 @@ def test_arithmetic_is_not_refused_on_a_row_masked_out() -> None:
     assert int(m.constraints["row"].labels.sel(t=0)) == -1
 
 
+def guarded(row: str, cases: dict[str, Any], otherwise: Any) -> dict[str, Any]:
+    """:func:`quotient` with a row reading the named expression ``used``, defined by *cases*."""
+    used = {"dims": ["t"], "cases": cases, "otherwise": otherwise}
+    return with_(quotient(row), expressions={"used": used})
+
+
+UNRATED = {"unrated": {"when": "a == inf", "expression": 1}}
+RATED = {"rated": {"when": "a < inf", "expression": "a * b"}}
+
+
+@pytest.mark.parametrize(
+    ("cases", "otherwise"),
+    [
+        pytest.param(UNRATED, "a * b", id="otherwise"),
+        pytest.param(RATED, 1, id="case"),
+    ],
+)
+def test_a_case_value_is_not_refused_where_another_case_applies(
+    cases: dict[str, Any], otherwise: Any
+) -> None:
+    """``a * b`` is inf * 0 on ``t=0``, which a case claims: a value is read only within its region (#1148)."""
+    m = Model.from_spec(guarded("x <= used", cases, otherwise), INF_AT_0)
+    row = m.constraints["row"]
+    assert row.rhs.values.tolist() == [1.0, 4.0, 5.0]
+    assert row.coeffs.squeeze().values.tolist() == [1.0, 1.0, 1.0]
+
+
+def test_a_case_term_is_not_refused_where_another_case_applies() -> None:
+    spec = guarded(
+        "used <= 3", {"unrated": {"when": "a == inf", "expression": "x"}}, "a * b * x"
+    )
+    row = Model.from_spec(spec, INF_AT_0).constraints["row"]
+    assert row.coeffs.where(row.vars != -1).sum("_term").values.tolist() == [1, 4, 5]
+    assert row.rhs.values.tolist() == [3.0, 3.0, 3.0]
+
+
+def test_a_case_value_is_refused_within_its_region() -> None:
+    spec = guarded("x <= used", {"high": {"when": "b > 4", "expression": 1}}, "a * b")
+    with pytest.raises(SpecDataError, match=r"constraint 'row'.*not finite at t=0"):
+        Model.from_spec(spec, INF_AT_0)
+
+
+def test_a_case_value_over_an_empty_dimension_is_read_within_its_region() -> None:
+    """A sum over a dimension without a coordinate builds no term but reads its data, a case's value within its region."""
+    spec = with_(
+        quotient("x <= sum(used, over=s)"),
+        dimensions={"s": {"dtype": "int"}},
+        variables={"y": {"dims": ["s"], "bounds": {"lower": 0, "upper": 1}}},
+        expressions={
+            "used": {
+                "dims": ["t", "s"],
+                "cases": {"unrated": {"when": "a == inf", "expression": "y"}},
+                "otherwise": "a * b * y",
+            }
+        },
+    )
+    data = {**INF_AT_0, "s": pd.Index([], dtype=int, name="s")}
+    row = Model.from_spec(spec, data).constraints["row"]
+    assert row.rhs.values.tolist() == [0.0, 0.0, 0.0]
+
+
 GATED_ON = {
     "variables": {
         "on": {
