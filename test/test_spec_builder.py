@@ -799,6 +799,33 @@ def test_a_row_emptied_by_a_vacated_shift_is_refused(first: float) -> None:
         Model.from_spec(delayed(""), delayed_data(first))
 
 
+@pytest.mark.parametrize(
+    "balance",
+    [
+        pytest.param(
+            "sum(shift(x, along=t, offset=lag, edge=0), over=k) == load",
+            id="offset-may-be-absent",
+        ),
+        pytest.param(
+            "sum(sum_back(shift(x, along=t, offset=1, edge=0), along=t, window=1), "
+            "over=k) == load",
+            id="window",
+        ),
+    ],
+)
+def test_a_row_emptied_where_a_term_may_be_absent_is_still_refused(
+    balance: str,
+) -> None:
+    """An ``edge=0`` under an offset that can be absent, or a window, is no stated value."""
+    spec = delayed(", edge=0")
+    spec["parameters"]["lag"] = {"dims": [], "dtype": "int", "missing": "absent"}
+    spec["constraints"]["balance"]["expression"] = balance
+    with pytest.raises(
+        SpecDataError, match=r"(?s)constraint 'balance'.*Declare missing: 0"
+    ):
+        Model.from_spec(spec, {**delayed_data(0.0), "lag": 1})
+
+
 @pytest.mark.parametrize(("missing", "kept"), [("absent", False), (0, True)])
 def test_a_missing_row_in_a_where_reads_the_way_missing_says(
     missing: Any, kept: bool
