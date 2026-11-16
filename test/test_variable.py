@@ -871,3 +871,13 @@ def test_assign_coords_multiindex_rejected(backend: Model, build: Any) -> None:
     x = backend.add_variables(coords=[pd.RangeIndex(4, name="d")], name="x")
     with pytest.raises(ValueError, match=r"assign_coords uses dimension 'd'"):
         build(x).assign_coords(xr.Coordinates.from_pandas_multiindex(mi, "d"))
+
+
+def test_add_variables_preserves_non_dimension_coordinates() -> None:
+    coords = xr.Coordinates(
+        {"snapshot": np.arange(4), "period": ("snapshot", [2020, 2020, 2030, 2030])}
+    )
+    m = Model()
+    x = m.add_variables(lower=0, coords=coords, name="x")
+    assert "period" in x.coords
+    assert list(x.coords["period"].values) == [2020, 2020, 2030, 2030]

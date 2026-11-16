@@ -158,8 +158,12 @@ def _variables_on(
     bound, ``scaling`` and the mask is a number or a DataArray lying on them;
     else None, for the aligning path.
     """
+    if isinstance(coords, xr.Coordinates) and coords.keys() - set(coords.dims):
+        return None
     expected = _coords_to_dict(coords)
     if not expected or not set(expected).isdisjoint(_VARIABLE_FIELDS):
+        return None
+    if isinstance(coords, Mapping) and set(map(str, coords)) != set(map(str, expected)):
         return None
     if any(
         isinstance(v, DataArray) and v.coords.keys() - v.dims for v in expected.values()
