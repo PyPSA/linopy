@@ -30,6 +30,7 @@ from linopy.spec.evaluator import (
     flipped,
     refuse_holes,
     refuse_made,
+    unpruned,
     without_strays,
 )
 from linopy.spec.where import admits_a_row, as_linopy_mask, evaluate_where
@@ -145,15 +146,15 @@ def _constraints(ctx: Context) -> None:
         lhs, rhs, sense = row.lhs, row.rhs, row.sense
         if flipped(row):
             lhs, rhs, sense = rhs, lhs, _FLIPPED[sense]
-        term, other = (
-            _linear(name, evaluate(side, scoped), rows) for side in (lhs, rhs)
-        )
-        term = cast(Term, term)
+        term, other = _sides(name, lhs, rhs, rows, scoped)
         if any(term.sizes[d] == 0 for d in term.coord_dims):
             continue
-        _check_live(name, row, term, other, rows, ctx)
-        sides = [term, other] if isinstance(other, Term) else [term]
-        if all(as_expression(side).is_constant for side in sides):
+        dead = _emptied(term, rows)
+        if ctx.memo.zeroed and (bool(dead.any()) or _constant(term, other)):
+            term, other = _sides(name, lhs, rhs, rows, unpruned(scoped))
+            dead = _emptied(term, rows)
+        _check_live(name, row, term, other, dead, ctx)
+        if _constant(term, other):
             continue
         if isinstance(other, xr.DataArray):
             const = constant_of(term)
@@ -164,6 +165,29 @@ def _constraints(ctx: Context) -> None:
         ctx.model.add_constraints(
             _framed(term, row.dims), sense, other, name=ctx.rename(name), mask=mask
         )
+
+
+def _sides(
+    name: str, lhs: ms.Expression, rhs: ms.Expression, rows: xr.DataArray, ctx: Context
+) -> tuple[Term, Value]:
+    """The two sides of constraint *name* evaluated, the one carrying the variables first."""
+    term, other = (_linear(name, evaluate(side, ctx), rows) for side in (lhs, rhs))
+    return cast(Term, term), other
+
+
+def _constant(term: Term, other: Value) -> bool:
+    """Whether neither side of a comparison holds a variable term."""
+    sides = [term, other] if isinstance(other, Term) else [term]
+    return all(as_expression(side).is_constant for side in sides)
+
+
+def _emptied(term: Term, rows: xr.DataArray) -> xr.DataArray:
+    """The rows *rows* keeps that hold no variable term of *term* and are not absent; none of a bare variable."""
+    if isinstance(term, Variable):
+        return xr.DataArray(False)
+    store = cast(LinearExpression, term)._store
+    alive = store.dataarray(store.has_terms() | np.isnan(store.const), "alive")
+    return rows & ~alive
 
 
 def _linear(name: str, side: Value, rows: xr.DataArray) -> Value:
@@ -195,7 +219,7 @@ def _check_live(
     declared: ms.Constraint,
     term: Term,
     other: Value,
-    rows: xr.DataArray,
+    dead: xr.DataArray,
     ctx: Context,
 ) -> None:
     """
@@ -210,11 +234,6 @@ def _check_live(
     variable or a vacated translation, takes the row with it. A bare variable
     term is never emptied: a row of it exists exactly where the variable does.
     """
-    if isinstance(term, Variable):
-        return
-    store = cast(LinearExpression, term)._store
-    alive = store.dataarray(store.has_terms() | np.isnan(store.const), "alive")
-    dead = rows & ~alive
     if not bool(dead.any()):
         return
     said = (

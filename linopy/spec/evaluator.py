@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import functools
+import math
 import operator
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from typing import TypeAlias, TypeVar, assert_never, cast
 
 import numpy as np
@@ -14,7 +16,15 @@ from mathspec import program as ms
 from linopy.constants import FACTOR_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec import operators
-from linopy.spec.context import Array, Context, Term, Value, as_expression, is_empty
+from linopy.spec.context import (
+    Array,
+    Context,
+    Memo,
+    Term,
+    Value,
+    as_expression,
+    is_empty,
+)
 from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.where import admitted, evaluate_where, groups_of, looked_up
 from linopy.variables import Variable
@@ -29,6 +39,11 @@ _OPERATORS: dict[type, Callable[[Value, Value], Value]] = {
 _Framed = TypeVar(
     "_Framed", bound=xr.DataArray | LinearExpression | QuadraticExpression
 )
+Shadow: TypeAlias = float | xr.DataArray
+
+
+class _Unmirrored(Exception):
+    """A term whose constant :func:`_shadow` does not mirror, so it is built in full."""
 
 
 def fold(name: str, ctx: Context) -> xr.DataArray:
@@ -70,8 +85,12 @@ def _evaluated(node: ms.Expression, ctx: Context) -> Value:
         return _dual(node.constraint, ctx)
     if isinstance(node, ms.ParameterReference):
         return ctx.parameter(node.name).values
-    if not ctx.solved and _sums_nothing(node, ctx) and ms.carries_variable(node):
+    if not ctx.solved and _sums_nothing(node, ctx) and _carries(node, ctx):
         return _nothing_summed(node, ctx)
+    if _prunes(ctx) and _carries(node, ctx) and not _live(node, ctx):
+        dead = _dead(node, ctx)
+        if dead is not None:
+            return dead
     if isinstance(node, ms.Negate):
         return -evaluate(node.operand, ctx)
     if isinstance(node, _Binary):
@@ -85,12 +104,343 @@ def _evaluated(node: ms.Expression, ctx: Context) -> Value:
     if isinstance(node, ms.WindowSum):
         return _moved(node, _operand(node.operand, ctx), ctx, None)
     if isinstance(node, ms.Cases):
-        regions = (
-            _in_region(evaluate(region.value, ctx), evaluate_where(region.when, ctx))
+        return _cases(node, ctx)
+    assert_never(node)
+
+
+def _cases(node: ms.Cases, ctx: Context) -> Value:
+    """
+    The regions of *node* added up, each its value where it holds and a hard zero elsewhere.
+
+    A region that holds nowhere adds a zero to every row: its term is left
+    unbuilt, its data read and refused as if it were built.
+    """
+    total: Value | None = None
+    unbuilt: dict[str, None] = {}
+    for region in node.regions:
+        if (
+            _prunes(ctx)
+            and _carries(region.value, ctx)
+            and not _admits(region.when, ctx)
+            and _mirrored(region.value, ctx)
+        ):
+            rows = evaluate_where(region.when, ctx)
+            unbuilt.update(dict.fromkeys([*region.value.dims, *map(str, rows.dims)]))
+            continue
+        value = evaluate(region.value, ctx)
+        whole = ctx.prune and _everywhere(region.when, ctx)
+        part = _in_region(value, evaluate_where(region.when, ctx), whole)
+        total = part if total is None else operator.add(*_paired(total, part))
+    if not unbuilt:
+        return cast(Value, total)
+    ctx.memo.pruned += 1
+    if isinstance(total, Term) and set(unbuilt) <= set(map(str, total.coord_dims)):
+        return total
+    zero = operators.constant_term(ctx.model, _full(0.0, tuple(unbuilt), ctx))
+    return zero if total is None else operator.add(*_paired(total, zero))
+
+
+def unpruned(ctx: Context) -> Context:
+    """
+    *ctx* building every term in full, on a memo of its own that keeps the data and drops the terms.
+
+    A term the data zeroes still counts as a term of its row and of its
+    expression, so whatever asks whether one holds a term at all is decided
+    on the terms built in full.
+    """
+    kept = {
+        key: value
+        for key, value in ctx.memo.values.items()
+        if not isinstance(value, LinearExpression | QuadraticExpression)
+    }
+    return replace(ctx, prune=False, memo=Memo(values=kept))
+
+
+def _prunes(ctx: Context) -> bool:
+    """Whether a term without a live term is left unbuilt: in a build, where a variable is its term."""
+    return ctx.prune and not ctx.solved
+
+
+def _carries(node: ms.Expression, ctx: Context) -> bool:
+    """Whether a variable stands under *node*, asked once per node."""
+    facts, key = ctx.memo.facts, ("carries", id(node))
+    if key not in facts:
+        facts[key] = isinstance(node, ms.VariableReference) or any(
+            _carries(child, ctx) for child in ms.children(node)
+        )
+    return cast(bool, facts[key])
+
+
+def _admits(mask: ms.Mask, ctx: Context) -> bool:
+    """Whether *mask* holds at a row, asked once per mask."""
+    facts, key = ctx.memo.facts, ("admits", id(mask))
+    if key not in facts:
+        facts[key] = bool(evaluate_where(mask, ctx).any())
+    return cast(bool, facts[key])
+
+
+def _everywhere(mask: ms.Mask, ctx: Context) -> bool:
+    """Whether *mask* holds at every row, asked once per mask."""
+    facts, key = ctx.memo.facts, ("everywhere", id(mask))
+    if key not in facts:
+        facts[key] = bool(evaluate_where(mask, ctx).all())
+    return cast(bool, facts[key])
+
+
+def _presence(name: str, ctx: Context) -> bool | xr.DataArray:
+    """Where variable *name* has a label: ``True`` everywhere, ``False`` nowhere, else the rows."""
+
+    def read() -> bool | xr.DataArray:
+        present = ctx.model.variables[ctx.rename(name)].labels != -1
+        if not present.size or not bool(present.any()):
+            return False
+        return True if bool(present.all()) else present
+
+    return ctx.memo.kept(("presence", name), read)
+
+
+def _live(node: ms.Expression, ctx: Context) -> bool:
+    """
+    Whether *node* may hold a live term: a variable with a label stands
+    under it, outside every case that holds nowhere. Asked once per node.
+    """
+    facts, key = ctx.memo.facts, ("live", id(node))
+    if key in facts:
+        return cast(bool, facts[key])
+    if isinstance(node, ms.VariableReference):
+        live = _presence(node.name, ctx) is not False
+    elif isinstance(node, ms.Cases):
+        live = any(
+            _carries(region.value, ctx)
+            and _admits(region.when, ctx)
+            and _live(region.value, ctx)
             for region in node.regions
         )
-        return functools.reduce(lambda a, b: operator.add(*_paired(a, b)), regions)
-    assert_never(node)
+    else:
+        live = any(
+            _live(child, ctx) for child in ms.children(node) if _carries(child, ctx)
+        )
+    facts[key] = live
+    return live
+
+
+def _dead(node: ms.Expression, ctx: Context) -> LinearExpression | None:
+    """The term of *node*, which holds no live term, as its constant alone; ``None`` where :func:`_shadow` does not mirror it."""
+    try:
+        const = _full(_shadow(node, ctx), node.dims, ctx)
+    except _Unmirrored:
+        return None
+    ctx.memo.pruned += 1
+    return operators.constant_term(ctx.model, const)
+
+
+def _mirrored(node: ms.Expression, ctx: Context) -> bool:
+    """Whether the term of *node* is read and refused by its shadow as it is when built."""
+    try:
+        _shadow(node, ctx)
+    except _Unmirrored:
+        return False
+    return True
+
+
+def _full(shadow: Shadow, dims: tuple[str, ...], ctx: Context) -> xr.DataArray:
+    """*shadow* over every coordinate of *dims*."""
+    coords = {d: ctx.coords[d] for d in dims}
+    shape = [len(index) for index in coords.values()]
+    if not isinstance(shadow, xr.DataArray):
+        return xr.DataArray(np.full(shape, float(shadow)), coords=coords, dims=dims)
+    held = [d for d in dims if d in shadow.dims]
+    if len(held) != shadow.ndim or any(shadow.sizes[d] != len(coords[d]) for d in held):
+        raise _Unmirrored
+    values = shadow.transpose(*held).values.astype(float, copy=False)
+    values = values.reshape([len(coords[d]) if d in held else 1 for d in dims])
+    return xr.DataArray(np.broadcast_to(values, shape).copy(), coords=coords, dims=dims)
+
+
+def _shadow(node: ms.Expression, ctx: Context) -> Shadow:
+    """
+    The constant of the term *node* evaluates to, NaN where the term is absent, its variables unbuilt.
+
+    A number where it is the same at every row, else an array over dims of
+    the node. The data beside the terms is evaluated, so it is read, checked
+    and refused as :func:`evaluate` does. Raises :class:`_Unmirrored` where
+    the constant of the built term is not known to be this one: data with
+    an infinity or a zero divisor beside a term.
+    """
+    if isinstance(node, ms.VariableReference):
+        return _variable_shadow(node.name, ctx)
+    if isinstance(node, ms.ExpressionReference):
+        if node.body in ctx.memo.values:
+            return _constant(evaluate(node, ctx), ctx)
+        return _shadow(node.body, ctx)
+    if isinstance(node, ms.Negate):
+        return -_shadow(node.operand, ctx)
+    if isinstance(node, ms.Add):
+        return _shadow_added(node, ctx)
+    if isinstance(node, ms.Multiply | ms.Divide):
+        first, second = _operands(node)
+        left, right = _part(first, ctx), _part(second, ctx)
+        if _carries(first, ctx) and _carries(second, ctx):
+            return left * right
+        term, data = (left, right) if _carries(first, ctx) else (right, left)
+        return _scaled(term, _off_rows(data, ctx), _OPERATORS[type(node)])
+    if isinstance(node, ms.Sum):
+        operand = node.operand
+        if isinstance(operand, ms.Join) and operand.columns.axes:
+            summed = _shadow_through(operand, ctx)
+        else:
+            summed = _shadow(operand, ctx)
+        for axis in node.over:
+            if axis.column is None:
+                summed = _shadow_summed(summed, axis.dimension, ctx)
+        return summed
+    if isinstance(node, ms.Join):
+        return _shadow_read(node, ctx)
+    if isinstance(node, ms.Translate | ms.WindowSum):
+        return _shadow_moved(node, ctx)
+    if isinstance(node, ms.Cases):
+        return _shadow_cases(node, ctx)
+    raise _Unmirrored
+
+
+def _part(node: ms.Expression, ctx: Context) -> Shadow:
+    """An operand beside a shadow: the shadow of a term, the value of data."""
+    if _carries(node, ctx):
+        return _shadow(node, ctx)
+    return cast(Shadow, evaluate(node, ctx))
+
+
+def _is_number(value: object) -> bool:
+    return isinstance(value, float | int)
+
+
+def _variable_shadow(name: str, ctx: Context) -> Shadow:
+    """Zero where variable *name* has a label; elsewhere its ``missing:`` number, or NaN for ``absent``."""
+    present = _presence(name, ctx)
+    missing = ctx.program.variables[name].missing
+    fill = np.nan if missing == "absent" else float(missing)
+    if isinstance(present, bool):
+        return 0.0 if present else fill
+    return xr.where(present, 0.0, fill)
+
+
+def _constant(value: Value, ctx: Context) -> Shadow:
+    """The constant of a built *value*, NaN where it is absent."""
+    if isinstance(value, Variable):
+        return xr.where(value.labels != -1, 0.0, np.nan)
+    if isinstance(value, Term):
+        return value.const
+    raise _Unmirrored
+
+
+def _shadow_added(node: ms.Add, ctx: Context) -> Shadow:
+    """The shadow of a sum or a difference, refused as :func:`_combine` refuses the constants it adds."""
+    op, second = operator.add, node.right
+    if isinstance(second, ms.Negate):
+        op, second = operator.sub, second.operand
+    left, right = _part(node.left, ctx), _part(second, ctx)
+    if not _carries(node.left, ctx):
+        left = cast(Shadow, _off_rows(left, ctx))
+    if not _carries(second, ctx):
+        right = cast(Shadow, _off_rows(right, ctx))
+    if _is_number(left) and _is_number(right):
+        made = op(left, right)
+        if math.isfinite(made) or math.isnan(left) or math.isnan(right):
+            return float(made)
+    return refuse_made("add", (node,), op, xr.DataArray(left), xr.DataArray(right), ctx)
+
+
+def _scaled(term: Shadow, data: Shadow, op: Callable[[Value, Value], Value]) -> Shadow:
+    """The shadow *term* multiplied or divided by *data*, a hole in the data an absence."""
+    if _is_number(term) and math.isnan(term):
+        return np.nan
+    factor = np.asarray(data, dtype=float)
+    if np.isinf(factor).any() or np.isinf(np.asarray(term, dtype=float)).any():
+        raise _Unmirrored
+    if op is operator.truediv and (factor == 0).any():
+        raise _Unmirrored
+    return cast(Shadow, op(term, data))
+
+
+def _shadow_through(join: ms.Join, ctx: Context) -> Shadow:
+    """The shadow of a term summed through the relation of *join*: a group no present row reaches holds zero."""
+    inner = _shadow(join.operand, ctx)
+    if _is_number(inner) and (math.isnan(inner) or inner == 0):
+        return 0.0
+    return cast(
+        Shadow, _through(_full(inner, join.operand.dims, ctx), join.columns, ctx)
+    )
+
+
+def _shadow_summed(shadow: Shadow, dimension: str, ctx: Context) -> Shadow:
+    """*shadow* summed over *dimension*, an absence adding nothing."""
+    size = len(ctx.coords[dimension])
+    if not isinstance(shadow, xr.DataArray):
+        return 0.0 if math.isnan(shadow) else float(shadow) * size
+    if dimension in shadow.dims:
+        return cast(xr.DataArray, operators.sum_over(shadow, dimension))
+    return shadow.fillna(0.0) * size
+
+
+def _shadow_read(node: ms.Join, ctx: Context) -> Shadow:
+    """The shadow of a term read through the relation of *node*: absent where the relation has no row."""
+    inner = _shadow(node.operand, ctx)
+    if _is_number(inner) and math.isnan(inner):
+        return np.nan
+    columns = node.columns
+    table = ctx.relations[columns.name]
+    if _is_number(inner) and not is_empty(columns.joined_dims, ctx):
+        if not len(table.rows):
+            return np.nan
+        present = table.defined
+        return float(inner) if bool(present.all()) else xr.where(present, inner, np.nan)
+    array = _full(inner, node.operand.dims, ctx)
+    return cast(xr.DataArray, looked_up(array, columns, ctx))
+
+
+def _shadow_moved(node: ms.Translate | ms.WindowSum, ctx: Context) -> Shadow:
+    """The shadow of a term shifted or summed back, moved the way the term is."""
+    inner = _shadow(node.operand, ctx)
+    by = _partition(node.partition, ctx)
+    amount = _amount(_amount_of(node), ctx)
+    if isinstance(node, ms.Translate) and _is_number(inner) and math.isnan(inner):
+        return np.nan
+    array = _full(inner, node.operand.dims, ctx)
+    if isinstance(node, ms.WindowSum):
+        moved = operators.sum_back(
+            array, over=node.along, within=amount, wrap=node.wrap, by=by
+        )
+    else:
+        moved = operators.shift(
+            array,
+            over=node.along,
+            offset=amount,
+            wrap=node.wrap,
+            fill=node.fill,
+            by=by,
+            as_term=True,
+        )
+    return cast(xr.DataArray, moved)
+
+
+def _shadow_cases(node: ms.Cases, ctx: Context) -> Shadow:
+    """The shadow of the regions added up, a region that holds nowhere read and left at zero."""
+    total: Shadow | None = None
+    for region in node.regions:
+        rows = evaluate_where(region.when, ctx)
+        part: Shadow
+        if not _carries(region.value, ctx):
+            part = cast(Shadow, _in_region(evaluate(region.value, ctx), rows))
+        else:
+            value = _shadow(region.value, ctx)
+            if not _admits(region.when, ctx):
+                part = 0.0
+            elif _everywhere(region.when, ctx):
+                part = value
+            else:
+                part = xr.where(rows, value, 0.0)
+        total = part if total is None else total + part
+    return cast(Shadow, total)
 
 
 def _sums_nothing(node: ms.Expression, ctx: Context) -> bool:
@@ -226,8 +576,23 @@ def _combine(node: _Binary, ctx: Context) -> Value:
     first, second = _operands(node)
     if isinstance(node, ms.Add) and isinstance(second, ms.Negate):
         op, second = operator.sub, second.operand
-    left, right = evaluate(first, ctx), evaluate(second, ctx)
+    left: Value
+    right: Value
+    scales = isinstance(node, ms.Multiply | ms.Divide)
+    if _prunes(ctx) and scales and _carries(first, ctx) != _carries(second, ctx):
+        term, data = (first, second) if _carries(first, ctx) else (second, first)
+        factor = evaluate(data, ctx)
+        if _annihilates(factor):
+            zeroed = _zeroed(node, term, factor, ctx)
+            if zeroed is not None:
+                return zeroed
+        scaled = evaluate(term, ctx)
+        left, right = (scaled, factor) if term is first else (factor, scaled)
+    else:
+        left, right = evaluate(first, ctx), evaluate(second, ctx)
     kind = type(node).__name__.lower()
+    if _zeroes_decide(node, left, right, ctx):
+        return _combine(node, unpruned(ctx))
     if isinstance(left, Term) or isinstance(right, Term):
         left, right = _off_rows(left, ctx), _off_rows(right, ctx)
         if isinstance(node, ms.Add):
@@ -246,6 +611,48 @@ def _combine(node: _Binary, ctx: Context) -> Value:
                 f"coordinates, so the data was attached against other labels than the model was built on."
             )
     return refuse_made(kind, (node,), op, a, b, ctx)
+
+
+def _zeroes_decide(node: _Binary, left: Value, right: Value, ctx: Context) -> bool:
+    """Whether a product of two terms has a factor without a term, where a term the data zeroed is left unbuilt: linopy multiplies a constant factor another way."""
+    if not (ctx.prune and ctx.memo.zeroed and isinstance(node, ms.Multiply)):
+        return False
+    if not (isinstance(left, Term) and isinstance(right, Term)):
+        return False
+    return any(as_expression(side).is_constant for side in (left, right))
+
+
+def _annihilates(factor: Value) -> bool:
+    """Whether the data *factor* is a zero or a hole at every row, so no term it scales stays live."""
+    values = np.asarray(factor)
+    if values.dtype.kind not in "fiub" or not values.size:
+        return False
+    head = values.flat[0]
+    if head != 0 and head == head:
+        return False
+    return bool(((values == 0) | np.isnan(values)).all())
+
+
+def _zeroed(
+    node: ms.Multiply | ms.Divide, term: ms.Expression, factor: Value, ctx: Context
+) -> LinearExpression | None:
+    """
+    The product of the term of *term* and a *factor* of zeros and holes as its constant alone.
+
+    ``None`` where :func:`_shadow` does not mirror the term. A zero drops
+    terms a full build keeps with a zero coefficient, which ``zeroed`` counts.
+    """
+    try:
+        shadow = _scaled(
+            _shadow(term, ctx), cast(Shadow, factor), _OPERATORS[type(node)]
+        )
+        const = _full(shadow, node.dims, ctx)
+    except _Unmirrored:
+        return None
+    ctx.memo.pruned += 1
+    if bool((np.asarray(factor) == 0).any()):
+        ctx.memo.zeroed += 1
+    return operators.constant_term(ctx.model, const)
 
 
 def _without_dead_terms(made: Value) -> Value:
@@ -350,11 +757,19 @@ def _operand(node: ms.Expression, ctx: Context) -> Array:
     return cast(Array, evaluate(node, ctx))
 
 
-def _in_region(value: Value, rows: xr.DataArray) -> Value:
-    """*value* where the region holds and a hard zero everywhere else: a fill, so absence inside the region stands."""
+def _in_region(value: Value, rows: xr.DataArray, whole: bool = False) -> Value:
+    """
+    *value* where the region holds and a hard zero everywhere else: a fill, so absence inside the region stands.
+
+    A region that is *whole*, holding at every row, leaves a value over its dims as it is.
+    """
     if isinstance(value, float | int):
         return rows * value
-    return as_expression(value).where(rows, 0)
+    expression = as_expression(value)
+    dims = value.dims if isinstance(value, xr.DataArray) else value.coord_dims
+    if whole and set(rows.dims) <= set(dims):
+        return expression
+    return expression.where(rows, 0)
 
 
 def _amount(amount: int | str, ctx: Context) -> operators.Amount:

@@ -52,12 +52,20 @@ class Memo:
     ``masked`` counts the refusals a ``rows`` narrowing let pass: a value
     made under one is not kept, so a value read back is refused wherever it
     would be when evaluated afresh.
+
+    ``pruned`` counts the terms built as their constant alone because they
+    hold no live term, ``zeroed`` the ones among them whose terms the data
+    zeroes: a term with a zero coefficient still counts as a term of its row.
+    ``facts`` holds what is asked of a node over and over, by its identity.
     """
 
     values: dict[Hashable, Any] = field(default_factory=dict)
     masked: int = 0
     uses: dict[ms.Expression, int] = field(default_factory=dict)
     inner: dict[ms.Expression, tuple[ms.Expression, ...]] = field(default_factory=dict)
+    pruned: int = 0
+    zeroed: int = 0
+    facts: dict[tuple[str, int], Any] = field(default_factory=dict)
 
     def kept(self, key: Hashable, make: Callable[[], _Kept]) -> _Kept:
         """The value kept at *key*, else made by *make* and kept unless a refusal was masked making it."""
@@ -137,7 +145,8 @@ class Context:
     narrows the finiteness check to the rows a constraint builds, and
     ``subject`` names what is being built in its refusals. ``memo`` is
     shared by every context replaced from one. ``rename`` gives the model
-    name of a variable or constraint the program declares.
+    name of a variable or constraint the program declares. ``prune`` lets
+    a build leave a term without a live term unbuilt, as its constant.
     """
 
     model: Model
@@ -150,6 +159,7 @@ class Context:
     subject: str = "the spec"
     memo: Memo = field(default_factory=Memo, compare=False, repr=False)
     rename: Callable[[str], str] = field(default=str, compare=False, repr=False)
+    prune: bool = True
 
 
 def is_empty(dims: Iterable[str], ctx: Context) -> bool:

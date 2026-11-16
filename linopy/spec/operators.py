@@ -332,6 +332,7 @@ def shift(
     wrap: bool,
     fill: float | None,
     by: xr.DataArray | None = None,
+    as_term: bool = False,
 ) -> Array:
     """
     Translate *array* along *over*: the value at ``t - offset``.
@@ -339,7 +340,8 @@ def shift(
     *wrap* is cyclic and vacates nothing, *fill* is what the vacated
     positions contribute, and neither leaves them absent. An *offset* that
     is an array differs per entity and is a gather. *by* is the relation
-    whose groups the translation stays inside.
+    whose groups the translation stays inside. *as_term* moves data the way
+    a term moves: a fill lands only where the operand carries the coordinate.
     """
     offset, partition = _grouping(array, over, offset, by)
     if partition is not None or (isinstance(offset, xr.DataArray) and offset.ndim):
@@ -349,7 +351,7 @@ def shift(
         if isinstance(array, xr.DataArray):
             return array.roll(amount, roll_coords=False)
         return array.roll(amount)
-    if isinstance(array, xr.DataArray):
+    if isinstance(array, xr.DataArray) and not as_term:
         return array.shift(amount, fill_value=np.nan if fill is None else fill)
     if fill is None:
         return array.shift(amount)
