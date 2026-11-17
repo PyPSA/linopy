@@ -469,7 +469,7 @@ def _gather_by_offset(
     """
     Translate *array* along *over* by an offset that may differ per entity.
 
-    Selection is by label, so a non-integer axis works. Out-of-range
+    Selection is by position, so no label is looked up. Out-of-range
     positions are clipped onto the axis and emptied again, so an edge means
     what it does for a scalar shift.
     """
@@ -479,8 +479,7 @@ def _gather_by_offset(
     source = (ordinal - offset).astype(int)
 
     def gathered(ordinals: xr.DataArray) -> Array:
-        picked = array.sel({over: _labelled(labels, ordinals)})
-        return picked.assign_coords({over: labels})
+        return _read_at(array, over, labels, ordinals)
 
     if wrap:
         return gathered(source % card)
@@ -524,16 +523,22 @@ def _gather_in_groups(
 
     source = xr.apply_ufunc(peer, groups.belongs, reached.where(inside, 0).astype(int))
     labels = groups.labels
-    gathered = (
-        array.sel({over: _labelled(labels, source)})
-        .assign_coords({over: labels})
-        .where(inside)
-    )
+    gathered = _read_at(array, over, labels, source).where(inside)
     if fill is None:
         return gathered
     return _vacated(gathered, array, over, groups.grouped & ~inside, fill)
 
 
-def _labelled(labels: np.ndarray, ordinals: xr.DataArray) -> xr.DataArray:
-    """*ordinals* as the labels they stand for, carrying no coordinates of their own."""
-    return xr.DataArray(labels[ordinals.values], dims=ordinals.dims)
+def _read_at(
+    array: Array, over: str, labels: np.ndarray, ordinals: xr.DataArray
+) -> Array:
+    """
+    *array* read along *over* at the positions *ordinals*, labelled *labels* where they land.
+
+    The axis is numbered while it is read: a gather over several dimensions
+    copies the labels it reads into a coordinate over all of them, and dates
+    copied that way cost more than the gather.
+    """
+    numbered = array.assign_coords({over: np.arange(len(labels))})
+    positions = xr.DataArray(ordinals.values, dims=ordinals.dims)
+    return numbered.isel({over: positions}).assign_coords({over: labels})

@@ -15,6 +15,7 @@ import functools
 from collections import Counter
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, TypeAlias
 
 import xarray as xr
@@ -40,6 +41,7 @@ from linopy.spec.where import admitted
 SpecLike: TypeAlias = str | Path | Mapping[str, Any] | Spec
 Sources: TypeAlias = Mapping[str, Any] | xr.Dataset
 Rename: TypeAlias = Mapping[str, str] | Callable[[str], str]
+Uses: TypeAlias = Mapping[ms.Expression, int]
 
 EVOLVING_MESSAGE = (
     "spec: Model.from_spec and linopy.spec.evaluate are newly added "
@@ -81,12 +83,14 @@ def build_into(
         What :func:`_renamer` raises for *rename*.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE, stacklevel=4)
-    _build(model, normalize_spec(spec), sources, store, expressions, rename)
+    program, uses = _normalized(spec)
+    _build(model, program, uses, sources, store, expressions, rename)
 
 
 def _build(
     model: Model,
     program: ms.Program,
+    uses: Uses,
     sources: Sources,
     store: bool,
     expressions: bool,
@@ -96,7 +100,7 @@ def _build(
     The body of :func:`build_into`, in a frame of its own.
 
     Lowering a spec leaves reference cycles in pyparsing's exceptions that
-    keep the frame of the caller of :func:`normalize_spec` alive until the
+    keep the frame of the caller of :func:`_normalized` alive until the
     garbage collector runs. That frame holds no data, so the parameter grids
     read here are freed as soon as the build returns.
     """
@@ -108,7 +112,8 @@ def _build(
     if store:
         unfilled = {name: raw(name).values for name in program.parameters}
         model.parameters = xr.Dataset(unfilled | relations, coords=attached.coords)
-    build(_context(attached, model, raw, solved=False, rename=named), expressions)
+    ctx = _context(attached, uses, model, raw, solved=False, rename=named)
+    build(ctx, expressions)
 
 
 def _renamer(program: ms.Program, rename: Rename | None) -> Callable[[str], str]:
@@ -212,11 +217,13 @@ def evaluate(
         ``missing: refused`` parameter.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE)
-    return _folded(normalize_spec(spec), model, names, sources, rename)
+    program, uses = _normalized(spec)
+    return _folded(program, uses, model, names, sources, rename)
 
 
 def _folded(
     program: ms.Program,
+    uses: Uses,
     model: Model,
     names: tuple[str, ...],
     sources: Sources | None,
@@ -228,7 +235,7 @@ def _folded(
             raise unknown("expression", name, program.expressions)
     named = _renamer(program, rename)
     attached = attach(program, _stored(program, model) if sources is None else sources)
-    ctx = _context(attached, model, attached.read, solved=True, rename=named)
+    ctx = _context(attached, uses, model, attached.read, solved=True, rename=named)
     return {name: fold(name, ctx) for name in names or program.expressions}
 
 
@@ -260,6 +267,7 @@ def _stored(program: ms.Program, model: Model) -> xr.Dataset:
 
 def _context(
     attached: Attached,
+    uses: Uses,
     model: Model,
     raw: Callable[[str], Parameter],
     *,
@@ -288,7 +296,7 @@ def _context(
         *tables,
         functools.cache(read),
         solved=solved,
-        memo=Memo(uses=uses_of(program)),
+        memo=Memo(uses=dict(uses)),
         rename=rename,
     )
 
@@ -302,6 +310,11 @@ def lower(spec: SpecLike) -> ms.Program:
     ``piecewise:`` is expanded: a special-ordered set stays a set, which
     linopy builds natively rather than as binaries.
     """
+    return _lower(spec)[0]
+
+
+def _lower(spec: SpecLike) -> tuple[ms.Program, Uses]:
+    """What :func:`lower` gives, with how often a build uses each node of it, as :func:`uses_of` counts."""
     if isinstance(spec, str):
         spec = f"{spec}\n"
     elif isinstance(spec, Mapping):
@@ -310,9 +323,14 @@ def lower(spec: SpecLike) -> ms.Program:
 
 
 @functools.lru_cache(maxsize=8)
-def _lowered(spec: Spec) -> ms.Program:
-    """The program of *spec*, kept for the next build of an equal spec: a spec and its program are immutable."""
-    return spec.expand("piecewise").program
+def _lowered(spec: Spec) -> tuple[ms.Program, Uses]:
+    """
+    The program of *spec* and the uses of its nodes, kept for the next build of an equal spec: a spec and its program are immutable.
+
+    The uses are read-only: a build consumes a copy of them.
+    """
+    program = spec.expand("piecewise").program
+    return program, MappingProxyType(uses_of(program))
 
 
 def normalize_spec(spec: SpecLike) -> ms.Program:
@@ -333,6 +351,11 @@ def normalize_spec(spec: SpecLike) -> ms.Program:
     SpecDataError
         The spec declares no dimension, parameter or variable.
     """
+    return _normalized(spec)[0]
+
+
+def _normalized(spec: SpecLike) -> tuple[ms.Program, Uses]:
+    """What :func:`normalize_spec` gives, with the uses :func:`_lowered` keeps beside it."""
     if isinstance(spec, str):
         one_line = "\n" not in spec and ": " not in spec
         if one_line and spec.strip().lower().endswith((".yaml", ".yml")):
@@ -345,10 +368,10 @@ def normalize_spec(spec: SpecLike) -> ms.Program:
             "from_spec takes the spec as a path, YAML text, a mapping or a mathspec.Spec, "
             f"not a {type(spec).__name__}."
         )
-    program = lower(spec)
+    program, uses = _lower(spec)
     if not (program.dimensions or program.parameters or program.variables):
         raise SpecDataError(
             "the spec declares nothing: no dimension, no parameter and no variable. "
             "There is nothing to attach data to and nothing to build."
         )
-    return program
+    return program, uses

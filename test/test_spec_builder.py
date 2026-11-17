@@ -26,6 +26,7 @@ from spec_helpers import (  # noqa: E402
     CURVE_SPEC,
     DISPATCH_DATA,
     DISPATCH_P,
+    EXAMPLE_DISPATCH,
     EXAMPLES_DIR,
     FULL_X,
     FULL_Y,
@@ -48,6 +49,7 @@ from linopy.spec.api import lower  # noqa: E402
 from linopy.testing import (  # noqa: E402
     assert_conequal,
     assert_linequal,
+    assert_model_equal,
     synthetic_sources,
 )
 
@@ -1373,3 +1375,9 @@ def test_named_expressions_are_added_unless_asked_not_to(
 
 def test_an_equal_spec_is_lowered_once() -> None:
     assert lower(yaml_dict()) is lower(yaml_dict())
+
+
+def test_a_spec_built_again_from_its_kept_program_builds_the_same_model() -> None:
+    first = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
+    second = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
+    assert_model_equal(first, second)

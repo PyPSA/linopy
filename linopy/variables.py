@@ -67,7 +67,7 @@ from linopy.constants import (
 )
 from linopy.containers import LabelContainer
 from linopy.long import Relation
-from linopy.scaling import ensure_scaling, validate_scaling
+from linopy.scaling import ensure_scaling, scalar_scaling, validate_scaling
 from linopy.semantics import (
     FillValueLike,
     _shared_dim_mismatch_message,
@@ -338,15 +338,22 @@ class Variable:
 
     @scaling.setter
     def scaling(self, value: ConstantLike) -> None:
-        value = broadcast_to_coords(
-            value,
-            coords=self.coords,
-            dims=self.dims,
-            strict=False,
-        )
-        value = value.reindex_like(self.labels, fill_value=1.0)
-        value = validate_scaling(value, f"scaling for variable '{self.name}'")
-        self._data = assign_fields(self.data, scaling=value)
+        label = f"scaling for variable '{self.name}'"
+        labels = self.labels
+        field: DataArray | tuple[tuple[Hashable, ...], np.ndarray]
+        factor = scalar_scaling(value, label)
+        if factor is not None:
+            field = (labels.dims, np.full(labels.shape, factor.item()))
+        else:
+            value = broadcast_to_coords(
+                value,
+                coords=self.coords,
+                dims=self.dims,
+                strict=False,
+            )
+            value = value.reindex_like(labels, fill_value=1.0)
+            field = validate_scaling(value, label)
+        self._data = assign_fields(self.data, scaling=field)
 
     @property
     def solver_scaling(self) -> DataArray:
