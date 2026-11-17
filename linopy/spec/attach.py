@@ -433,6 +433,10 @@ def _twice(index: pd.Index) -> list[Any]:
 
 
 def _outside(labels: pd.Index, known: pd.Index) -> list[Any]:
+    """The distinct *labels* that are not in *known*; that none is, is read off the hash table *known* keeps for labels of its kind."""
+    alike = _kind_name(labels.dtype) == _kind_name(known.dtype)
+    if alike and known.is_unique and (known.get_indexer(labels) >= 0).all():
+        return []
     return labels[~labels.isin(known)].unique().tolist()
 
 
