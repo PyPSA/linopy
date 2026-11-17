@@ -225,7 +225,7 @@ def _combine(node: _Binary, ctx: Context) -> Value:
     read as an absence and silently drop the row, an infinity would stand in
     the problem. A hole beside a term becomes the term's absence.
     """
-    if isinstance(node, ms.Add) and not ctx.solved and _carries(node, ctx):
+    if isinstance(node, ms.Add) and not ctx.solved and ms.carries_variable(node):
         return _added(node, ctx)
     op = _OPERATORS[type(node)]
     first, second = _operands(node)
@@ -257,32 +257,30 @@ def _made(node: _Binary, op: _Sign, left: Value, right: Value, ctx: Context) -> 
     return refuse_made(kind, (node,), op, a, b, ctx)
 
 
-def _carries(node: ms.Expression, ctx: Context) -> bool:
-    """Whether a variable stands under *node*, asked once per node."""
-    carries = ctx.memo.carries
-    key = id(node)
-    if key not in carries:
-        carries[key] = ms.carries_variable(node)
-    return carries[key]
-
-
 def _chain(
-    node: ms.Add, ctx: Context
+    node: ms.Add,
 ) -> tuple[ms.Expression, list[tuple[ms.Add, _Sign, ms.Expression]]]:
     """
     The chain of sums and differences ending in *node*: its first operand,
     then per step the node, its sign and the operand it adds. The chain runs
-    down the left operands for as long as they are sums carrying a variable.
+    down the left operands for as long as they are sums carrying a variable,
+    each operand walked once.
     """
+    spine = [node]
+    while isinstance(spine[-1].left, ms.Add):
+        spine.append(spine[-1].left)
+    spine.reverse()
+    start = 0
+    if not ms.carries_variable(spine[0].left):
+        carried = (ms.carries_variable(step.right) for step in spine)
+        start = next(i for i, carries in enumerate(carried) if carries)
     steps: list[tuple[ms.Add, _Sign, ms.Expression]] = []
-    first: ms.Expression = node
-    while isinstance(first, ms.Add) and _carries(first, ctx):
-        sign, operand = operator.add, first.right
+    for step in spine[start:]:
+        sign, operand = operator.add, step.right
         if isinstance(operand, ms.Negate):
             sign, operand = operator.sub, operand.operand
-        steps.append((first, sign, operand))
-        first = first.left
-    return first, steps[::-1]
+        steps.append((step, sign, operand))
+    return spine[start].left, steps
 
 
 def _added(node: ms.Add, ctx: Context) -> Value:
@@ -297,7 +295,7 @@ def _added(node: ms.Add, ctx: Context) -> Value:
     holds an infinity and a term past that bound are added step by step, as
     :func:`_combine` adds them.
     """
-    first, steps = _chain(node, ctx)
+    first, steps = _chain(node)
     made = evaluate(first, ctx)
     bound = _magnitude(made)
     run: list[tuple[_Sign, Term]] = []

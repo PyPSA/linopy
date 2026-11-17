@@ -52,16 +52,12 @@ class Memo:
     ``masked`` counts the refusals a ``rows`` narrowing let pass: a value
     made under one is not kept, so a value read back is refused wherever it
     would be when evaluated afresh.
-
-    ``carries`` holds whether a variable stands under a node, by the node's
-    identity, since it is asked of a node over and over.
     """
 
     values: dict[Hashable, Any] = field(default_factory=dict)
     masked: int = 0
     uses: dict[ms.Expression, int] = field(default_factory=dict)
     inner: dict[ms.Expression, tuple[ms.Expression, ...]] = field(default_factory=dict)
-    carries: dict[int, bool] = field(default_factory=dict)
 
     def kept(self, key: Hashable, make: Callable[[], _Kept]) -> _Kept:
         """The value kept at *key*, else made by *make* and kept unless a refusal was masked making it."""
