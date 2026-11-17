@@ -35,6 +35,7 @@ from linopy import (  # noqa: E402
     QuadraticExpression,
 )
 from linopy.spec import SpecDataError, evaluate  # noqa: E402
+from linopy.store import DenseStore  # noqa: E402
 from linopy.testing import assert_conequal, assert_linequal  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -608,6 +609,65 @@ def test_a_rhs_over_a_dimension_the_term_lacks_keeps_the_backing(
     limit = m.constraints["limit"]
     assert limit.lhs.is_sparse == backend.sparse
     assert_conequal(limit, Model.from_spec(spec, data).constraints["limit"])
+
+
+# ---------------------------------------------------------------------------
+# a chain of sums, merged in one step
+# ---------------------------------------------------------------------------
+
+CHAIN = "(x + a) * 1 + (y - b) * 1 - a - (z + c) * 1 + x - y"
+STEPS = {
+    "s1": "(x + a) * 1 + (y - b) * 1",
+    "s2": "s1 - a",
+    "s3": "s2 - (z + c) * 1",
+    "s4": "s3 + x",
+}
+CHAIN_SPEC: dict[str, Any] = {
+    "dimensions": {"t": {"dtype": "int", "ordered": True}, "s": {"dtype": "str"}},
+    "parameters": {
+        "a": {"dims": ["t"]},
+        "b": {"dims": ["s", "t"]},
+        "c": {"dims": ["s"]},
+    },
+    "variables": {
+        "x": {"dims": ["t"]},
+        "y": {"dims": ["s", "t"], "where": "b < 0"},
+        "z": {"dims": ["s"]},
+    },
+    "expressions": {
+        "chained": {"dims": ["s", "t"], "expression": CHAIN},
+        **{name: {"dims": ["s", "t"], "expression": e} for name, e in STEPS.items()},
+        "stepwise": {"dims": ["s", "t"], "expression": "s4 - y"},
+    },
+}
+CHAIN_DATA = {
+    "t": TT,
+    "s": S,
+    "a": xr.DataArray([0.1, 1e16, 0.7, -3.3], coords=[TT]),
+    "b": xr.DataArray([[-0.2, 1.0, -0.3, -1.1], [-0.6, -1e-3, 2.0, -0.3]], [S, TT]),
+    "c": xr.DataArray([-0.3, 5.1], coords=[S]),
+}
+
+
+def test_a_sum_chain_merges_its_terms_in_one_step(
+    backend: Model, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each of ``s1`` to ``s4`` is a reference, so ``stepwise`` adds one operand at a time."""
+    merged: list[int] = []
+    signed_sum = DenseStore.signed_sum
+
+    def counted(stores: list[DenseStore], negate: list[bool]) -> DenseStore | None:
+        merged.append(len(stores))
+        return signed_sum(stores, negate)
+
+    monkeypatch.setattr(DenseStore, "signed_sum", staticmethod(counted))
+    m = Model.from_spec(CHAIN_SPEC, CHAIN_DATA, sparse=backend.sparse)
+    chained, stepwise = m.expressions["chained"], m.expressions["stepwise"]
+    assert chained.is_sparse == backend.sparse
+    assert_linequal(chained, stepwise)
+    np.testing.assert_array_equal(chained.const.values, stepwise.const.values)
+    if not backend.sparse:
+        assert max(merged) == 4
 
 
 # ---------------------------------------------------------------------------

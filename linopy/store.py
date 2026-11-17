@@ -611,11 +611,18 @@ class DenseStore(Store):
 
     def subtracted(self, other: DenseStore) -> DenseStore | None:
         """``self - other`` where the two stack along the term dimension as :func:`merge_datasets` would, else None."""
-        data = [self.ds, other.ds]
+        return self.signed_sum([self, other], [False, True])
+
+    @staticmethod
+    def signed_sum(
+        stores: Sequence[DenseStore], negate: Sequence[bool]
+    ) -> DenseStore | None:
+        """The sum of *stores*, a store *negate* flags subtracted, where they stack along the term dimension as :func:`merge_datasets` would, else None."""
+        data = [store.ds for store in stores]
         if not (_overriding(data, TERM_DIM, None) and _stackable(data)):
             return None
-        ds = _stacked_terms(data, [False, True])
-        return self._derived(absorb_absence(ds, report=True))
+        ds = _stacked_terms(data, negate)
+        return stores[0]._derived(absorb_absence(ds, report=True))
 
     def _derived(self, ds: Dataset) -> DenseStore:
         """A store on this model holding ``ds``, normalized."""

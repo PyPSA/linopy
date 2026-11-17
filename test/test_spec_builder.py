@@ -7,6 +7,7 @@ expressions and the assumptions checked against the data.
 from __future__ import annotations
 
 import glob
+import re
 import warnings
 from pathlib import Path
 from typing import Any
@@ -622,6 +623,28 @@ def test_arithmetic_that_makes_data_non_finite_is_refused(
 ) -> None:
     with pytest.raises(SpecDataError, match=rf"constraint 'row'.*not finite at {at}"):
         Model.from_spec(quotient(expression), data)
+
+
+HUGE_AT_0 = {"t": T, "a": xr.DataArray([1e308, 1.0, 1.0], coords=[T]), "b": FULL_C}
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        pytest.param("(x + a) * 1 + (x + a) * 1 >= 1", id="terms"),
+        pytest.param("(x + a) * 1 - (x - a) * 1 >= 1", id="difference"),
+        pytest.param("(x + a) * 1 + x + (x + a) * 1 >= 1", id="past-a-variable"),
+        pytest.param("x + a + a >= 1", id="data"),
+    ],
+)
+def test_a_sum_of_finite_constants_that_overflows_is_refused(expression: str) -> None:
+    """A merged sum adds the constants of its terms in one step; an infinity made on the way is refused as a step-by-step sum refuses it."""
+    message = (
+        "constraint 'row': the add of 'a' is not finite at t=0, though its operands "
+        "are present."
+    )
+    with pytest.raises(SpecDataError, match=re.escape(message)):
+        Model.from_spec(quotient(expression), HUGE_AT_0)
 
 
 def test_arithmetic_is_not_refused_on_a_row_masked_out() -> None:
