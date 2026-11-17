@@ -812,6 +812,29 @@ def test_a_where_picks_the_rows_it_names(case: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("predicate", "rows"),
+    [
+        pytest.param("false AND t > 1", None, id="false-flag-first"),
+        pytest.param("t > 1 AND false", None, id="false-flag-last"),
+        pytest.param("t < 2 AND t > 1", None, id="disjoint"),
+        pytest.param("flag AND late", None, id="disjoint-bool-parameter"),
+        pytest.param("t > 0 AND t < 3", [1, 2], id="overlapping"),
+        pytest.param("late AND cost > 2 AND t < 3", [2], id="overlapping-three"),
+    ],
+)
+def test_a_where_joined_by_and_builds_only_the_rows_all_its_conditions_hold(
+    predicate: str, rows: list[int] | None
+) -> None:
+    row = {"dims": ["t"], "expression": "x >= 0", "where": predicate}
+    m = Model.from_spec(with_(WHERE_SPEC, constraints={"k": row}), WHERE_DATA)
+    if rows is None:
+        assert "k" not in m.constraints
+        return
+    labels = m.constraints["k"].labels
+    assert labels["t"][(labels != -1).to_numpy()].to_numpy().tolist() == rows
+
+
+@pytest.mark.parametrize(
     ("predicate", "match"),
     [
         ("position(t) == 7", "names position 7 of 't', which has 4"),

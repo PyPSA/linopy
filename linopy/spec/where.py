@@ -42,15 +42,12 @@ def admits_a_row(mask: ms.Mask | None, ctx: Context) -> bool:
     """
     if mask is None:
         return True
-    kept = None
+    kept: xr.DataArray | None = None
     for node in _conjuncts(mask.root):
         held = _node(node, ctx)
         if not held.values.any():
             return False
-        if kept is None:
-            kept = held
-            continue
-        kept = kept & held
+        kept = held if kept is None else kept & held
         if not kept.values.any():
             return False
     return True
