@@ -34,7 +34,7 @@ from linopy import (  # noqa: E402
     PerformanceWarning,
     QuadraticExpression,
 )
-from linopy.spec import SpecDataError, evaluate  # noqa: E402
+from linopy.spec import SpecDataError, evaluate, operators  # noqa: E402
 from linopy.testing import assert_conequal, assert_linequal  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -588,6 +588,44 @@ def test_a_relation_sum_keeps_the_backing_and_matches_dense(
     summed = m.expressions["summed"]
     assert summed.is_sparse == backend.sparse
     assert_linequal(summed, Model.from_spec(spec, data).expressions["summed"])
+
+
+GROUP_CONSTANTS: dict[str, list[float]] = {
+    "tenths": [0.1, 0.2, 0.3, 0.7, 0.1, 0.4],
+    "cancelling": [1e16, 1.0, -1e16, 0.1, -1e16, 1e16],
+    "absent": [0.1, np.nan, 0.3, 1e16, 0.1, -1e16],
+    "opposite-infinities": [np.inf, 1.0, -np.inf, 0.1, 0.2, np.inf],
+}
+GROUP_ROWS: dict[str, np.ndarray] = {
+    "t": np.array([0, 1, 2, 3, 4, 5, 2, 0]),
+    "e": np.array([0, 1, 0, 1, 0, 1, 1, 0]),
+    "k": np.array([1, 1, 0, 0, 1, 0, 1, 0]),
+}
+
+
+@pytest.mark.parametrize("joins", [["t"], ["t", "e"], ["t", "k"]])
+@pytest.mark.parametrize("const", GROUP_CONSTANTS.values(), ids=list(GROUP_CONSTANTS))
+def test_a_sparse_relation_sum_adds_up_as_the_group_sum(
+    const: list[float], joins: list[str]
+) -> None:
+    m = Model(sparse=True)
+    sizes = {"r": 2, "t": 6, "e": 2, "k": 2}
+    coords = [pd.RangeIndex(n, name=d) for d, n in sizes.items()]
+    values = xr.DataArray(const, coords=coords[1:2])
+    term = 2 * m.add_variables(coords=coords, name="x") + values.fillna(0)
+    term = term.where(values.notnull())
+    joined = {d: GROUP_ROWS[d] for d in joins}
+    grouped = {"s": np.array(list("aaabbbbb"))}
+    onto = {"s": pd.Index(["a", "b", "c"], name="s")}
+    rows = pd.RangeIndex(8, name="_row")
+    picked = term.isel({d: xr.DataArray(at, coords=[rows]) for d, at in joined.items()})
+    keyed = picked.assign_coords(s=("_row", grouped["s"]))
+    want = keyed.groupby(["s"]).sum().reindex(onto).fillna(0)
+    summed = operators.grouped_sum(term, joined, grouped, onto)
+    assert isinstance(summed, LinearExpression)
+    assert summed.is_sparse
+    xr.testing.assert_equal(summed.data, want.data)
+    assert (np.signbit(summed.const) == np.signbit(want.const)).all()
 
 
 def test_a_rhs_over_a_dimension_the_term_lacks_keeps_the_backing(
