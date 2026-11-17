@@ -67,7 +67,7 @@ from linopy.constants import (
 )
 from linopy.containers import LabelContainer
 from linopy.long import Relation
-from linopy.scaling import ensure_scaling, validate_scaling
+from linopy.scaling import ensure_scaling, scalar_scaling, validate_scaling
 from linopy.semantics import (
     FillValueLike,
     _shared_dim_mismatch_message,
@@ -341,8 +341,8 @@ class Variable:
         label = f"scaling for variable '{self.name}'"
         labels = self.labels
         field: DataArray | tuple[tuple[Hashable, ...], np.ndarray]
-        if isinstance(value, int | float | np.number):
-            factor = validate_scaling(DataArray(float(value)), label)
+        factor = scalar_scaling(value, label)
+        if factor is not None:
             field = (labels.dims, np.full(labels.shape, factor.item()))
         else:
             value = broadcast_to_coords(

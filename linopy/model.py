@@ -93,7 +93,7 @@ from linopy.piecewise import (
 )
 from linopy.remote import RemoteHandler
 from linopy.restrict.matrix import DROPPED_ROW_TOL
-from linopy.scaling import validate_scaling
+from linopy.scaling import scalar_scaling, validate_scaling
 from linopy.semantics import check_user_nan, enforce_no_multiindex
 from linopy.solver_capabilities import solver_supports
 from linopy.solvers import (
@@ -1409,13 +1409,12 @@ class Model:
                 else (as_dataarray(mask).astype(bool) & rhs_mask)
             )
 
-        if isinstance(scaling, int | float | np.number):
-            scaling = DataArray(float(scaling))
-        else:
-            scaling = broadcast_to_coords(
+        row_scaling = scalar_scaling(scaling, "constraint scaling")
+        if row_scaling is None:
+            broadcast = broadcast_to_coords(
                 scaling, rhs.coords, label="constraint scaling"
             )
-        row_scaling = validate_scaling(scaling, "constraint scaling")
+            row_scaling = validate_scaling(broadcast, "constraint scaling")
 
         if mask is not None:
             on_grid = (
