@@ -7,6 +7,7 @@ predicates that gate which rows exist.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -35,8 +36,13 @@ from linopy import (  # noqa: E402
     QuadraticExpression,
 )
 from linopy.spec import SpecDataError, evaluate  # noqa: E402
+from linopy.spec import operators as spec_operators  # noqa: E402
 from linopy.store import DenseStore  # noqa: E402
-from linopy.testing import assert_conequal, assert_linequal  # noqa: E402
+from linopy.testing import (  # noqa: E402
+    assert_conequal,
+    assert_equivalent,
+    assert_linequal,
+)
 
 # ---------------------------------------------------------------------------
 # operators, built as a constraint and folded as a named expression
@@ -668,6 +674,143 @@ def test_a_sum_chain_merges_its_terms_in_one_step(
     np.testing.assert_array_equal(chained.const.values, stepwise.const.values)
     if not backend.sparse:
         assert max(merged) == 4
+
+
+# ---------------------------------------------------------------------------
+# a sum of a term scaled by sparse data, built from its live cells
+# ---------------------------------------------------------------------------
+
+SITES = pd.Index(["a", "b", "c"], name="s")
+BUSES = pd.Index(["u", "v"], name="b")
+SPARSE_SPEC: dict[str, Any] = {
+    "dimensions": {
+        "t": {"dtype": "int", "ordered": True},
+        "s": {"dtype": "str"},
+        "b": {"dtype": "str"},
+    },
+    "relations": {"bus_of": {"key": "s", "values": "b"}},
+    "parameters": {
+        "p": {"dims": ["s", "t"], "missing": "absent"},
+        "q": {"dims": ["t"]},
+        "c": {"dims": ["s"]},
+    },
+    "variables": {
+        "x": {"dims": ["s", "t"], "where": "c > -1", "bounds": {"lower": 0}},
+        "y": {"dims": ["t"], "bounds": {"lower": 0, "upper": 1}},
+        "z": {"dims": ["s"], "bounds": {"lower": 0, "upper": 1}},
+    },
+}
+SPARSE_DATA = {
+    "t": TT,
+    "s": SITES,
+    "b": BUSES,
+    "bus_of": pd.DataFrame({"s": SITES, "b": ["u", "v", "u"]}),
+    "p": xr.DataArray(
+        [[0, 1.5, 0, 0], [np.nan, 0, -0.3, 0], [0, 0, 0.7, np.nan]], [SITES, TT]
+    ),
+    "q": xr.DataArray([1.0, 3.0, 0.5, 7.0], coords=[TT]),
+    "c": xr.DataArray([0.1, -3.0, 0.2], coords=[SITES]),
+}
+SCALED_SUMS: dict[str, tuple[str, list[str], str]] = {
+    "over-one-dim": ("x * p", ["s"], "sum({}, over=t)"),
+    "over-every-dim": ("x * p", [], "sum({}, over=[s, t])"),
+    "data-first": ("p * x", ["t"], "sum({}, over=s)"),
+    "scaled-twice": ("q * (x * p) / 2", ["s"], "sum({}, over=t)"),
+    "divided": ("x * p / q", ["s"], "sum({}, over=t)"),
+    "broadcast-term": ("y * p", ["s"], "sum({}, over=t)"),
+    "term-with-constant": ("(x - c + 0.1) * p", ["t"], "sum({}, over=s)"),
+    "through-a-relation": ("x * p", ["b", "t"], "sum({}, over=s, by=bus_of[b])"),
+    "constant-through-a-relation": (
+        "(x + c) * p",
+        ["b", "t"],
+        "sum({}, over=s, by=bus_of[b])",
+    ),
+    "broadcast-through-a-relation": (
+        "z * p",
+        ["b"],
+        "sum({}, over=[s, t], by=bus_of[b])",
+    ),
+}
+
+
+def scaled_sum_spec(scaled: str, dims: list[str], summed: str) -> dict[str, Any]:
+    """``fused`` sums *scaled* in place; ``general`` sums it through the reference ``scaled``, operator by operator."""
+    return with_(
+        SPARSE_SPEC,
+        expressions={
+            "scaled": {"dims": ["s", "t"], "expression": scaled},
+            "fused": {"dims": dims, "expression": summed.format(scaled)},
+            "general": {"dims": dims, "expression": summed.format("scaled")},
+        },
+    )
+
+
+@pytest.fixture
+def fused_sums(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """The number of sums built from their live cells, counted as they are built."""
+    built: list[int] = []
+    weighted_sum = spec_operators.weighted_sum
+
+    def counted(*args: Any, **kwargs: Any) -> LinearExpression:
+        built.append(1)
+        return weighted_sum(*args, **kwargs)
+
+    monkeypatch.setattr(spec_operators, "weighted_sum", counted)
+    return built
+
+
+@pytest.mark.parametrize("case", SCALED_SUMS)
+def test_a_sum_of_a_term_scaled_by_sparse_data_is_built_from_its_live_cells(
+    backend: Model, fused_sums: list[int], case: str
+) -> None:
+    """The zero coefficients the operators keep are left out; the rest is the same, the constant to the last bit."""
+    spec = scaled_sum_spec(*SCALED_SUMS[case])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", PerformanceWarning)
+        m = Model.from_spec(spec, SPARSE_DATA, sparse=backend.sparse)
+    fused, general = m.expressions["fused"], m.expressions["general"]
+    assert isinstance(fused, LinearExpression)
+    assert isinstance(general, LinearExpression)
+    assert fused_sums
+    assert fused.is_sparse == backend.sparse
+    assert_equivalent(fused, general)
+    np.testing.assert_array_equal(fused.const.values, general.const.values)
+
+
+def minimized(expression: str) -> dict[str, Any]:
+    return {"objective": {"sense": "minimize", "expression": expression}}
+
+
+ZEROED_ENTRIES: dict[str, Callable[[str], dict[str, Any]]] = {
+    "emptied-row": lambda scaled: {
+        "constraints": {
+            "row": {"dims": ["t"], "expression": f"sum({scaled}, over=s) <= 5"}
+        }
+    },
+    "objective": lambda scaled: minimized(f"sum({scaled})"),
+    "factor": lambda scaled: minimized(f"sum(y * sum({scaled}, over=s))"),
+}
+
+
+@pytest.mark.parametrize("entry", ZEROED_ENTRIES)
+def test_a_sum_whose_live_cells_leave_out_every_term_is_built_operator_by_operator(
+    backend: Model, entry: str
+) -> None:
+    """A term with a zero coefficient still counts as a term of its row, its objective and its factor."""
+    zeroed = {**SPARSE_DATA, "p": xr.zeros_like(SPARSE_DATA["p"])}
+
+    def built(scaled: str) -> Model:
+        spec = with_(
+            SPARSE_SPEC,
+            expressions={"scaled": {"dims": ["s", "t"], "expression": "x * p"}},
+            **ZEROED_ENTRIES[entry](scaled),
+        )
+        return Model.from_spec(spec, zeroed, sparse=backend.sparse)
+
+    fused, general = built("x * p"), built("scaled")
+    for name in general.constraints:
+        assert_conequal(fused.constraints[name], general.constraints[name])
+    assert_linequal(fused.objective.expression, general.objective.expression)
 
 
 # ---------------------------------------------------------------------------

@@ -9,23 +9,27 @@ evaluates the operands and the keywords and calls in.
 
 from __future__ import annotations
 
+import math
 import operator
-from collections.abc import Hashable, Mapping
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
 from linopy.constants import TERM_DIM
+from linopy.csr import CSRStore, Grid, coo_to_csr, indptr_from_counts
 from linopy.expressions import LinearExpression, merge
 from linopy.model import Model
 from linopy.spec.context import Array, as_expression
 from linopy.spec.errors import SpecDataError
+from linopy.variables import Variable
 
 Amount = int | xr.DataArray
+Scale = tuple[Callable[[Any, Any], Any], float | xr.DataArray]
 _ROW = "_row"
 
 
@@ -97,6 +101,105 @@ def grouped_sum(
         return _gathered(picked, grouped, onto)
     keyed = picked.assign_coords({d: (_ROW, labels) for d, labels in grouped.items()})
     return keyed.groupby(list(grouped)).sum().reindex(onto).fillna(0)
+
+
+def weighted_sum(
+    term: Variable | LinearExpression,
+    scales: Sequence[Scale],
+    live: xr.DataArray,
+    onto: Mapping[str, pd.Index],
+    joined: Mapping[str, np.ndarray] | None = None,
+    grouped: Mapping[str, np.ndarray] | None = None,
+) -> LinearExpression:
+    """
+    The sum of *term* scaled by data, built from the cells where the data is *live* alone.
+
+    *scales* hold the operator and the data of each scaling, the innermost
+    first, the data a number or an array over dimensions of *live*. A cell
+    of the product is read where *live* holds, over every coordinate of the
+    dimensions of *term* that *live* lacks; no other cell adds a term. The
+    cell lands at its own coordinates on the dimensions of *onto*, the
+    result's, and every other dimension is summed away. With *joined*, the
+    position each row of a relation reads on the dimensions it joins, a
+    cell lands where *grouped* puts its row, and one no row reads lands
+    nowhere: a key is read by one row at most. The constant is zero, and a
+    term with a zero coefficient is left out.
+    """
+    counts, labels, coeffs, held, shape = _live_terms(term)
+    wide = [str(d) for d in live.dims]
+    own = [d for d in held if d not in wide]
+    size = {**dict(zip(held, shape)), **{d: live.sizes[d] for d in wide}}
+    size.update({d: len(index) for d, index in onto.items()})
+    cells = np.flatnonzero(live.values)
+    spread = math.prod(size[d] for d in own)
+    at = dict(zip(wide, np.unravel_index(cells, live.shape)))
+    beside: dict[str, np.ndarray] = {}
+    if own:
+        within = np.unravel_index(np.arange(spread), [size[d] for d in own])
+        beside = dict(zip(own, within))
+    cell = np.repeat(np.arange(len(cells)), spread)
+    mate = np.tile(np.arange(spread), len(cells))
+    reached: dict[str, np.ndarray] = {}
+
+    def flat(dims: Sequence[str]) -> np.ndarray:
+        if not dims:
+            return np.zeros(len(cell), dtype=np.intp)
+        positions = [
+            reached[d] if d in reached else at[d][cell] if d in at else beside[d][mate]
+            for d in dims
+        ]
+        return np.ravel_multi_index(positions, [size[d] for d in dims])
+
+    if joined is not None and grouped is not None:
+        keys = list(joined)
+        rows = np.ravel_multi_index(list(joined.values()), [size[d] for d in keys])
+        row = np.full(math.prod(size[d] for d in keys), -1, dtype=np.intp)
+        row[rows] = np.arange(len(rows))
+        read = row[flat(keys)]
+        kept = np.flatnonzero(read >= 0)
+        cell, mate, read = cell[kept], mate[kept], read[kept]
+        source = flat(held)
+        reached = {d: positions[read] for d, positions in grouped.items()}
+    else:
+        source = flat(held)
+    target = flat(list(onto))
+    indptr = indptr_from_counts(counts, np.intp)
+    n = counts[source]
+    picked = np.repeat(indptr[source] - (np.cumsum(n) - n), n) + np.arange(n.sum())
+    values = coeffs[picked]
+    behind = np.repeat(cell, n)
+    for op, data in scales:
+        if isinstance(data, xr.DataArray):
+            values = op(
+                values, data.values[tuple(at[str(d)] for d in data.dims)][behind]
+            )
+        else:
+            values = op(values, data)
+    model = term.model
+    grid = Grid({d: index.rename(d) for d, index in onto.items()})
+    shape = (grid.size, model._xCounter)
+    csr = coo_to_csr(values, np.repeat(target, n), labels[picked], shape, model)
+    store = CSRStore(csr, np.zeros(grid.size), grid, model)
+    return LinearExpression._from_store(
+        store if model.sparse else store.to_dense(), model
+    )
+
+
+def _live_terms(
+    term: Variable | LinearExpression,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], tuple[int, ...]]:
+    """The live terms of *term* in cell order: their number per cell, labels and coefficients, and the dimensions and shape of the cells."""
+    if isinstance(term, Variable):
+        cells = term.labels
+        labels = cells.values.reshape(-1)
+        present = labels != -1
+        dims = [str(d) for d in cells.dims]
+        ones = np.ones(np.count_nonzero(present))
+        return present.astype(np.intp), labels[present], ones, dims, cells.shape
+    store = term._store
+    counts, labels, coeffs = store.terms()
+    shape = tuple(term.sizes[d] for d in store.dims)
+    return counts.astype(np.intp, copy=False), labels, coeffs, list(store.dims), shape
 
 
 def _gathered(

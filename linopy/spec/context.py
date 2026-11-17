@@ -52,10 +52,15 @@ class Memo:
     ``masked`` counts the refusals a ``rows`` narrowing let pass: a value
     made under one is not kept, so a value read back is refused wherever it
     would be when evaluated afresh.
+
+    ``zeroed`` counts the sums built from their live cells alone that left
+    out a term with a zero coefficient, which a sum built operator by
+    operator keeps: such a term still counts as a term of its row.
     """
 
     values: dict[Hashable, Any] = field(default_factory=dict)
     masked: int = 0
+    zeroed: int = 0
     uses: dict[ms.Expression, int] = field(default_factory=dict)
     inner: dict[ms.Expression, tuple[ms.Expression, ...]] = field(default_factory=dict)
 
@@ -137,7 +142,8 @@ class Context:
     narrows the finiteness check to the rows a constraint builds, and
     ``subject`` names what is being built in its refusals. ``memo`` is
     shared by every context replaced from one. ``rename`` gives the model
-    name of a variable or constraint the program declares.
+    name of a variable or constraint the program declares. ``fuse`` lets a
+    build sum a term scaled by sparse data from its live cells alone.
     """
 
     model: Model
@@ -150,6 +156,7 @@ class Context:
     subject: str = "the spec"
     memo: Memo = field(default_factory=Memo, compare=False, repr=False)
     rename: Callable[[str], str] = field(default=str, compare=False, repr=False)
+    fuse: bool = True
 
 
 def is_empty(dims: Iterable[str], ctx: Context) -> bool:
