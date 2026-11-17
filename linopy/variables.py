@@ -338,15 +338,22 @@ class Variable:
 
     @scaling.setter
     def scaling(self, value: ConstantLike) -> None:
-        value = broadcast_to_coords(
-            value,
-            coords=self.coords,
-            dims=self.dims,
-            strict=False,
-        )
-        value = value.reindex_like(self.labels, fill_value=1.0)
-        value = validate_scaling(value, f"scaling for variable '{self.name}'")
-        self._data = assign_fields(self.data, scaling=value)
+        label = f"scaling for variable '{self.name}'"
+        labels = self.labels
+        field: DataArray | tuple[tuple[Hashable, ...], np.ndarray]
+        if isinstance(value, int | float | np.number):
+            factor = validate_scaling(DataArray(float(value)), label)
+            field = (labels.dims, np.full(labels.shape, factor.item()))
+        else:
+            value = broadcast_to_coords(
+                value,
+                coords=self.coords,
+                dims=self.dims,
+                strict=False,
+            )
+            value = value.reindex_like(labels, fill_value=1.0)
+            field = validate_scaling(value, label)
+        self._data = assign_fields(self.data, scaling=field)
 
     @property
     def solver_scaling(self) -> DataArray:

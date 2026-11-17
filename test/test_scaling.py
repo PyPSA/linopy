@@ -306,6 +306,32 @@ def test_constraint_scaling_setter_broadcasts_to_rows() -> None:
     np.testing.assert_allclose(m.matrices.b, [2.0, 2.0])
 
 
+def _variable_and_constraint() -> tuple[pd.Index, list[Any]]:
+    m = Model()
+    i = pd.Index(["a", "b"], name="i")
+    x = m.add_variables(coords=[i], name="x")
+    return i, [x, m.add_constraints(x >= 1, name="c")]
+
+
+@pytest.mark.parametrize("factor", [1, 2.5, np.float32(4.0)])
+def test_scalar_scaling_setter_fills_every_cell(factor: Any) -> None:
+    i, entries = _variable_and_constraint()
+    for entry in entries:
+        entry.scaling = factor
+
+        assert entry.scaling.dtype == np.float64
+        assert entry.scaling.indexes["i"].equals(i)
+        np.testing.assert_array_equal(entry.scaling.values, [float(factor)] * 2)
+
+
+@pytest.mark.parametrize("factor", [0, -1.0, np.nan, np.inf])
+def test_scalar_scaling_setter_validation(factor: float) -> None:
+    _, entries = _variable_and_constraint()
+    for entry in entries:
+        with pytest.raises(ValueError, match="finite positive"):
+            entry.scaling = factor
+
+
 @pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS is not installed")
 def test_scaled_solve_preserves_user_units() -> None:
     reference = Model()
