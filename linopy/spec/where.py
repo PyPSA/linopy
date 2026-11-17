@@ -37,14 +37,21 @@ def admits_a_row(mask: ms.Mask | None, ctx: Context) -> bool:
 
     The conditions ``AND`` joins are read left to right and the reading
     stops at the first that leaves no row, so a declaration a flag switches
-    off costs that flag alone.
+    off costs that flag alone: one that holds nowhere decides before it is
+    joined to the ones read so far.
     """
     if mask is None:
         return True
-    kept = xr.DataArray(True)
+    kept = None
     for node in _conjuncts(mask.root):
-        kept = kept & _node(node, ctx)
-        if not bool(kept.any()):
+        held = _node(node, ctx)
+        if not held.values.any():
+            return False
+        if kept is None:
+            kept = held
+            continue
+        kept = kept & held
+        if not kept.values.any():
             return False
     return True
 
@@ -180,7 +187,9 @@ def _defined(name: str, ctx: Context) -> xr.DataArray:
 
 
 def _bool(arr: xr.DataArray) -> xr.DataArray:
-    """*arr* as a boolean mask, a hole reading as exclusion."""
+    """*arr* as a boolean mask, a hole reading as exclusion; a boolean array has no hole and is the mask."""
+    if arr.dtype == bool:
+        return arr
     return arr.fillna(False).astype(bool)
 
 
