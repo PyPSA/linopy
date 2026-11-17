@@ -7,6 +7,7 @@ predicates that gate which rows exist.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -33,8 +34,10 @@ from linopy import (  # noqa: E402
     Model,
     PerformanceWarning,
     QuadraticExpression,
+    Variable,
 )
 from linopy.spec import SpecDataError, evaluate, operators  # noqa: E402
+from linopy.spec.context import as_expression  # noqa: E402
 from linopy.testing import assert_conequal, assert_linequal  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -470,6 +473,21 @@ RELATION_SUMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
             "next_of": pd.DataFrame({"t": TT, "next": [1, 2, 2, 0]}),
         },
     ),
+    "a-masked-variable": (
+        {
+            **with_(
+                SELF_MAP_SPEC,
+                variables={"m": {"dims": ["t"], "where": "v > 1", "missing": "absent"}},
+            ),
+            "constraints": {},
+            "expressions": {"summed": "sum(m, over=t, by=next_of[next])"},
+        },
+        {
+            "t": TT,
+            "v": pd.DataFrame({"t": TT, "v": V}),
+            "next_of": pd.DataFrame({"t": TT, "next": [1, 2, 3, 0]}),
+        },
+    ),
     "beside-a-relation-that-maps-nothing": (
         with_(
             GROUPED_SPEC,
@@ -595,32 +613,61 @@ GROUP_CONSTANTS: dict[str, list[float]] = {
     "cancelling": [1e16, 1.0, -1e16, 0.1, -1e16, 1e16],
     "absent": [0.1, np.nan, 0.3, 1e16, 0.1, -1e16],
     "opposite-infinities": [np.inf, 1.0, -np.inf, 0.1, 0.2, np.inf],
+    "negated-zeros": [-0.0, -0.0, 0.0, -0.0, -0.0, -0.0],
 }
 GROUP_ROWS: dict[str, np.ndarray] = {
-    "t": np.array([0, 1, 2, 3, 4, 5, 2, 0]),
-    "e": np.array([0, 1, 0, 1, 0, 1, 1, 0]),
-    "k": np.array([1, 1, 0, 0, 1, 0, 1, 0]),
+    "t": np.array([0, 1, 2, 3, 4, 5, 2, 0, 1, 3]),
+    "e": np.array([0, 1, 0, 1, 0, 1, 1, 0, 0, 1]),
+    "k": np.array([1, 1, 0, 0, 1, 0, 1, 0, 1, 1]),
+}
+GROUPINGS: dict[str, dict[str, np.ndarray]] = {
+    "one-dim": {"s": np.array(list("aabbbbbbbb"))},
+    "two-dims": {
+        "s": np.array(list("aabbbbbbbb")),
+        "u": np.array(list("pqqpqqqqpq")),
+    },
+}
+GROUPS = {"s": pd.Index(["a", "b", "c"], name="s"), "u": pd.Index(["p", "q"], name="u")}
+GROUPED_TERMS: dict[str, Callable[[Variable, xr.DataArray], Any]] = {
+    "term": lambda x, const: (const.fillna(0) - 2 * x).where(const.notnull()),
+    "masked-variable": lambda x, const: x.where(const.notnull()),
 }
 
 
+def group_summed(
+    term: Any,
+    joined: dict[str, np.ndarray],
+    grouped: dict[str, np.ndarray],
+    onto: dict[str, pd.Index],
+) -> LinearExpression:
+    """*term* summed through the rows of a relation as a dense term is: picked row by row, then grouped."""
+    rows = pd.RangeIndex(len(next(iter(joined.values()))), name="_row")
+    positions = {d: xr.DataArray(at, coords=[rows]) for d, at in joined.items()}
+    picked = as_expression(term).isel(positions)
+    keyed = picked.assign_coords({d: ("_row", at) for d, at in grouped.items()})
+    return keyed.groupby(list(grouped)).sum().reindex(onto).fillna(0)
+
+
+@pytest.mark.parametrize("grouped", GROUPINGS.values(), ids=list(GROUPINGS))
 @pytest.mark.parametrize("joins", [["t"], ["t", "e"], ["t", "k"]])
 @pytest.mark.parametrize("const", GROUP_CONSTANTS.values(), ids=list(GROUP_CONSTANTS))
+@pytest.mark.parametrize("made", GROUPED_TERMS.values(), ids=list(GROUPED_TERMS))
 def test_a_sparse_relation_sum_adds_up_as_the_group_sum(
-    const: list[float], joins: list[str]
+    made: Callable[[Variable, xr.DataArray], Any],
+    const: list[float],
+    joins: list[str],
+    grouped: dict[str, np.ndarray],
 ) -> None:
     m = Model(sparse=True)
     sizes = {"r": 2, "t": 6, "e": 2, "k": 2}
     coords = [pd.RangeIndex(n, name=d) for d, n in sizes.items()]
-    values = xr.DataArray(const, coords=coords[1:2])
-    term = 2 * m.add_variables(coords=coords, name="x") + values.fillna(0)
-    term = term.where(values.notnull())
+    term = made(
+        m.add_variables(coords=coords, name="x"),
+        xr.DataArray(const, coords=coords[1:2]),
+    )
     joined = {d: GROUP_ROWS[d] for d in joins}
-    grouped = {"s": np.array(list("aaabbbbb"))}
-    onto = {"s": pd.Index(["a", "b", "c"], name="s")}
-    rows = pd.RangeIndex(8, name="_row")
-    picked = term.isel({d: xr.DataArray(at, coords=[rows]) for d, at in joined.items()})
-    keyed = picked.assign_coords(s=("_row", grouped["s"]))
-    want = keyed.groupby(["s"]).sum().reindex(onto).fillna(0)
+    onto = {d: GROUPS[d] for d in grouped}
+    want = group_summed(term, joined, grouped, onto)
     summed = operators.grouped_sum(term, joined, grouped, onto)
     assert isinstance(summed, LinearExpression)
     assert summed.is_sparse
