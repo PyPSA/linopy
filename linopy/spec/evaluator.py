@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import math
 import operator
 from collections.abc import Callable, Sequence
 from typing import TypeAlias, TypeVar, assert_never, cast
@@ -12,11 +13,12 @@ import xarray as xr
 from mathspec import program as ms
 
 from linopy.constants import FACTOR_DIM
-from linopy.expressions import LinearExpression, QuadraticExpression
+from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.spec import operators
 from linopy.spec.context import Array, Context, Term, Value, as_expression, is_empty
 from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.where import admitted, evaluate_where, groups_of, looked_up
+from linopy.store import DenseStore
 from linopy.variables import Variable
 
 _Binary: TypeAlias = ms.Add | ms.Multiply | ms.Divide | ms.Power
@@ -29,6 +31,7 @@ _OPERATORS: dict[type, Callable[[Value, Value], Value]] = {
 _Framed = TypeVar(
     "_Framed", bound=xr.DataArray | LinearExpression | QuadraticExpression
 )
+_Sign: TypeAlias = Callable[[Value, Value], Value]
 
 
 def fold(name: str, ctx: Context) -> xr.DataArray:
@@ -222,11 +225,17 @@ def _combine(node: _Binary, ctx: Context) -> Value:
     read as an absence and silently drop the row, an infinity would stand in
     the problem. A hole beside a term becomes the term's absence.
     """
+    if isinstance(node, ms.Add) and not ctx.solved and _carries(node, ctx):
+        return _added(node, ctx)
     op = _OPERATORS[type(node)]
     first, second = _operands(node)
     if isinstance(node, ms.Add) and isinstance(second, ms.Negate):
         op, second = operator.sub, second.operand
-    left, right = evaluate(first, ctx), evaluate(second, ctx)
+    return _made(node, op, evaluate(first, ctx), evaluate(second, ctx), ctx)
+
+
+def _made(node: _Binary, op: _Sign, left: Value, right: Value, ctx: Context) -> Value:
+    """The evaluated operands *left* and *right* of *node* combined by *op*, refused as :func:`_combine` says."""
     kind = type(node).__name__.lower()
     if isinstance(left, Term) or isinstance(right, Term):
         left, right = _off_rows(left, ctx), _off_rows(right, ctx)
@@ -246,6 +255,120 @@ def _combine(node: _Binary, ctx: Context) -> Value:
                 f"coordinates, so the data was attached against other labels than the model was built on."
             )
     return refuse_made(kind, (node,), op, a, b, ctx)
+
+
+def _carries(node: ms.Expression, ctx: Context) -> bool:
+    """Whether a variable stands under *node*, asked once per node."""
+    carries = ctx.memo.carries
+    key = id(node)
+    if key not in carries:
+        carries[key] = ms.carries_variable(node)
+    return carries[key]
+
+
+def _chain(
+    node: ms.Add, ctx: Context
+) -> tuple[ms.Expression, list[tuple[ms.Add, _Sign, ms.Expression]]]:
+    """
+    The chain of sums and differences ending in *node*: its first operand,
+    then per step the node, its sign and the operand it adds. The chain runs
+    down the left operands for as long as they are sums carrying a variable.
+    """
+    steps: list[tuple[ms.Add, _Sign, ms.Expression]] = []
+    first: ms.Expression = node
+    while isinstance(first, ms.Add) and _carries(first, ctx):
+        sign, operand = operator.add, first.right
+        if isinstance(operand, ms.Negate):
+            sign, operand = operator.sub, operand.operand
+        steps.append((first, sign, operand))
+        first = first.left
+    return first, steps[::-1]
+
+
+def _added(node: ms.Add, ctx: Context) -> Value:
+    """
+    A chain of sums and differences that carries a variable, a run of its terms merged in one step.
+
+    The operands are evaluated in the order of the chain. A term joins the
+    run before it while the largest magnitudes of their constants add up to
+    a finite number: no partial sum of the constants can overflow then, so
+    no step of the run is refused. A run is merged in one step, a
+    subtracted term negated while it is stacked. Data, a constant that
+    holds an infinity and a term past that bound are added step by step, as
+    :func:`_combine` adds them.
+    """
+    first, steps = _chain(node, ctx)
+    made = evaluate(first, ctx)
+    bound = _magnitude(made)
+    run: list[tuple[_Sign, Term]] = []
+    for step, op, operand in steps:
+        value = evaluate(operand, ctx)
+        bound += _magnitude(value)
+        if math.isfinite(bound):
+            run.append((op, cast(Term, value)))
+        else:
+            made = _made(step, op, _merged(made, run), value, ctx)
+            run = []
+            bound = _magnitude(made)
+        if step is not node:
+            ctx.memo.used(step)
+    return _merged(made, run)
+
+
+def _magnitude(value: Value) -> float:
+    """The largest magnitude of the constant of a term; infinite for data and for a constant that holds an infinity."""
+    if isinstance(value, Variable):
+        return 0.0
+    if isinstance(value, LinearExpression):
+        const = np.asarray(value._store.const)
+    elif isinstance(value, QuadraticExpression):
+        const = value.const.values
+    else:
+        return math.inf
+    return float(np.fmax.reduce(np.abs(const), axis=None, initial=0.0))
+
+
+def _merged(made: Value, run: Sequence[tuple[_Sign, Term]]) -> Value:
+    """*made* with the terms of *run* added or subtracted, linear ones merged in one step where that stacks them as the steps do."""
+    if len(run) > 1 and all(_linear(t) for t in (made, *(t for _, t in run))):
+        signed = [(as_expression(cast(Term, made)), False)]
+        for op, term in run:
+            if op is operator.sub and isinstance(term, Variable):
+                signed.append((-term, False))
+            else:
+                signed.append((as_expression(term), op is operator.sub))
+        summed = _signed_sum(cast(list[tuple[LinearExpression, bool]], signed))
+        if summed is not None:
+            return summed
+    return functools.reduce(lambda total, step: step[0](total, step[1]), run, made)
+
+
+def _linear(value: Value) -> bool:
+    """Whether *value* is a variable or a linear expression."""
+    return isinstance(value, Variable) or type(value) is LinearExpression
+
+
+def _signed_sum(
+    signed: Sequence[tuple[LinearExpression, bool]],
+) -> LinearExpression | None:
+    """
+    The sum of the expressions of *signed*, a flagged one subtracted, merged in one step.
+
+    Dense expressions are stacked along the term dimension, sparse ones
+    added as sparse matrices. ``None`` where dense expressions do not
+    stack: their merge adds the constants up in another order than the
+    steps do.
+    """
+    expressions = [expression for expression, _ in signed]
+    negate = [flip for _, flip in signed]
+    stores = [expression._store for expression in expressions]
+    if any(not isinstance(store, DenseStore) for store in stores):
+        flipped = [-e if flip else e for e, flip in signed]
+        return merge(flipped, cls=LinearExpression)
+    summed = DenseStore.signed_sum(cast(list[DenseStore], stores), negate)
+    if summed is None:
+        return None
+    return LinearExpression._from_store(summed, expressions[0].model)
 
 
 def _without_dead_terms(made: Value) -> Value:

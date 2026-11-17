@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import glob
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -622,6 +623,92 @@ def test_arithmetic_that_makes_data_non_finite_is_refused(
 ) -> None:
     with pytest.raises(SpecDataError, match=rf"constraint 'row'.*not finite at {at}"):
         Model.from_spec(quotient(expression), data)
+
+
+CHAIN_SPEC: dict[str, Any] = {
+    "dimensions": {"t": {"dtype": "int", "ordered": True}},
+    "parameters": {"a": {"dims": ["t"]}, "b": {"dims": ["t"]}, "c": {"dims": ["t"]}},
+    "variables": {
+        "x": {"dims": ["t"]},
+        "y": {"dims": ["t"]},
+        "z": {"dims": ["t"], "where": "a < 2", "missing": "absent"},
+        "w": {"dims": ["t"], "where": "a < 2", "missing": 0},
+    },
+}
+CHAIN_DATA: dict[str, Any] = {
+    "t": T,
+    "a": xr.DataArray([3.0, 1.0, 1.0], coords=[T]),
+    "b": xr.DataArray([1.0, 0.0, 1.0], coords=[T]),
+    "c": xr.DataArray([1e16, 0.0, 0.1], coords=[T]),
+}
+INF_A = {**CHAIN_DATA, "a": xr.DataArray([np.inf, 1.0, 1.0], coords=[T])}
+CHAINS: dict[str, tuple[str, Callable[..., Any], dict[str, Any]]] = {
+    "sums": ("x + y + 2 * x + y", lambda x, y, z, w, a, c: x + y + 2 * x + y, {}),
+    "differences": (
+        "x - y - 2 * x - y + x",
+        lambda x, y, z, w, a, c: x - y - 2 * x - y + x,
+        {},
+    ),
+    "masked-variables": (
+        "x + z - w - z + y",
+        lambda x, y, z, w, a, c: x + z - w.fillna(0) - z + y,
+        {},
+    ),
+    "constants": (
+        "(x + c) - (y - c) - (x + c) + (y + c)",
+        lambda x, y, z, w, a, c: (x + c) - (y - c) - (x + c) + (y + c),
+        {},
+    ),
+    "a-negated-zero": (
+        "-(x + c) - y - z - w",
+        lambda x, y, z, w, a, c: -(x + c) - y - z - w.fillna(0),
+        {},
+    ),
+    "data": (
+        "x + c - y + a - x + c",
+        lambda x, y, z, w, a, c: x + c - y + a - x + c,
+        {},
+    ),
+    "an-infinity": (
+        "x - y + (y + a) + a - x",
+        lambda x, y, z, w, a, c: x - y + (y + a) + a - x,
+        INF_A,
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("expression", "written", "data"), CHAINS.values(), ids=list(CHAINS)
+)
+def test_a_sum_chain_builds_as_its_operators_one_by_one(
+    backend: Model, expression: str, written: Callable[..., Any], data: dict[str, Any]
+) -> None:
+    sources = data or CHAIN_DATA
+    spec = with_(CHAIN_SPEC, expressions={"chain": expression})
+    m = Model.from_spec(spec, sources, sparse=backend.sparse)
+    v = m.variables
+    want = written(v["x"], v["y"], v["z"], v["w"], sources["a"], sources["c"])
+    built = m.expressions["chain"]
+    assert built.is_sparse == want.is_sparse
+    xr.testing.assert_equal(built.data, want.data)
+    assert (np.signbit(built.const) == np.signbit(want.const)).all()
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        pytest.param("(x + c) + (y + c) - x", id="sum"),
+        pytest.param("(x + c) - (y - c) + x", id="difference"),
+        pytest.param("(x + c) + (y + c) + z", id="before-an-absence"),
+        pytest.param("(x + c) + (y + c) + x * (a / b)", id="before-a-later-refusal"),
+    ],
+)
+def test_a_sum_chain_whose_constants_overflow_is_refused_at_the_step(
+    expression: str,
+) -> None:
+    data = {**CHAIN_DATA, "c": xr.DataArray([1e308, 1.0, 1.0], coords=[T])}
+    with pytest.raises(SpecDataError, match=r"the add of 'c' is not finite at t=0"):
+        Model.from_spec(with_(CHAIN_SPEC, expressions={"chain": expression}), data)
 
 
 def test_arithmetic_is_not_refused_on_a_row_masked_out() -> None:
