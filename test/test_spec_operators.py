@@ -142,6 +142,61 @@ def test_an_operator_builds_and_folds_alike(operators_model: Model, key: str) ->
     xr.testing.assert_allclose(folded, want.rename(f"probe_{name}"))
 
 
+HOURS = pd.date_range("2030-01-01", periods=12, freq="h", name="t")
+SEASON = ["a", "b", "a", "a", "c", "b", "a", "a", "b", "a", "a", "a"]
+HOURLY = pd.DataFrame({"s": SEASON, "v": np.arange(1.0, 13.0)}, index=HOURS)
+EDGES = {"none": "", "fill": ", edge=0", "wrap": ", edge='wrap'"}
+
+
+def hourly_shift(offset: int, edge: str, within: str) -> dict[str, Any]:
+    shifted = f"shift(x, along=t, offset={offset}{EDGES[edge]}{within})"
+    return {
+        "dimensions": {
+            "t": {"dtype": "datetime", "ordered": True},
+            "s": {"dtype": "str"},
+        },
+        "relations": {"season_of": {"key": "t", "values": "s"}},
+        "parameters": {"v": {"dims": ["t"]}},
+        "variables": {
+            "x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 100}},
+            "y": {"dims": ["t"], "bounds": {"lower": -100, "upper": 100}},
+        },
+        "constraints": {
+            "fix": {"dims": ["t"], "expression": "x == v"},
+            "link": {"dims": ["t"], "expression": f"y == {shifted}"},
+        },
+        "objective": {"sense": "minimize", "expression": "sum(x)"},
+    }
+
+
+def pandas_shift(
+    values: pd.api.typing.SeriesGroupBy, offset: int, edge: str
+) -> pd.Series:
+    if edge == "wrap":
+        return values.transform(lambda group: np.roll(group.to_numpy(), offset))
+    return values.shift(offset, fill_value=0.0 if edge == "fill" else None)
+
+
+@pytest.mark.parametrize("grouped", [True, False], ids=["in-groups", "whole-axis"])
+@pytest.mark.parametrize("edge", EDGES)
+@pytest.mark.parametrize("offset", [-7, -1, 0, 1, 7])
+def test_a_shift_on_a_datetime_axis_matches_a_pandas_shift(
+    offset: int, edge: str, grouped: bool
+) -> None:
+    within = ", within=season_of[s]" if grouped else ""
+    sources = {
+        "t": HOURS,
+        "s": ["a", "b", "c"],
+        "season_of": HOURLY.s.rename_axis("t").reset_index(),
+        "v": HOURLY.v.rename_axis("t").reset_index(),
+    }
+    m = solved(hourly_shift(offset, edge, within), sources)
+    groups = HOURLY.s if grouped else np.zeros(len(HOURLY))
+    want = pandas_shift(HOURLY.groupby(groups).v, offset, edge)
+    rows = m.constraints["link"].labels != -1
+    np.testing.assert_allclose(m.solution["y"].where(rows), want, equal_nan=True)
+
+
 AMOUNT_SPEC: dict[str, Any] = {
     "dimensions": {"t": {"dtype": "int", "ordered": True}, "g": {"dtype": "int"}},
     "relations": {"grp": {"key": "t", "values": "g", "missing": "absent"}},
