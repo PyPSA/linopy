@@ -5,7 +5,9 @@ materialization, and constraints on a sparse lhs.
 
 from __future__ import annotations
 
+import copy
 import itertools
+import pickle
 import re
 import tracemalloc
 import warnings
@@ -2946,3 +2948,30 @@ def test_aggregate_unsorted_rows_stacks_terms_in_row_order(terms: list[int]) -> 
     rows = [csr.indices[a:b].tolist() for a, b in itertools.pairwise(indptr)]
     assert cells == [rows[1] + rows[3], [], rows[0] + rows[2]]
     np.testing.assert_array_equal(res.const, [4.0, np.nan, 3.0])
+
+
+def _grid() -> Grid:
+    t = pd.date_range("2030-01-01", periods=3, freq="h", name="t")
+    g = pd.Index(["a", "b"], name="g")
+    return Grid({"t": t, "g": g}, {"region": ("g", np.array(["north", "south"]))})
+
+
+def test_a_grid_hands_out_a_dataset_a_change_to_the_last_does_not_reach() -> None:
+    grid = _grid()
+    first = grid.to_dataset()
+    first["v"] = ("g", [1.0, 2.0])
+    first.attrs["note"] = "changed"
+    first["g"].attrs["unit"] = "changed"
+    first.coords["extra"] = 1
+    xr.testing.assert_identical(grid.to_dataset(), _grid().to_dataset())
+
+
+@pytest.mark.parametrize(
+    "copied",
+    [copy.copy, lambda g: pickle.loads(pickle.dumps(g)), replace],
+    ids=["copy", "pickle", "replace"],
+)
+def test_a_copied_grid_builds_the_same_dataset(copied: Callable[[Grid], Grid]) -> None:
+    grid = _grid()
+    grid.to_dataset()
+    xr.testing.assert_identical(copied(grid).to_dataset(), _grid().to_dataset())

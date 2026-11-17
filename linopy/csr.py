@@ -43,7 +43,7 @@ import operator
 import weakref
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, TypeAlias, cast, final
+from typing import TYPE_CHECKING, Any, TypeAlias, final
 
 import numpy as np
 import pandas as pd
@@ -134,10 +134,11 @@ class Grid:
         It is built once per grid and handed out as a shallow copy: building
         one from the indexes costs several times the copy.
         """
-        if self._dataset is None:
+        built = self._dataset
+        if built is None:
             built = Dataset(coords=self.indexes | self.aux)
             object.__setattr__(self, "_dataset", built)
-        return cast(Dataset, self._dataset).copy(deep=False)
+        return built.copy(deep=False)
 
     @property
     def size(self) -> int:
