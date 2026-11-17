@@ -18,11 +18,12 @@ from typing import Any, cast
 
 import numpy as np
 import pandas as pd
+import scipy.sparse
 import xarray as xr
 
 from linopy.constants import TERM_DIM
-from linopy.csr import CSRStore, Grid, coo_to_csr, indptr_from_counts
-from linopy.expressions import LinearExpression, merge
+from linopy.csr import CSRStore, Grid, _grouped, coo_to_csr, indptr_from_counts
+from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.model import Model
 from linopy.spec.context import Array, as_expression
 from linopy.spec.errors import SpecDataError
@@ -88,11 +89,13 @@ def grouped_sum(
     rows = pd.RangeIndex(len(next(iter(joined.values()))), name=_ROW)
     if not len(rows):
         return _zeros(array, tuple(joined), onto)
+    read = {d: array.indexes[d].get_indexer(labels) for d, labels in joined.items()}
+    if not isinstance(array, xr.DataArray | QuadraticExpression):
+        aggregated = _aggregated(array, read, grouped, onto)
+        if aggregated is not None:
+            return aggregated
     expression = as_expression(array)
-    positions = {
-        d: xr.DataArray(expression.indexes[d].get_indexer(labels), coords=[rows])
-        for d, labels in joined.items()
-    }
+    positions = {d: xr.DataArray(at, coords=[rows]) for d, at in read.items()}
     picked = expression.isel(positions)
     if isinstance(picked, xr.DataArray):
         return _scattered(picked, grouped, onto)
@@ -208,6 +211,77 @@ def _terms(
     counts, labels, coeffs = store.terms()
     shape = tuple(term.sizes[d] for d in store.dims)
     return counts.astype(np.intp, copy=False), labels, coeffs, list(store.dims), shape
+
+
+def _aggregated(
+    array: Variable | LinearExpression,
+    read: Mapping[str, np.ndarray],
+    grouped: Mapping[str, np.ndarray],
+    onto: Mapping[str, pd.Index],
+) -> LinearExpression | None:
+    """
+    A sparse (CSR) term, or a variable of a sparse model, summed through the rows of a relation in one aggregate.
+
+    Row *i* reads the cells at the positions ``read[d][i]`` and lands at the
+    labels ``grouped[d][i]``; the grouped dimensions stand where the first
+    joined one stood. The rows are gathered in the order of the cells they
+    land in, so the terms are copied once, and a cell adds its rows'
+    constants up in the order of the rows. ``None`` for a dense term, where
+    a row names a label the coordinates lack, and where the term holds
+    more coordinates than its dimensions.
+    """
+    model = array.model
+    if isinstance(array, Variable):
+        dims = tuple(str(d) for d in array.labels.dims)
+        if not model.sparse or set(array.coords) != set(dims):
+            return None
+        grid = Grid({d: array.indexes[d].rename(d) for d in dims})
+    elif array.is_sparse:
+        grid = cast(CSRStore, array._store).grid
+    else:
+        return None
+    lands = {d: onto[d].get_indexer(labels) for d, labels in grouped.items()}
+    known = all((at >= 0).all() for at in (*read.values(), *lands.values()))
+    others = [d for d in grid.dims if d not in read]
+    if grid.aux or not known or set(grouped) & set(others):
+        return None
+    slot = sum(d in others for d in grid.dims[: min(map(grid.dims.index, read))])
+    kept = {d: grid.indexes[d] for d in others}
+    framed = [*others[:slot], *grouped, *others[slot:]]
+    target = Grid({d: onto[d].rename(d) if d in grouped else kept[d] for d in framed})
+    beside = dict(zip(others, (np.arange(len(index)) for index in kept.values())))
+    source = _cells(grid.strides, read, beside)
+    cells = _cells(target.strides, lands, beside)
+    shape = (target.size, model._xCounter)
+    if isinstance(array, Variable):
+        labels = array.labels.values.reshape(-1)[source]
+        held = labels != -1
+        ones = np.ones(np.count_nonzero(held))
+        csr = coo_to_csr(ones, cells[held], labels[held], shape, model)
+        const = np.zeros(target.size)
+    else:
+        store = cast(CSRStore, array._store)
+        order, bounds = _grouped(cells, target.size)
+        taken = store.csr[source[order]]
+        arrays = (taken.data, taken.indices, taken.indptr[bounds])
+        csr = scipy.sparse.csr_array(arrays, shape=shape)
+        weights = store.const[source]
+        weights = np.where(np.isnan(weights), 0.0, weights)
+        const = np.bincount(cells, weights=weights, minlength=target.size)
+    return LinearExpression._from_store(CSRStore(csr, const, target, model), model)
+
+
+def _cells(
+    strides: Mapping[str, int],
+    rows: Mapping[str, np.ndarray],
+    beside: Mapping[str, np.ndarray],
+) -> np.ndarray:
+    """The flat cell of every row at every position *beside* it, the rows varying slowest."""
+    at = sum(positions * strides[d] for d, positions in rows.items())
+    cells = np.asarray(at, dtype=np.int64)
+    for d, positions in beside.items():
+        cells = cells[..., None] + positions * strides[d]
+    return cells.reshape(-1)
 
 
 def _gathered(
