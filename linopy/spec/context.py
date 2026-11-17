@@ -120,8 +120,24 @@ class Memo:
         self.values.pop(node, None)
 
 
+_USES: dict[int, tuple[ms.Program, dict[ms.Expression, int]]] = {}
+
+
 def uses_of(program: ms.Program) -> dict[ms.Expression, int]:
-    """How often each node stands in what a build evaluates: the bounds, the sides of the constraints, the objective and the named expressions."""
+    """
+    How often each node stands in what a build evaluates: the bounds, the sides of the constraints, the objective and the named expressions.
+
+    A program is immutable, so its count is taken once and each build gets a copy to consume.
+    """
+    counted = _USES.get(id(program))
+    if counted is None or counted[0] is not program:
+        if len(_USES) >= 8:
+            _USES.clear()
+        counted = _USES[id(program)] = (program, _counted(program))
+    return dict(counted[1])
+
+
+def _counted(program: ms.Program) -> dict[ms.Expression, int]:
     bounds = (b for v in program.variables.values() for b in (v.lower, v.upper))
     sides = (s for c in program.constraints.values() for s in (c.lhs, c.rhs))
     bodies = (e.expression for e in program.expressions.values())
