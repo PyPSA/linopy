@@ -813,6 +813,54 @@ def test_a_sum_whose_live_cells_leave_out_every_term_is_built_operator_by_operat
     assert_linequal(fused.objective.expression, general.objective.expression)
 
 
+AGGREGATES: dict[str, tuple[str, list[str]]] = {
+    "variable": ("sum(x, over=s, by=bus_of[b])", ["b", "t"]),
+    "term-with-constant": ("sum(x + c, over=s, by=bus_of[b])", ["b", "t"]),
+    "beside-a-plain-sum": ("sum(x - c, over=[s, t], by=bus_of[b])", ["b"]),
+    "joined-behind-a-dim": ("sum(x + c, over=t, by=half_of[h])", ["h", "s"]),
+}
+
+
+@pytest.mark.parametrize("case", AGGREGATES)
+def test_a_sparse_term_summed_through_a_relation_is_one_aggregate(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """Rows of the relation land in their groups out of order, beside masked cells; the dense sum gathers them."""
+    sums: list[Any] = []
+    aggregated: list[LinearExpression | None] = []
+    grouped_sum, aggregate = spec_operators.grouped_sum, spec_operators._aggregated
+
+    def summed_through(*args: Any) -> Any:
+        sums.append(grouped_sum(*args))
+        return sums[-1]
+
+    def counted(*args: Any) -> LinearExpression | None:
+        aggregated.append(aggregate(*args))
+        return aggregated[-1]
+
+    monkeypatch.setattr(spec_operators, "grouped_sum", summed_through)
+    monkeypatch.setattr(spec_operators, "_aggregated", counted)
+    summed, dims = AGGREGATES[case]
+    spec = with_(
+        SPARSE_SPEC,
+        dimensions={"h": {"dtype": "str"}},
+        relations={"half_of": {"key": "t", "values": "h"}},
+        expressions={"summed": {"dims": dims, "expression": summed}},
+    )
+    halves = pd.DataFrame({"t": TT, "h": ["late", "early", "late", "early"]})
+    data = {**SPARSE_DATA, "h": ["early", "late"], "half_of": halves}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", PerformanceWarning)
+        Model.from_spec(spec, data, sparse=True)
+    assert aggregated[-1] is not None
+    sparse = sums.pop()
+    Model.from_spec(spec, data)
+    dense = sums.pop()
+    assert sparse.coord_dims == dense.coord_dims
+    assert_linequal(sparse, dense)
+    np.testing.assert_array_equal(sparse.const.values, dense.const.values)
+
+
 # ---------------------------------------------------------------------------
 # relations of several columns: bare, multi-key and multi-value
 # ---------------------------------------------------------------------------
