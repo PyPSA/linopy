@@ -329,13 +329,7 @@ def _magnitude(value: Value) -> float:
 def _merged(made: Value, run: Sequence[tuple[_Sign, Term]]) -> Value:
     """*made* with the terms of *run* added or subtracted, linear ones merged in one step where that stacks them as the steps do."""
     if len(run) > 1 and all(_linear(t) for t in (made, *(t for _, t in run))):
-        signed = [(as_expression(cast(Term, made)), False)]
-        for op, term in run:
-            if op is operator.sub and isinstance(term, Variable):
-                signed.append((-term, False))
-            else:
-                signed.append((as_expression(term), op is operator.sub))
-        summed = _signed_sum(cast(list[tuple[LinearExpression, bool]], signed))
+        summed = _signed_sum(cast(Term, made), run)
         if summed is not None:
             return summed
     return functools.reduce(lambda total, step: step[0](total, step[1]), run, made)
@@ -347,26 +341,33 @@ def _linear(value: Value) -> bool:
 
 
 def _signed_sum(
-    signed: Sequence[tuple[LinearExpression, bool]],
+    made: Term, run: Sequence[tuple[_Sign, Term]]
 ) -> LinearExpression | None:
     """
-    The sum of the expressions of *signed*, a flagged one subtracted, merged in one step.
+    The linear *made* with the linear terms of *run* added or subtracted, merged in one step.
 
-    Dense expressions are stacked along the term dimension, sparse ones
-    added as sparse matrices. ``None`` where dense expressions do not
-    stack: their merge adds the constants up in another order than the
-    steps do.
+    A subtracted variable is negated up front, as its step negates it; a
+    subtracted expression is negated while it is stacked. Dense expressions
+    are stacked along the term dimension, sparse ones added as sparse
+    matrices. ``None`` where dense expressions do not stack: their merge
+    adds the constants up in another order than the steps do.
     """
-    expressions = [expression for expression, _ in signed]
-    negate = [flip for _, flip in signed]
-    stores = [expression._store for expression in expressions]
+    expressions = [as_expression(made)]
+    negate = [False]
+    for op, term in run:
+        flip = op is operator.sub
+        expressions.append(
+            as_expression(-term if flip and isinstance(term, Variable) else term)
+        )
+        negate.append(flip and not isinstance(term, Variable))
+    stores = [cast(LinearExpression, e)._store for e in expressions]
     if any(not isinstance(store, DenseStore) for store in stores):
-        flipped = [-e if flip else e for e, flip in signed]
-        return merge(flipped, cls=LinearExpression)
+        signed = [-e if flip else e for e, flip in zip(expressions, negate)]
+        return merge(signed, cls=LinearExpression)
     summed = DenseStore.signed_sum(cast(list[DenseStore], stores), negate)
     if summed is None:
         return None
-    return LinearExpression._from_store(summed, expressions[0].model)
+    return LinearExpression._from_store(summed, made.model)
 
 
 def _without_dead_terms(made: Value) -> Value:
