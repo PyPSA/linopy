@@ -625,54 +625,90 @@ def test_arithmetic_that_makes_data_non_finite_is_refused(
         Model.from_spec(quotient(expression), data)
 
 
+CHAIN_S = pd.Index(["a", "b"], name="s")
 CHAIN_SPEC: dict[str, Any] = {
-    "dimensions": {"t": {"dtype": "int", "ordered": True}},
-    "parameters": {"a": {"dims": ["t"]}, "b": {"dims": ["t"]}, "c": {"dims": ["t"]}},
+    "dimensions": {"t": {"dtype": "int", "ordered": True}, "s": {"dtype": "str"}},
+    "parameters": {
+        "a": {"dims": ["t"]},
+        "b": {"dims": ["t"]},
+        "c": {"dims": ["t"]},
+        "d": {"dims": ["s"]},
+    },
     "variables": {
         "x": {"dims": ["t"]},
         "y": {"dims": ["t"]},
         "z": {"dims": ["t"], "where": "a < 2", "missing": "absent"},
         "w": {"dims": ["t"], "where": "a < 2", "missing": 0},
+        "u": {"dims": ["s"]},
+        "v": {"dims": ["t", "s"]},
     },
 }
 CHAIN_DATA: dict[str, Any] = {
     "t": T,
+    "s": CHAIN_S,
     "a": xr.DataArray([3.0, 1.0, 1.0], coords=[T]),
     "b": xr.DataArray([1.0, 0.0, 1.0], coords=[T]),
     "c": xr.DataArray([1e16, 0.0, 0.1], coords=[T]),
+    "d": xr.DataArray([1.0, -0.0], coords=[CHAIN_S]),
 }
 INF_A = {**CHAIN_DATA, "a": xr.DataArray([np.inf, 1.0, 1.0], coords=[T])}
+MAXIMA_APART = {
+    **CHAIN_DATA,
+    "b": xr.DataArray([0.0, 1e308, 1.0], coords=[T]),
+    "c": xr.DataArray([1e308, 0.0, 0.1], coords=[T]),
+}
+OVERFLOW_AT_0 = {**CHAIN_DATA, "c": xr.DataArray([1e308, 1.0, 1.0], coords=[T])}
 CHAINS: dict[str, tuple[str, Callable[..., Any], dict[str, Any]]] = {
-    "sums": ("x + y + 2 * x + y", lambda x, y, z, w, a, c: x + y + 2 * x + y, {}),
+    "sums": ("x + y + 2 * x + y", lambda x, y, **_: x + y + 2 * x + y, {}),
     "differences": (
         "x - y - 2 * x - y + x",
-        lambda x, y, z, w, a, c: x - y - 2 * x - y + x,
+        lambda x, y, **_: x - y - 2 * x - y + x,
         {},
     ),
     "masked-variables": (
         "x + z - w - z + y",
-        lambda x, y, z, w, a, c: x + z - w.fillna(0) - z + y,
+        lambda x, y, z, w, **_: x + z - w - z + y,
         {},
     ),
     "constants": (
         "(x + c) - (y - c) - (x + c) + (y + c)",
-        lambda x, y, z, w, a, c: (x + c) - (y - c) - (x + c) + (y + c),
+        lambda x, y, c, **_: (x + c) - (y - c) - (x + c) + (y + c),
+        {},
+    ),
+    "constants-in-order": (
+        "(x + c) - (x + c) + (y + 1) + x",
+        lambda x, y, c, **_: (x + c) - (x + c) + (y + 1) + x,
         {},
     ),
     "a-negated-zero": (
         "-(x + c) - y - z - w",
-        lambda x, y, z, w, a, c: -(x + c) - y - z - w.fillna(0),
+        lambda x, y, z, w, c, **_: -(x + c) - y - z - w,
+        {},
+    ),
+    "dimensions": (
+        "(x + c) + (u + d) + v - (x + c) - u",
+        lambda x, u, v, c, d, **_: (x + c) + (u + d) + v - (x + c) - u,
+        {},
+    ),
+    "dimensions-negated": (
+        "-(u + d) - (x - c) - v - x",
+        lambda x, u, v, c, d, **_: -(u + d) - (x - c) - v - x,
         {},
     ),
     "data": (
         "x + c - y + a - x + c",
-        lambda x, y, z, w, a, c: x + c - y + a - x + c,
+        lambda x, y, a, c, **_: x + c - y + a - x + c,
         {},
     ),
     "an-infinity": (
         "x - y + (y + a) + a - x",
-        lambda x, y, z, w, a, c: x - y + (y + a) + a - x,
+        lambda x, y, a, **_: x - y + (y + a) + a - x,
         INF_A,
+    ),
+    "maxima-on-other-rows": (
+        "(x + c) + (y + b) + x - (y + b)",
+        lambda x, y, b, c, **_: (x + c) + (y + b) + x - (y + b),
+        MAXIMA_APART,
     ),
 }
 
@@ -686,11 +722,13 @@ def test_a_sum_chain_builds_as_its_operators_one_by_one(
     sources = data or CHAIN_DATA
     spec = with_(CHAIN_SPEC, expressions={"chain": expression})
     m = Model.from_spec(spec, sources, sparse=backend.sparse)
-    v = m.variables
-    want = written(v["x"], v["y"], v["z"], v["w"], sources["a"], sources["c"])
+    terms = {name: m.variables[name] for name in CHAIN_SPEC["variables"]}
+    terms["w"] = terms["w"].fillna(0)
+    params = {name: sources[name] for name in CHAIN_SPEC["parameters"]}
+    want = written(**terms, **params)
     built = m.expressions["chain"]
     assert built.is_sparse == want.is_sparse
-    xr.testing.assert_equal(built.data, want.data)
+    xr.testing.assert_equal(built.data.transpose(*want.data.vars.dims), want.data)
     assert (np.signbit(built.const) == np.signbit(want.const)).all()
 
 
@@ -704,11 +742,22 @@ def test_a_sum_chain_builds_as_its_operators_one_by_one(
     ],
 )
 def test_a_sum_chain_whose_constants_overflow_is_refused_at_the_step(
-    expression: str,
+    backend: Model, expression: str
 ) -> None:
-    data = {**CHAIN_DATA, "c": xr.DataArray([1e308, 1.0, 1.0], coords=[T])}
+    spec = with_(CHAIN_SPEC, expressions={"chain": expression})
     with pytest.raises(SpecDataError, match=r"the add of 'c' is not finite at t=0"):
-        Model.from_spec(with_(CHAIN_SPEC, expressions={"chain": expression}), data)
+        Model.from_spec(spec, OVERFLOW_AT_0, sparse=backend.sparse)
+
+
+def test_a_sum_chain_whose_constants_overflow_on_a_row_masked_out_is_built(
+    backend: Model,
+) -> None:
+    row = {"dims": ["t"], "where": "a < 2", "expression": "(x + c) + (x + c) + x >= 0"}
+    spec = with_(CHAIN_SPEC, constraints={"row": row})
+    m = Model.from_spec(spec, OVERFLOW_AT_0, sparse=backend.sparse)
+    labels = m.constraints["row"].labels
+    assert labels.sel(t=0) == -1
+    assert (labels.sel(t=[1, 2]) >= 0).all()
 
 
 def test_arithmetic_is_not_refused_on_a_row_masked_out() -> None:
