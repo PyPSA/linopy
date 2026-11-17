@@ -277,6 +277,8 @@ def _objective(ctx: Context) -> None:
         return
     refuse_holes("the objective", [declared.expression], ctx)
     expr = evaluate(declared.expression, ctx)
+    if ctx.memo.zeroed and isinstance(expr, Term) and as_expression(expr).is_constant:
+        expr = evaluate(declared.expression, unpruned(ctx))
     if not isinstance(expr, Term):
         raise SpecDataError(
             "the objective carries no variable term once the data is attached, so there is nothing to optimize"
