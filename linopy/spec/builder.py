@@ -146,12 +146,11 @@ def _constraints(ctx: Context) -> None:
         lhs, rhs, sense = row.lhs, row.rhs, row.sense
         if flipped(row):
             lhs, rhs, sense = rhs, lhs, _FLIPPED[sense]
-        zeroed = ctx.memo.zeroed
         term, other = _sides(name, lhs, rhs, rows, scoped)
         if any(term.sizes[d] == 0 for d in term.coord_dims):
             continue
         dead = _emptied(term, rows)
-        if ctx.memo.zeroed > zeroed and (bool(dead.any()) or _constant(term, other)):
+        if ctx.memo.fused and (bool(dead.any()) or _constant(term, other)):
             term, other = _sides(name, lhs, rhs, rows, unfused(scoped))
             dead = _emptied(term, rows)
         _check_live(name, row, term, other, dead, ctx)
@@ -281,9 +280,8 @@ def _objective(ctx: Context) -> None:
     if declared is None:
         return
     refuse_holes("the objective", [declared.expression], ctx)
-    zeroed = ctx.memo.zeroed
     expr = evaluate(declared.expression, ctx)
-    if ctx.memo.zeroed > zeroed and _constant(expr):
+    if ctx.memo.fused and _constant(expr):
         expr = evaluate(declared.expression, unfused(ctx))
     if not isinstance(expr, Term):
         raise SpecDataError(

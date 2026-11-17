@@ -14,13 +14,11 @@ import xarray as xr
 from mathspec import program as ms
 
 from linopy.constants import FACTOR_DIM
-from linopy.csr import CSRStore
 from linopy.expressions import LinearExpression, QuadraticExpression, merge
 from linopy.spec import operators
 from linopy.spec.context import (
     Array,
     Context,
-    Memo,
     Term,
     Value,
     as_expression,
@@ -42,7 +40,8 @@ _Framed = TypeVar(
     "_Framed", bound=xr.DataArray | LinearExpression | QuadraticExpression
 )
 _Step: TypeAlias = tuple[ms.Add, ms.Expression]
-_Scaling: TypeAlias = tuple[ms.Multiply | ms.Divide, ms.Expression, ms.Expression]
+_Factor: TypeAlias = tuple[ms.Multiply | ms.Divide, ms.Expression, ms.Expression]
+"""A product or quotient that scales a term by data: its node, the operand carrying the term and the data."""
 _LIVE_SHARE = 0.5
 """A sum of a term scaled by data is built from the live cells alone where the data is live on at most this share of its cells."""
 
@@ -157,9 +156,9 @@ def _sum(
     if of is not None:
         return _closed(node, of(operand), columns, ctx)
     if ctx.fuse and not ctx.solved:
-        steps, term = _scalings(operand, ctx)
-        if steps:
-            return _weighted_sum(node, steps, term, ctx)
+        factors, term = _factors_of(operand, ctx)
+        if factors:
+            return _weighted_sum(node, factors, term, ctx)
     return _closed(node, _operand(operand, ctx), columns, ctx)
 
 
@@ -182,16 +181,15 @@ def _closed(
     return summed
 
 
-def _scalings(
+def _factors_of(
     node: ms.Expression, ctx: Context
-) -> tuple[list[_Scaling], ms.Expression]:
+) -> tuple[list[_Factor], ms.Expression]:
     """
-    The scalings of a term by data that end in *node*, the outermost first:
-    per scaling its node, the operand carrying the term and the data. Beside
-    them the term the innermost one scales. A scaling kept evaluated is read
-    back as the term.
+    The factors that scale a term by data down from *node*, the outermost
+    first, and the term the innermost one scales. A product kept evaluated
+    is read back as the term.
     """
-    steps: list[_Scaling] = []
+    factors: list[_Factor] = []
     while isinstance(node, ms.Multiply | ms.Divide) and node not in ctx.memo.values:
         first, second = _operands(node)
         carries = ms.carries_variable(first)
@@ -200,86 +198,81 @@ def _scalings(
         if isinstance(node, ms.Divide) and not carries:
             break
         term, data = (first, second) if carries else (second, first)
-        steps.append((node, term, data))
+        factors.append((node, term, data))
         node = term
-    return steps, node
+    return factors, node
 
 
 def _weighted_sum(
-    node: ms.Sum, steps: Sequence[_Scaling], term: ms.Expression, ctx: Context
+    node: ms.Sum, factors: Sequence[_Factor], term: ms.Expression, ctx: Context
 ) -> Array:
     """
-    The sum *node* of *term* scaled as *steps* say, built by :func:`_fused`
+    The sum *node* of *term* scaled by *factors*, built by :func:`_fused`
     where it can, else operator by operator. The operands are evaluated in
     the order :func:`_combine` evaluates them.
     """
     columns = _summed(node)[1]
     read: dict[int, Value] = {
         i: evaluate(data, ctx)
-        for i, (product, _, data) in enumerate(steps)
+        for i, (product, _, data) in enumerate(factors)
         if data is _operands(product)[0]
     }
     value = evaluate(term, ctx)
-    for i in reversed(range(len(steps))):
+    for i in reversed(range(len(factors))):
         if i not in read:
-            read[i] = evaluate(steps[i][2], ctx)
-    factors = [read[i] for i in range(len(steps))]
-    for product, _, _ in steps:
+            read[i] = evaluate(factors[i][2], ctx)
+    data = [read[i] for i in range(len(factors))]
+    for product, _, _ in factors:
         ctx.memo.used(product)
-    fused = _fused(node, columns, steps, factors, value, ctx)
+    fused = _fused(node, columns, factors, data, value, ctx)
     if fused is not None:
         return fused
-    for (product, inner, _), factor in reversed(list(zip(steps, factors))):
-        value = _product(product, inner, factor, value, ctx)
+    for factor, datum in reversed(list(zip(factors, data))):
+        value = _scaled(factor, value, datum, ctx)
     return _closed(node, cast(Array, value), columns, ctx)
 
 
-def _product(
-    node: ms.Multiply | ms.Divide,
-    term: ms.Expression,
-    factor: Value,
-    scaled: Value,
-    ctx: Context,
-) -> Value:
-    """The evaluated term *scaled* of the operand *term* combined with the data *factor* as *node* says."""
-    if term is _operands(node)[0]:
-        return _made(node, scaled, factor, ctx)
-    return _made(node, factor, scaled, ctx)
+def _scaled(factor: _Factor, value: Value, datum: Value, ctx: Context) -> Value:
+    """The term *value* scaled by the data *datum* as *factor* says, its operands in their written order."""
+    product, term, _ = factor
+    if term is _operands(product)[0]:
+        return _made(product, value, datum, ctx)
+    return _made(product, datum, value, ctx)
 
 
 def _fused(
     node: ms.Sum,
     columns: ms.JoinColumns | None,
-    steps: Sequence[_Scaling],
-    factors: Sequence[Value],
+    factors: Sequence[_Factor],
+    data: Sequence[Value],
     value: Value,
     ctx: Context,
 ) -> LinearExpression | None:
     """
-    The sum *node* of the term *value* scaled by *factors*, built from the cells where they are live; ``None`` where it is built operator by operator.
+    The sum *node* of the term *value* scaled by *data*, built from the cells where the data is live; ``None`` where it is built operator by operator.
 
     That is where the data is live at more than :data:`_LIVE_SHARE` of its
-    cells, where :func:`_scales` refuses it, where the term is quadratic or
+    cells, where :func:`_weights` refuses it, where the term is quadratic or
     its constant infinite, where the operands leave the master coordinates,
-    and where a relation reads a key twice or names a label the coordinates
-    lack. A term with a zero coefficient is left out, where the operators
-    keep it; ``zeroed`` counts such a sum.
+    where a relation reads a key twice or names a label the coordinates
+    lack, and where a coefficient overflows. The sum holds the live terms
+    alone, where the operators keep a term with a zero coefficient and an
+    empty slot; ``fused`` counts it.
 
     A constant of the term is scaled and summed by the operators themselves,
     on a term without a variable, so it is added up in their order.
     """
-    scaled = _scales(steps, factors, ctx)
-    if scaled is None or not _mergeable(value):
+    weighted = _weights(factors, data, ctx)
+    if weighted is None or not _mergeable(value):
         return None
-    scales, zero, hole = scaled
+    weights, zero, hole = weighted
     term = cast(Variable | LinearExpression, value)
     live = ~(zero | hole)
     if np.count_nonzero(live.values) > _LIVE_SHARE * live.size:
         return None
     own = _term_dims(term)
     dims = {*map(str, live.dims), *own}
-    product = steps[0][0]
-    if dims != set(product.dims) or not _on_master(term, scales, ctx):
+    if dims != set(factors[0][0].dims) or not _on_master(term, weights, ctx):
         return None
     const = term.const if isinstance(term, LinearExpression) else _absent(term)
     if bool(np.isinf(const.values).any()):
@@ -294,51 +287,53 @@ def _fused(
     plain = {axis.dimension for axis in node.over if axis.column is None}
     if dims - plain != set(node.dims):
         return None
-    frame = _frame(own, scales, joined, grouped, plain)
+    frame = _frame(own, weights, joined, grouped, plain)
     onto = {d: term.indexes[d] if d in own else ctx.coords[d] for d in frame}
-    made = operators.weighted_sum(term, scales, live, onto, joined, grouped)
-    if bool((zero & ~hole).any()) or _stores_zero(term):
-        ctx.memo.zeroed += 1
+    made = operators.weighted_sum(term, weights, live, onto, joined, grouped)
+    if made is None:
+        return None
+    ctx.memo.fused += 1
     if not bool((const.fillna(0.0) != 0).any()):
         return made
-    bare: Value = operators.constant_term(ctx.model, const)
-    for (step, inner, _), factor in reversed(list(zip(steps, factors))):
-        bare = _product(step, inner, factor, bare, ctx)
+    with np.errstate(over="ignore"):
+        bare: Value = operators.constant_term(ctx.model, const)
+    for factor, datum in reversed(list(zip(factors, data))):
+        bare = _scaled(factor, bare, datum, ctx)
     summed = as_expression(cast(Term, _closed(node, cast(Array, bare), columns, ctx)))
     store = made._store
     flat = summed.const.transpose(*store.dims).values.reshape(-1)
     return LinearExpression._from_store(store.assign_const(flat), made.model)
 
 
-def _scales(
-    steps: Sequence[_Scaling], factors: Sequence[Value], ctx: Context
-) -> tuple[list[operators.Scale], xr.DataArray, xr.DataArray] | None:
+def _weights(
+    factors: Sequence[_Factor], data: Sequence[Value], ctx: Context
+) -> tuple[list[operators.Weight], xr.DataArray, xr.DataArray] | None:
     """
-    The operator and the data of each of *steps*, the innermost first, and
+    The operator and the data of each of *factors*, the innermost first, and
     where the data is zero and where it holds a hole; ``None`` where no data
     is an array, where it holds an infinity a built row reads, where it
     divides by zero and where a number scales by zero.
     """
-    scales: list[operators.Scale] = []
+    weights: list[operators.Weight] = []
     zero: xr.DataArray | bool = False
     hole: xr.DataArray | bool = False
-    for (product, _, _), factor in reversed(list(zip(steps, factors))):
-        factor = _off_rows(factor, ctx)
-        if isinstance(factor, xr.DataArray) and factor.ndim:
-            if factor.dtype.kind not in "fiu" or bool(np.isinf(factor.values).any()):
+    for (product, _, _), datum in reversed(list(zip(factors, data))):
+        datum = _off_rows(datum, ctx)
+        if isinstance(datum, xr.DataArray) and datum.ndim:
+            if datum.dtype.kind not in "fiu" or bool(np.isinf(datum.values).any()):
                 return None
-            nothing = factor == 0
+            nothing = datum == 0
             if isinstance(product, ms.Divide) and bool(nothing.any()):
                 return None
-            zero, hole = zero | nothing, hole | factor.isnull()
+            zero, hole = zero | nothing, hole | datum.isnull()
         else:
-            factor = float(cast(float, factor))
-            if not math.isfinite(factor) or factor == 0:
+            datum = float(cast(float, datum))
+            if not math.isfinite(datum) or datum == 0:
                 return None
-        scales.append((_OPERATORS[type(product)], factor))
+        weights.append((_OPERATORS[type(product)], datum))
     if not isinstance(zero, xr.DataArray) or not isinstance(hole, xr.DataArray):
         return None
-    return scales, zero, hole
+    return weights, zero, hole
 
 
 def _positions(
@@ -364,7 +359,7 @@ def _term_dims(term: Variable | LinearExpression) -> tuple[str, ...]:
 
 def _frame(
     own: Sequence[str],
-    scales: Sequence[operators.Scale],
+    weights: Sequence[operators.Weight],
     joined: Mapping[str, np.ndarray] | None,
     grouped: Mapping[str, np.ndarray] | None,
     plain: set[str],
@@ -378,7 +373,7 @@ def _frame(
     the order its cells lie in, so the order is kept to the last bit.
     """
     frame = list(own)
-    for _, data in scales:
+    for _, data in weights:
         if isinstance(data, xr.DataArray):
             frame += [str(d) for d in data.dims if d not in frame]
     if joined is not None and grouped is not None:
@@ -389,10 +384,10 @@ def _frame(
 
 
 def _on_master(
-    term: Variable | LinearExpression, scales: Sequence[operators.Scale], ctx: Context
+    term: Variable | LinearExpression, weights: Sequence[operators.Weight], ctx: Context
 ) -> bool:
-    """Whether the term and the data of *scales* lie on the master coordinates of their dimensions."""
-    arrays = [data for _, data in scales if isinstance(data, xr.DataArray)]
+    """Whether the term and the data of *weights* lie on the master coordinates of their dimensions."""
+    arrays = [data for _, data in weights if isinstance(data, xr.DataArray)]
     held = [(d, term.indexes[d]) for d in _term_dims(term)]
     held += [(str(d), a.indexes[d]) for a in arrays for d in a.dims]
     return all(d in ctx.coords and index.equals(ctx.coords[d]) for d, index in held)
@@ -413,17 +408,6 @@ def _reads_once(
     shape = [len(ctx.coords[d]) for d in joined]
     keys = np.ravel_multi_index(list(joined.values()), shape)
     return len(np.unique(keys)) == len(keys)
-
-
-def _stores_zero(term: Variable | LinearExpression) -> bool:
-    """Whether *term* stores a term with a zero coefficient, which its live terms leave out."""
-    if isinstance(term, Variable):
-        return False
-    store = term._store
-    if isinstance(store, CSRStore):
-        return bool((store.csr.data == 0).any())
-    data = cast(DenseStore, store).ds
-    return bool(((data.coeffs.values == 0) & (data.vars.values != -1)).any())
 
 
 def _through(array: Array, columns: ms.JoinColumns, ctx: Context) -> Array:
@@ -509,7 +493,7 @@ def _combine(node: _Binary, ctx: Context) -> Value:
 
 def _made(node: _Binary, left: Value, right: Value, ctx: Context) -> Value:
     """The evaluated operands *left* and *right* of *node* combined by its operator, refused as :func:`_combine` says."""
-    if ctx.memo.zeroed and _constant_factor(node, left, right):
+    if ctx.fuse and ctx.memo.fused and _of_terms(node, left, right):
         return _combine(node, unfused(ctx))
     op = _OPERATORS[type(node)]
     if _subtracts(node):
@@ -535,30 +519,33 @@ def _made(node: _Binary, left: Value, right: Value, ctx: Context) -> Value:
     return refuse_made(kind, (node,), op, a, b, ctx)
 
 
-def _constant_factor(node: _Binary, left: Value, right: Value) -> bool:
-    """Whether *node* multiplies two terms, one of them linear without a term, which linopy multiplies as a constant."""
-    if not (isinstance(node, ms.Multiply) and isinstance(left, Term)):
-        return False
-    if not isinstance(right, Term):
-        return False
-    return any(type(f) is LinearExpression and f.is_constant for f in (left, right))
+def _of_terms(node: _Binary, left: Value, right: Value) -> bool:
+    """Whether *node* multiplies two terms or raises one to a power, which linopy builds on their slots."""
+    if isinstance(node, ms.Power):
+        return isinstance(left, Term)
+    return isinstance(node, ms.Multiply) and all(
+        isinstance(v, Term) for v in (left, right)
+    )
 
 
 def unfused(ctx: Context) -> Context:
     """
-    *ctx* summing every term operator by operator, on a memo of its own that keeps the data and drops the terms.
+    *ctx* summing every term operator by operator, the terms its memo keeps dropped.
 
-    A sum built from its live cells leaves out a term with a zero
-    coefficient, which still counts as a term of its row and of a factor,
-    so whatever asks whether a value holds a term is decided on terms built
-    operator by operator.
+    A sum built from its live cells holds fewer slots than one built
+    operator by operator, so whatever asks whether a value holds a term, or
+    how many, is decided on terms built operator by operator. The memo is
+    shared, so a named expression built again replaces the one kept, and a
+    refusal masked on the way counts where it is kept.
     """
-    kept = {
-        key: value
-        for key, value in ctx.memo.values.items()
-        if not isinstance(value, Term)
-    }
-    return replace(ctx, fuse=False, memo=Memo(values=kept))
+    values = ctx.memo.values
+    for key in [
+        k
+        for k, v in values.items()
+        if isinstance(v, LinearExpression | QuadraticExpression)
+    ]:
+        del values[key]
+    return replace(ctx, fuse=False)
 
 
 def _subtracts(node: _Binary) -> bool:

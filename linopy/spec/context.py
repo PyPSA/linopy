@@ -53,14 +53,14 @@ class Memo:
     made under one is not kept, so a value read back is refused wherever it
     would be when evaluated afresh.
 
-    ``zeroed`` counts the sums built from their live cells alone that left
-    out a term with a zero coefficient, which a sum built operator by
-    operator keeps: such a term still counts as a term of its row.
+    ``fused`` counts the sums built from their live cells alone. Such a sum
+    holds fewer slots than one built operator by operator: it leaves out a
+    term with a zero coefficient, which still counts as a term of its row.
     """
 
     values: dict[Hashable, Any] = field(default_factory=dict)
     masked: int = 0
-    zeroed: int = 0
+    fused: int = 0
     uses: dict[ms.Expression, int] = field(default_factory=dict)
     inner: dict[ms.Expression, tuple[ms.Expression, ...]] = field(default_factory=dict)
 

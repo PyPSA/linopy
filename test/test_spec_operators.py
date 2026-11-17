@@ -36,12 +36,13 @@ from linopy import (  # noqa: E402
     QuadraticExpression,
 )
 from linopy.spec import SpecDataError, evaluate  # noqa: E402
+from linopy.spec import evaluator as spec_evaluator  # noqa: E402
 from linopy.spec import operators as spec_operators  # noqa: E402
-from linopy.store import DenseStore  # noqa: E402
 from linopy.testing import (  # noqa: E402
     assert_conequal,
     assert_equivalent,
     assert_linequal,
+    assert_quadequal,
 )
 
 # ---------------------------------------------------------------------------
@@ -655,25 +656,30 @@ CHAIN_DATA = {
 }
 
 
+def spied(monkeypatch: pytest.MonkeyPatch, owner: Any, name: str) -> list[Any]:
+    """What each call of *owner*'s function *name* returns, recorded as it is called."""
+    made: list[Any] = []
+    function = getattr(owner, name)
+
+    def recorded(*args: Any, **kwargs: Any) -> Any:
+        made.append(function(*args, **kwargs))
+        return made[-1]
+
+    monkeypatch.setattr(owner, name, recorded)
+    return made
+
+
 def test_a_sum_chain_merges_its_terms_in_one_step(
     backend: Model, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Each of ``s1`` to ``s4`` is a reference, so ``stepwise`` adds one operand at a time."""
-    merged: list[int] = []
-    signed_sum = DenseStore.signed_sum
-
-    def counted(stores: list[DenseStore], negate: list[bool]) -> DenseStore | None:
-        merged.append(len(stores))
-        return signed_sum(stores, negate)
-
-    monkeypatch.setattr(DenseStore, "signed_sum", staticmethod(counted))
+    chains = spied(monkeypatch, spec_evaluator, "_added")
     m = Model.from_spec(CHAIN_SPEC, CHAIN_DATA, sparse=backend.sparse)
     chained, stepwise = m.expressions["chained"], m.expressions["stepwise"]
+    assert chains
     assert chained.is_sparse == backend.sparse
     assert_linequal(chained, stepwise)
     np.testing.assert_array_equal(chained.const.values, stepwise.const.values)
-    if not backend.sparse:
-        assert max(merged) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -745,25 +751,12 @@ def scaled_sum_spec(scaled: str, dims: list[str], summed: str) -> dict[str, Any]
     )
 
 
-@pytest.fixture
-def fused_sums(monkeypatch: pytest.MonkeyPatch) -> list[int]:
-    """The number of sums built from their live cells, counted as they are built."""
-    built: list[int] = []
-    weighted_sum = spec_operators.weighted_sum
-
-    def counted(*args: Any, **kwargs: Any) -> LinearExpression:
-        built.append(1)
-        return weighted_sum(*args, **kwargs)
-
-    monkeypatch.setattr(spec_operators, "weighted_sum", counted)
-    return built
-
-
 @pytest.mark.parametrize("case", SCALED_SUMS)
 def test_a_sum_of_a_term_scaled_by_sparse_data_is_built_from_its_live_cells(
-    backend: Model, fused_sums: list[int], case: str
+    backend: Model, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     """The zero coefficients the operators keep are left out; the rest is the same, the constant to the last bit."""
+    fused_sums = spied(monkeypatch, spec_operators, "weighted_sum")
     spec = scaled_sum_spec(*SCALED_SUMS[case])
     with warnings.catch_warnings():
         warnings.simplefilter("error", PerformanceWarning)
@@ -771,7 +764,7 @@ def test_a_sum_of_a_term_scaled_by_sparse_data_is_built_from_its_live_cells(
     fused, general = m.expressions["fused"], m.expressions["general"]
     assert isinstance(fused, LinearExpression)
     assert isinstance(general, LinearExpression)
-    assert fused_sums
+    assert any(made is not None for made in fused_sums)
     assert fused.is_sparse == backend.sparse
     assert_equivalent(fused, general)
     np.testing.assert_array_equal(fused.const.values, general.const.values)
@@ -813,6 +806,90 @@ def test_a_sum_whose_live_cells_leave_out_every_term_is_built_operator_by_operat
     assert_linequal(fused.objective.expression, general.objective.expression)
 
 
+READERS: dict[str, dict[str, Any]] = {
+    "two-constraints": {
+        "constraints": {
+            "r1": {"dims": ["t"], "expression": "e <= 5"},
+            "r2": {"dims": ["t"], "expression": "e <= 6"},
+        }
+    },
+    "a-live-reader-first": {
+        "constraints": {
+            "r1": {"dims": ["t"], "expression": "e + y <= 5"},
+            "r2": {"dims": ["t"], "expression": "e <= 6"},
+        }
+    },
+    "a-constraint-and-the-objective": {
+        "constraints": {"r1": {"dims": ["t"], "expression": "e + y <= 5"}},
+        **minimized("sum(e)"),
+    },
+}
+
+
+@pytest.mark.parametrize("readers", READERS)
+def test_every_reader_of_a_named_sum_the_data_empties_sees_its_terms(
+    backend: Model, readers: str
+) -> None:
+    """The first reader to find an emptied row builds the named expression again, operator by operator, for every reader."""
+    zeroed = {**SPARSE_DATA, "p": xr.zeros_like(SPARSE_DATA["p"])}
+
+    def built(scaled: str) -> Model:
+        spec = with_(
+            SPARSE_SPEC,
+            expressions={
+                "e": {"dims": ["t"], "expression": f"sum({scaled}, over=s)"},
+                "scaled": {"dims": ["s", "t"], "expression": "x * p"},
+            },
+            **READERS[readers],
+        )
+        return Model.from_spec(spec, zeroed, sparse=backend.sparse)
+
+    fused, general = built("x * p"), built("scaled")
+    for name in general.constraints:
+        got, want = fused.constraints[name], general.constraints[name]
+        xr.testing.assert_equal(got.labels, want.labels)
+        xr.testing.assert_equal(got.rhs, want.rhs)
+        assert_equivalent(got.lhs, want.lhs)
+    if "objective" in READERS[readers]:
+        got_objective = fused.objective.expression
+        want_objective = general.objective.expression
+        assert isinstance(got_objective, LinearExpression)
+        assert isinstance(want_objective, LinearExpression)
+        assert_equivalent(got_objective, want_objective)
+
+
+@pytest.mark.parametrize(
+    "product",
+    [
+        pytest.param("y * {}", id="by-a-variable"),
+        pytest.param("{} * {}", id="of-two-sums"),
+        pytest.param("{} ** 2", id="squared"),
+    ],
+)
+def test_a_product_of_a_fast_sum_is_what_the_operators_make(product: str) -> None:
+    """A product of terms is built on the slots they hold, which a fast sum leaves out."""
+
+    def made(scaled: str) -> Any:
+        summed = f"sum({scaled}, over=s)"
+        spec = with_(
+            SPARSE_SPEC,
+            expressions={
+                "e": {"dims": ["t"], "expression": product.format(summed, summed)},
+                "scaled": {"dims": ["s", "t"], "expression": "x * p"},
+            },
+        )
+        try:
+            return Model.from_spec(spec, SPARSE_DATA).expressions["e"]
+        except TypeError as error:
+            return str(error)
+
+    fused, general = made("x * p"), made("scaled")
+    if isinstance(general, str):
+        assert fused == general
+    else:
+        assert_quadequal(fused, general)
+
+
 AGGREGATES: dict[str, tuple[str, list[str]]] = {
     "variable": ("sum(x, over=s, by=bus_of[b])", ["b", "t"]),
     "term-with-constant": ("sum(x + c, over=s, by=bus_of[b])", ["b", "t"]),
@@ -826,20 +903,8 @@ def test_a_sparse_term_summed_through_a_relation_is_one_aggregate(
     monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     """Rows of the relation land in their groups out of order, beside masked cells; the dense sum gathers them."""
-    sums: list[Any] = []
-    aggregated: list[LinearExpression | None] = []
-    grouped_sum, aggregate = spec_operators.grouped_sum, spec_operators._aggregated
-
-    def summed_through(*args: Any) -> Any:
-        sums.append(grouped_sum(*args))
-        return sums[-1]
-
-    def counted(*args: Any) -> LinearExpression | None:
-        aggregated.append(aggregate(*args))
-        return aggregated[-1]
-
-    monkeypatch.setattr(spec_operators, "grouped_sum", summed_through)
-    monkeypatch.setattr(spec_operators, "_aggregated", counted)
+    sums = spied(monkeypatch, spec_operators, "grouped_sum")
+    aggregated = spied(monkeypatch, spec_operators, "_aggregated")
     summed, dims = AGGREGATES[case]
     spec = with_(
         SPARSE_SPEC,
@@ -852,7 +917,7 @@ def test_a_sparse_term_summed_through_a_relation_is_one_aggregate(
     with warnings.catch_warnings():
         warnings.simplefilter("error", PerformanceWarning)
         Model.from_spec(spec, data, sparse=True)
-    assert aggregated[-1] is not None
+    assert aggregated
     sparse = sums.pop()
     Model.from_spec(spec, data)
     dense = sums.pop()

@@ -22,7 +22,13 @@ import scipy.sparse
 import xarray as xr
 
 from linopy.constants import TERM_DIM
-from linopy.csr import CSRStore, Grid, _grouped, coo_to_csr, indptr_from_counts
+from linopy.csr import (
+    CSRStore,
+    Grid,
+    coo_to_csr,
+    group_order,
+    indptr_from_counts,
+)
 from linopy.expressions import LinearExpression, merge
 from linopy.model import Model
 from linopy.spec.context import Array, as_expression
@@ -30,7 +36,7 @@ from linopy.spec.errors import SpecDataError
 from linopy.variables import Variable
 
 Amount = int | xr.DataArray
-Scale = tuple[Callable[[Any, Any], Any], float | xr.DataArray]
+Weight = tuple[Callable[[Any, Any], Any], float | xr.DataArray]
 _ROW = "_row"
 
 
@@ -108,16 +114,16 @@ def grouped_sum(
 
 def weighted_sum(
     term: Variable | LinearExpression,
-    scales: Sequence[Scale],
+    weights: Sequence[Weight],
     live: xr.DataArray,
     onto: Mapping[str, pd.Index],
     joined: Mapping[str, np.ndarray] | None = None,
     grouped: Mapping[str, np.ndarray] | None = None,
-) -> LinearExpression:
+) -> LinearExpression | None:
     """
     The sum of *term* scaled by data, built from the cells where the data is *live* alone.
 
-    *scales* hold the operator and the data of each scaling, the innermost
+    *weights* hold the operator and the data of each scaling, the innermost
     first, the data a number or an array over dimensions of *live*. A cell
     of the product is read where *live* holds, over every coordinate of the
     dimensions of *term* that *live* lacks; no other cell adds a term. The
@@ -126,7 +132,8 @@ def weighted_sum(
     position each row of a relation reads on the dimensions it joins, a
     cell lands where *grouped* puts its row, and one no row reads lands
     nowhere: a key is read by one row at most. The constant is zero, and a
-    term with a zero coefficient is left out.
+    term with a zero coefficient is left out. ``None`` where a coefficient
+    overflows.
     """
     counts, labels, coeffs, held, shape = _live_terms(term)
     wide = [str(d) for d in live.dims]
@@ -135,49 +142,34 @@ def weighted_sum(
     size.update({d: len(index) for d, index in onto.items()})
     cells = np.flatnonzero(live.values)
     spread = math.prod(size[d] for d in own)
-    at = dict(zip(wide, np.unravel_index(cells, live.shape)))
-    beside: dict[str, np.ndarray] = {}
+    at = np.unravel_index(np.repeat(cells, spread), live.shape)
+    positions = dict(zip(wide, at))
     if own:
-        within = np.unravel_index(np.arange(spread), [size[d] for d in own])
-        beside = dict(zip(own, within))
-    cell = np.repeat(np.arange(len(cells)), spread)
-    mate = np.tile(np.arange(spread), len(cells))
-    reached: dict[str, np.ndarray] = {}
-
-    def flat(dims: Sequence[str]) -> np.ndarray:
-        if not dims:
-            return np.zeros(len(cell), dtype=np.intp)
-        positions = [
-            reached[d] if d in reached else at[d][cell] if d in at else beside[d][mate]
-            for d in dims
-        ]
-        return np.ravel_multi_index(positions, [size[d] for d in dims])
-
+        beside = np.unravel_index(np.arange(spread), [size[d] for d in own])
+        positions.update((d, np.tile(p, len(cells))) for d, p in zip(own, beside))
     if joined is not None and grouped is not None:
         keys = list(joined)
-        rows = np.ravel_multi_index(list(joined.values()), [size[d] for d in keys])
         row = np.full(math.prod(size[d] for d in keys), -1, dtype=np.intp)
-        row[rows] = np.arange(len(rows))
-        read = row[flat(keys)]
+        row[_flat(joined, keys, size)] = np.arange(len(joined[keys[0]]))
+        read = row[_flat(positions, keys, size)]
         kept = np.flatnonzero(read >= 0)
-        cell, mate, read = cell[kept], mate[kept], read[kept]
-        source = flat(held)
-        reached = {d: positions[read] for d, positions in grouped.items()}
-    else:
-        source = flat(held)
-    target = flat(list(onto))
+        positions = {d: p[kept] for d, p in positions.items()}
+        positions.update((d, p[read[kept]]) for d, p in grouped.items())
+    source = _flat(positions, held, size)
+    target = _flat(positions, list(onto), size)
     indptr = indptr_from_counts(counts, np.intp)
     n = counts[source]
     picked = np.repeat(indptr[source] - (np.cumsum(n) - n), n) + np.arange(n.sum())
     values = coeffs[picked]
-    behind = np.repeat(cell, n)
-    for op, data in scales:
-        if isinstance(data, xr.DataArray):
-            values = op(
-                values, data.values[tuple(at[str(d)] for d in data.dims)][behind]
-            )
-        else:
-            values = op(values, data)
+    with np.errstate(over="ignore"):
+        for op, data in weights:
+            if isinstance(data, xr.DataArray):
+                at_term = tuple(np.repeat(positions[str(d)], n) for d in data.dims)
+                values = op(values, data.values[at_term])
+            else:
+                values = op(values, data)
+    if not np.isfinite(values).all():
+        return None
     model = term.model
     grid = Grid({d: index.rename(d) for d, index in onto.items()})
     shape = (grid.size, model._xCounter)
@@ -186,6 +178,16 @@ def weighted_sum(
     return LinearExpression._from_store(
         store if model.sparse else store.to_dense(), model
     )
+
+
+def _flat(
+    positions: Mapping[str, np.ndarray], dims: Sequence[str], size: Mapping[str, int]
+) -> np.ndarray:
+    """The flat cell over *dims* at *positions*, every array of which is as long."""
+    if not dims:
+        return np.zeros(len(next(iter(positions.values()))), dtype=np.intp)
+    at = [positions[d] for d in dims]
+    return np.ravel_multi_index(at, [size[d] for d in dims])
 
 
 def _live_terms(
@@ -253,7 +255,7 @@ def _aggregated(
         const = np.zeros(target.size)
     else:
         store = cast(CSRStore, array._store)
-        order, bounds = _grouped(cells, target.size)
+        order, bounds = group_order(cells, target.size)
         taken = store.csr[source[order]]
         arrays = (taken.data, taken.indices, taken.indptr[bounds])
         csr = scipy.sparse.csr_array(arrays, shape=shape)

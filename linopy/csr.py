@@ -481,7 +481,7 @@ class CSRStore(Store):
         shape = (grid.size, self.csr.shape[1])
         source = self.csr
         if (rows[1:] < rows[:-1]).any():
-            order, bounds = _grouped(rows, grid.size)
+            order, bounds = group_order(rows, grid.size)
             if (np.diff(source.indptr) == 1).all():
                 entries = (source.data[order], source.indices[order], source.indptr)
                 source = scipy.sparse.csr_array(entries, shape=source.shape)
@@ -1058,7 +1058,7 @@ def coo_to_csr(
     dtype = index_dtype(len(data), shape, model)
     indices = cols.astype(dtype, copy=False)
     if (rows[1:] < rows[:-1]).any():
-        order, indptr = _grouped(rows, shape[0])
+        order, indptr = group_order(rows, shape[0])
         data, indices = data[order], indices[order]
     else:
         indptr = np.searchsorted(rows, np.arange(shape[0] + 1))
@@ -1066,7 +1066,7 @@ def coo_to_csr(
     return scipy.sparse.csr_array(csr_arrays, shape=shape)
 
 
-def _grouped(keys: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.ndarray]:
+def group_order(keys: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.ndarray]:
     """
     The stable order grouping ``keys``, each in ``range(n_groups)``, and the
     group offsets into it. Runs scipy's linear COO to CSR conversion on the
