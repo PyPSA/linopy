@@ -174,8 +174,11 @@ def weighted_sum(
     behind = np.repeat(cell, n)
     for op, data in scales:
         if isinstance(data, xr.DataArray):
-            data = data.values[tuple(at[str(d)] for d in data.dims)][behind]
-        values = op(values, data)
+            values = op(
+                values, data.values[tuple(at[str(d)] for d in data.dims)][behind]
+            )
+        else:
+            values = op(values, data)
     model = term.model
     grid = Grid({d: index.rename(d) for d, index in onto.items()})
     csr = coo_to_csr(

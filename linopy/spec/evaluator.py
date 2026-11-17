@@ -28,6 +28,7 @@ from linopy.spec.context import (
 )
 from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.where import admitted, evaluate_where, groups_of, looked_up
+from linopy.store import DenseStore
 from linopy.variables import Variable
 
 _Binary: TypeAlias = ms.Add | ms.Multiply | ms.Divide | ms.Power
@@ -285,7 +286,8 @@ def _shadow(node: ms.Expression, ctx: Context) -> Shadow:
         if _carries(first, ctx) and _carries(second, ctx):
             return left * right
         term, data = (left, right) if _carries(first, ctx) else (right, left)
-        return _scaled(term, _off_rows(data, ctx), _OPERATORS[type(node)])
+        factor = cast(Shadow, _off_rows(data, ctx))
+        return _scaled(term, factor, _OPERATORS[type(node)])
     if isinstance(node, ms.Sum):
         operand = node.operand
         if isinstance(operand, ms.Join) and operand.columns.axes:
@@ -770,7 +772,7 @@ def _stores_zero(term: Variable | LinearExpression) -> bool:
     store = term._store
     if isinstance(store, CSRStore):
         return bool((store.csr.data == 0).any())
-    data = store.ds
+    data = cast(DenseStore, store).ds
     return bool(((data.coeffs.values == 0) & (data.vars.values != -1)).any())
 
 
@@ -958,15 +960,16 @@ def _added(node: ms.Add, ctx: Context) -> Value:
         else:
             signed = -value if sign is operator.sub else value
             data = signed if data is None else data + signed
-    made: LinearExpression | QuadraticExpression
+    summed: object
     if all(type(term) is LinearExpression for term in terms):
         if len(terms) == 1 and not negate[0]:
-            made = terms[0]
+            summed = terms[0]
         else:
-            made = merge(cast(list[LinearExpression], terms), negate=negate)
+            summed = merge(cast(list[LinearExpression], terms), negate=negate)
     else:
         signed_terms = (-t if flip else t for t, flip in zip(terms, negate))
-        made = functools.reduce(operator.add, signed_terms)
+        summed = functools.reduce(operator.add, signed_terms)
+    made = cast(LinearExpression | QuadraticExpression, summed)
     if data is None or const is None:
         return made
     return _with_constant(operator.add(*_paired(made, data)), const, ctx)

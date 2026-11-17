@@ -3997,10 +3997,10 @@ def merge(
     linear = issubclass(cls, LinearExpression)
 
     if negate is not None and any(negate):
-        stores = [getattr(e, "_store", None) for e in exprs]
+        held = [getattr(e, "_store", None) for e in exprs]
         plain = dim == TERM_DIM and join is None and not kwargs
-        if plain and all(isinstance(s, DenseStore) for s in stores):
-            summed = DenseStore.signed_sum(cast(list[DenseStore], stores), negate)
+        if plain and all(isinstance(s, DenseStore) for s in held):
+            summed = DenseStore.signed_sum(cast(list[DenseStore], held), negate)
             if summed is not None:
                 return LinearExpression._from_store(summed, model)
         exprs = [-e if flip else e for e, flip in zip(exprs, negate)]
