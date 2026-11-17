@@ -561,6 +561,8 @@ def _weighted_sum(
     for _, _, data in steps:
         factors.append(evaluate(data, ctx))
         if _annihilates(factors[-1]):
+            if _sums_to_zero(steps[: len(factors)], factors, ctx):
+                return operators.constant_term(ctx.model, _zeros(node, ctx))
             break
     else:
         value = evaluate(term, ctx)
@@ -575,6 +577,35 @@ def _weighted_sum(
         value = _product(product, inner, factor, ctx, value)
         ctx.memo.used(product)
     return _closed(node, cast(Array, value), columns, ctx)
+
+
+def _sums_to_zero(
+    steps: Sequence[_Scaling], factors: Sequence[Value], ctx: Context
+) -> bool:
+    """
+    Whether a sum of the scalings *steps* is the constant zero: the innermost of *factors* is zeros and holes alone.
+
+    The term it scales is left unbuilt, its data read and refused by its
+    shadow, and no later scaling is applied: a sum adds no absence and no
+    zero up. Not so where the shadow does not mirror the term. A zero drops
+    terms a full build keeps with a zero coefficient, which ``zeroed`` counts.
+    """
+    try:
+        shadow = _shadow(steps[-1][1], ctx)
+        for (product, _, _), factor in reversed(list(zip(steps, factors))):
+            data = cast(Shadow, _off_rows(factor, ctx))
+            shadow = _scaled(shadow, data, _OPERATORS[type(product)])
+    except _Unmirrored:
+        return False
+    made = np.asarray(shadow, dtype=float)
+    if not ((made == 0) | np.isnan(made)).all():
+        return False
+    ctx.memo.pruned += 1
+    if bool((np.asarray(factors[-1]) == 0).any()):
+        ctx.memo.zeroed += 1
+    for product, _, _ in steps:
+        ctx.memo.used(product)
+    return True
 
 
 def _fused(
