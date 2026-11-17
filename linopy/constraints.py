@@ -629,13 +629,17 @@ class Constraint:
 
     @scaling.setter
     def scaling(self, value: ConstantLike) -> None:
-        scaling = broadcast_to_coords(
-            value,
-            coords=self.labels.coords,
-            dims=self.coord_dims,
-            label=f"scaling for constraint '{self.name}'",
-        )
-        scaling = validate_scaling(scaling, f"scaling for constraint '{self.name}'")
+        label = f"scaling for constraint '{self.name}'"
+        if isinstance(value, int | float | np.number):
+            scaling = DataArray(float(value))
+        else:
+            scaling = broadcast_to_coords(
+                value,
+                coords=self.labels.coords,
+                dims=self.coord_dims,
+                label=label,
+            )
+        scaling = validate_scaling(scaling, label)
         self._scaling = _on_grid(scaling, self._grid_template(), "scaling")
 
     @property
