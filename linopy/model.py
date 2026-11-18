@@ -46,6 +46,7 @@ from linopy.common import (
     to_path,
 )
 from linopy.constants import (
+    DROPPED_ROW_TOL,
     FACTOR_DIM,
     GREATER_EQUAL,
     LESS_EQUAL,
@@ -92,7 +93,6 @@ from linopy.piecewise import (
     add_piecewise_formulation,
 )
 from linopy.remote import RemoteHandler
-from linopy.restrict.matrix import DROPPED_ROW_TOL
 from linopy.scaling import scalar_scaling, validate_scaling
 from linopy.semantics import check_user_nan, enforce_no_multiindex
 from linopy.solver_capabilities import solver_supports

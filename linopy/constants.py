@@ -18,6 +18,8 @@ EQUAL = "="
 GREATER_EQUAL = ">="
 LESS_EQUAL = "<="
 
+DROPPED_ROW_TOL = 1e-9
+
 
 class PerformanceWarning(UserWarning):
     """Warning raised when an operation triggers expensive Dataset reconstruction."""

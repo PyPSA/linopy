@@ -17,7 +17,7 @@ import pytest
 import xarray as xr
 from xarray.testing import assert_allclose, assert_equal
 
-from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
+from linopy import GREATER_EQUAL, LESS_EQUAL, Model, Variable, solvers
 from linopy.common import to_path
 from linopy.expressions import LinearExpression
 from linopy.solver_capabilities import (
@@ -412,6 +412,54 @@ def test_default_setting_expression_sol_accessor(
 
     qexpr = 4 * (x * y)  # type: ignore
     assert_equal(qexpr.solution, 4 * x.solution * y.solution)
+
+
+empty_row_params = list(
+    itertools.product(["lp", "lp-polars", "mps", "direct"], [True, False])
+)
+
+
+def empty_row_model(coeff: Any, rhs: Any) -> tuple[Model, Variable]:
+    m = Model()
+    i = pd.RangeIndex(2, name="i")
+    x = m.add_variables(lower=0, upper=10, coords=[i], name="x")
+    coeffs = xr.DataArray(coeff, coords=[i]) if isinstance(coeff, list) else coeff
+    m.add_constraints(coeffs * x >= rhs, name="con")
+    m.add_objective(x.sum())
+    return m, x
+
+
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="highs not installed")
+@pytest.mark.parametrize("io_api,sanitize_zeros", empty_row_params)
+@pytest.mark.parametrize(
+    "coeff,rows", [([0.0, 1.0], 1), (0, 2)], ids=["zero-coeff", "zero-times-x"]
+)
+def test_empty_row_that_cannot_hold_raises(
+    io_api: str, sanitize_zeros: bool, coeff: Any, rows: int
+) -> None:
+    m, _ = empty_row_model(coeff, 5)
+    match = rf"Constraint `con` has {rows} row\(s\) .*cannot hold, first: con\[0\]"
+    with pytest.raises(ValueError, match=match):
+        m.solve("highs", io_api=io_api, sanitize_zeros=sanitize_zeros)
+
+
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="highs not installed")
+def test_constant_row_that_cannot_hold_raises() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, name="x")
+    m.add_constraints(LinearExpression(12, m) == 13, name="con")
+    m.add_objective(1 * x)
+    with pytest.raises(ValueError, match=r"Constraint `con` has 1 row\(s\)"):
+        m.solve("highs")
+
+
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="highs not installed")
+@pytest.mark.parametrize("io_api,sanitize_zeros", empty_row_params)
+def test_empty_row_that_holds_is_dropped(io_api: str, sanitize_zeros: bool) -> None:
+    m, x = empty_row_model([0.0, 1.0], xr.DataArray([-5, 5], dims="i"))
+    status, _ = m.solve("highs", io_api=io_api, sanitize_zeros=sanitize_zeros)
+    assert status == "ok"
+    np.testing.assert_allclose(x.solution.values, [0, 5])
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)

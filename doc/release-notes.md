@@ -141,6 +141,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `LinearExpression.is_constant` is `True` for every expression without variables, also a sparse one and one whose terms a sum removed. ([\#1152](https://github.com/PyPSA/linopy/pull/1152))
 - `add_piecewise_formulation` no longer raises on a dimension labelled by tuples, e.g. `(period, timestep)` snapshots. ([\#1140](https://github.com/PyPSA/linopy/pull/1140))
 - The repr of a long expression shows the last terms of a `QuadraticExpression` after the `...` and prints the constant once. ([\#1023](https://github.com/PyPSA/linopy/pull/1023))
+- `solve` and `to_file` raise for a constraint row without a nonzero term that cannot hold, e.g. `0 * x >= 5`, which was left out silently and solved "optimal". This also covers a constant row such as `LinearExpression(12, m) == 13`. ([\#1170](https://github.com/PyPSA/linopy/issues/1170))
 
 *I/O*
 

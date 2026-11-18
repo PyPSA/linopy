@@ -62,9 +62,11 @@ from linopy.common import (
     skip_full_indexers,
     slice_indexers,
     to_dataframe,
+    unsatisfied,
 )
 from linopy.config import options
 from linopy.constants import (
+    DROPPED_ROW_TOL,
     EQUAL,
     GREATER_EQUAL,
     HELPER_DIMS,
@@ -1007,6 +1009,18 @@ class Constraint:
         """Boolean mask over raveled rows: label set and at least one variable present."""
         return (self._label_values() != -1) & self._lhs._store.has_terms()
 
+    def unsatisfiable_empty_rows(self) -> np.ndarray:
+        """
+        Boolean mask over raveled rows: label set, no nonzero term, and
+        ``0 sign rhs`` fails.
+        """
+        sense = self.sign.values.ravel().astype("U1")
+        rows = self._label_values() != -1
+        rows &= unsatisfied(self.rhs.values.ravel(), sense, DROPPED_ROW_TOL)
+        if rows.any():
+            rows &= self._lhs._store.terms(active=rows)[0] == 0
+        return rows
+
     def active_labels(self) -> np.ndarray:
         """Active constraint labels in build order, without building the CSR."""
         return self._label_values()[self.active_row_mask()]
@@ -1521,6 +1535,26 @@ class Constraints(LabelContainer[Constraint]):
         """
         for con in self.data.values():
             con.sanitize_infinities()
+
+    def check_empty_rows(self) -> None:
+        """
+        Raise for a row without a nonzero term whose ``0 sign rhs`` fails.
+
+        Matrices and LP files leave such rows out, so the solver would never
+        see them. Rows without a nonzero term that hold are left out silently.
+        """
+        for con in self.data.values():
+            if con.is_indicator:
+                continue
+            rows = con.unsatisfiable_empty_rows()
+            if rows.any():
+                labels = con._label_values()[rows]
+                raise ValueError(
+                    f"Constraint `{con.name}` has {labels.size} row(s) without a "
+                    f"nonzero term that cannot hold, first: "
+                    f"{self.format_labels(labels[:1])}. Fix their coefficients "
+                    "or right-hand side, or mask them."
+                )
 
     def format_labels(
         self, values: Sequence[int], display_max_terms: int | None = None

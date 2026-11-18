@@ -1008,6 +1008,7 @@ class Solver(ABC, Generic[EnvType]):
         """Build the native solver model from the matrices of ``self.model``."""
         model = self.model
         assert model is not None
+        model.constraints.check_empty_rows()
         M = model.matrices
         names = (
             linopy.io.get_printers_scalar(

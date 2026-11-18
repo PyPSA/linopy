@@ -17,7 +17,8 @@ import numpy as np
 from xarray import DataArray
 
 from linopy.common import to_path
-from linopy.restrict.matrix import DROPPED_ROW_TOL, MatrixWindow, RestrictionError
+from linopy.constants import DROPPED_ROW_TOL
+from linopy.restrict.matrix import MatrixWindow, RestrictionError
 
 if TYPE_CHECKING:
     from linopy.constants import Result, Solution

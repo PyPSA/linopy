@@ -1250,6 +1250,21 @@ def is_constant(x: SideLike) -> bool:
     )
 
 
+def unsatisfied(
+    rhs: np.ndarray, sense: np.ndarray, tol: float | np.ndarray
+) -> np.ndarray:
+    """
+    Per row, whether ``0 sense rhs`` fails by more than ``tol``.
+
+    ``sense`` holds one character per row: ``"="``, ``"<"`` or ``">"``.
+    """
+    return (
+        ((sense == "=") & (np.abs(rhs) > tol))
+        | ((sense == "<") & (rhs < -tol))
+        | ((sense == ">") & (rhs > tol))
+    )
+
+
 def values_to_lookup_array(
     values: np.ndarray, labels: np.ndarray, size: int | None = None
 ) -> np.ndarray:

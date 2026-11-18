@@ -812,6 +812,8 @@ def to_file(
     if progress is None:
         progress = m._xCounter > 10_000
 
+    m.constraints.check_empty_rows()
+
     if io_api == "lp" or io_api == "lp-polars":
         to_lp_file(
             m,

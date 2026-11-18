@@ -26,16 +26,15 @@ from xarray import DataArray
 from xarray.indexes import PandasIndex
 
 from linopy.alignment import as_dataarray
-from linopy.common import lookup_table
+from linopy.common import lookup_table, unsatisfied
+from linopy.constants import DROPPED_ROW_TOL
 from linopy.csr import indptr_from_counts, repeat_per_row
 from linopy.matrices import Matrices
 
 if TYPE_CHECKING:
     from linopy.model import Model
 
-__all__ = ["DROPPED_ROW_TOL", "MatrixWindow", "RestrictionError"]
-
-DROPPED_ROW_TOL = 1e-9
+__all__ = ["MatrixWindow", "RestrictionError"]
 
 
 class RestrictionError(ValueError):
@@ -154,12 +153,7 @@ def _check_dropped(
     tol: float,
 ) -> None:
     """Raise when a row that lost every term violates its sign beyond ``tol``."""
-    tolerance = tol * np.maximum(1.0, magnitude)
-    violated = (
-        ((sense == "=") & (np.abs(rhs) > tolerance))
-        | ((sense == "<") & (rhs < -tolerance))
-        | ((sense == ">") & (rhs > tolerance))
-    )
+    violated = unsatisfied(rhs, sense, tol * np.maximum(1.0, magnitude))
     if violated.any():
         raise RestrictionError(
             "Cannot window the matrices: folding the dangling terms makes "
