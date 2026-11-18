@@ -74,7 +74,28 @@ def sum_over(array: Array, over: str) -> Array:
         return array.sum(over, skipna=False)
     if any(not array.sizes[dim] for dim in array.coord_dims if dim != over):
         return _zeros(array, (over,))
-    return array.sum(over)
+    summed = array.sum(over)
+    if not isinstance(array, LinearExpression) or type(summed) is not LinearExpression:
+        return summed
+    return _const_summed(summed, array.const, over)
+
+
+def _const_summed(
+    summed: LinearExpression, const: xr.DataArray, over: str
+) -> LinearExpression:
+    """
+    *summed* with its constant the sum of *const* over *over*, a hole adding nothing.
+
+    Each cell adds its values up along *over* in coordinate order, on a
+    contiguous copy, so the sum does not depend on how the operand's
+    constant is laid out: a term and the constant term of the same data
+    sum to the same bits.
+    """
+    store = summed._store
+    laid = const.transpose(*store.dims, over).values
+    values = np.ascontiguousarray(np.where(np.isnan(laid), 0.0, laid))
+    flat = values.reshape(-1, values.shape[-1]).sum(axis=-1)
+    return LinearExpression._from_store(store.assign_const(flat), summed.model)
 
 
 def grouped_sum(

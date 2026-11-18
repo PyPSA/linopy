@@ -1311,3 +1311,18 @@ def test_a_lookup_into_an_empty_dimension_reads_nothing() -> None:
     }
     m = Model.from_spec(spec, sources)
     assert int((m.constraints["cap"].labels != -1).sum()) == 1
+
+
+@pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
+def test_a_sum_adds_a_constant_up_in_one_order_whatever_its_layout(
+    sparse: bool,
+) -> None:
+    """A term and the constant term of the same data sum to the same bits."""
+    m = Model(sparse=sparse)
+    t = pd.RangeIndex(64, name="t")
+    g = pd.Index(["a", "b"], name="g")
+    x = m.add_variables(coords=[g, t], name="x")
+    const = xr.DataArray(np.random.default_rng(0).random((64, 2)) * 1e3, coords=[t, g])
+    term = spec_operators.sum_over(x + const, "t")
+    bare = spec_operators.sum_over(spec_operators.constant_term(m, const), "t")
+    assert np.array_equal(term.const.values, bare.const.sel(g=term.const.g).values)
