@@ -67,6 +67,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - A sparse constraint keeps `rhs`, `sign`, `scaling` and `dual` on its full grid like a dense one; masked rows have label `-1`. ([\#1047](https://github.com/PyPSA/linopy/issues/1047))
 - `Constraint.update` raises when a new `lhs` or `rhs` adds dimensions, and `update(variables=...)` accepts only a `Variable`. After `update(coeffs=...)` or `update(variables=...)`, `coeffs` and `vars` keep the `_term` dimension. `sanitize_zeros` removes near-zero terms, so `_term` can shrink. `set_blocks` stores the `blocks` field. ([\#1046](https://github.com/PyPSA/linopy/issues/1046), [\#1047](https://github.com/PyPSA/linopy/issues/1047))
 - `Constraint.active_labels`, `to_matrix` and `to_polars` raise on a constraint without labels.
+- A constraint row without a nonzero term stays in the model and reaches the solver, e.g. a sum whose terms are all absent: `x.where(mask).sum("j") >= 5` is `0 >= 5` where the mask is all `False`, so the model is infeasible where 0.x dropped the row. `ncons`, the matrices and the duals count such rows. Mask them, e.g. `add_constraints(lhs >= 5, mask=lhs.has_terms)`, or fix the data.
 
 *Saved models*
 
@@ -153,6 +154,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 
 *Solvers*
 
+- A constraint row without a nonzero term, e.g. `0 * x >= 5`, reaches the solver instead of being dropped, so the model is infeasible instead of "optimal". `solve` and `to_file` warn about such rows that cannot hold.
 - With `add_objective(..., scaling=...)`, the solve log reports objective and dual bound in model units. ([\#1077](https://github.com/PyPSA/linopy/issues/1077))
 - CPLEX: "optimal with unscaled infeasibilities" is reported as `imprecise` and its solution is imported. ([\#368](https://github.com/PyPSA/linopy/issues/368))
 - HiGHS: a solve that stops at a limit without a solution no longer returns all-zero values, and a MIP no longer returns all-zero duals. `log_fn` and solver options also apply to a re-solve of a direct-API model. ([\#1130](https://github.com/PyPSA/linopy/issues/1130))

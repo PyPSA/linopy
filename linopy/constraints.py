@@ -578,7 +578,7 @@ class Constraint:
 
     @property
     def ncons(self) -> int:
-        """Get the number of active constraints (non-masked, with at least one valid variable)."""
+        """Get the number of active constraints: rows with a label, also those without a term."""
         return int(self.active_row_mask().sum())
 
     @property
@@ -1004,8 +1004,8 @@ class Constraint:
         return csr, self._label_values()[active]
 
     def active_row_mask(self) -> np.ndarray:
-        """Boolean mask over raveled rows: label set and at least one variable present."""
-        return (self._label_values() != -1) & self._lhs._store.has_terms()
+        """Boolean mask over raveled rows: label set, with or without a term."""
+        return self._label_values() != -1
 
     def active_labels(self) -> np.ndarray:
         """Active constraint labels in build order, without building the CSR."""
@@ -1259,6 +1259,8 @@ class Constraint:
         The resulting DataFrame represents a long table format of the all
         non-masked constraints with non-zero coefficients. It typically
         contains the columns `labels`, `coeffs`, `vars`, `rhs`, `sign`.
+        A row without a non-zero coefficient gets the single term
+        ``0 * first variable``, so it is written and reaches the solver.
 
         Returns
         -------
@@ -1267,6 +1269,18 @@ class Constraint:
         labels_flat = self._label_values()
         mask = labels_flat != -1
         counts, vars_, coeffs = self._lhs._store.terms(active=mask)
+        empty = mask & (counts == 0)
+        if empty.any():
+            vlabels = self.model.variables.label_index.vlabels
+            if not vlabels.size:
+                raise ValueError(
+                    f"Constraint `{self.name}` has rows without a term, but the "
+                    "model has no variable to write them with."
+                )
+            starts = (np.cumsum(counts) - counts)[empty]
+            vars_ = np.insert(vars_, starts, vlabels[0])
+            coeffs = np.insert(coeffs, starts, 0.0)
+            counts = np.where(empty, 1, counts)
         long = pl.DataFrame(
             {"labels": np.repeat(labels_flat, counts), "coeffs": coeffs, "vars": vars_}
         )
@@ -1463,8 +1477,8 @@ class Constraints(LabelContainer[Constraint]):
         """
         Get the number all constraints effectively used by the model.
 
-        This excludes constraints with missing labels or where all variables
-        are masked (vars == -1).
+        This excludes rows with missing labels (-1). A row with a label but
+        without a term counts.
         """
         return sum(con.ncons for con in self.data.values() if not con.is_indicator)
 

@@ -1068,7 +1068,8 @@ class Solver(ABC, Generic[EnvType]):
                 "lp files, disabling it."
             )
             explicit_coordinate_names = False
-        problem_fn = model.to_file(
+        problem_fn = linopy.io.to_file(
+            model,
             Path(problem_fn) if not isinstance(problem_fn, Path) else problem_fn,
             io_api=io_api,
             explicit_coordinate_names=explicit_coordinate_names,

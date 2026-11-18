@@ -27,7 +27,7 @@ from pandas.core.series import Series
 from xarray import DataArray, Dataset
 from xarray.core.types import T_Chunks
 
-from linopy import solvers
+from linopy import io, solvers
 from linopy.alignment import (
     _as_index,
     _coords_to_dict,
@@ -39,13 +39,16 @@ from linopy.common import (
     assigned_labels,
     best_int,
     coords_reorder_set,
+    format_coord,
     maybe_replace_sign,
     maybe_replace_signs,
     reassign_coords,
     replace_by_map,
     to_path,
 )
+from linopy.config import options
 from linopy.constants import (
+    EQUAL,
     FACTOR_DIM,
     GREATER_EQUAL,
     LESS_EQUAL,
@@ -79,7 +82,6 @@ from linopy.io import (
     to_block_files,
     to_cuopt,
     to_cupdlpx,
-    to_file,
     to_gurobipy,
     to_highspy,
     to_mosek,
@@ -94,7 +96,7 @@ from linopy.piecewise import (
 from linopy.remote import RemoteHandler
 from linopy.restrict.matrix import DROPPED_ROW_TOL
 from linopy.scaling import scalar_scaling, validate_scaling
-from linopy.semantics import check_user_nan, enforce_no_multiindex
+from linopy.semantics import check_user_nan, enforce_no_multiindex, warn_outside_linopy
 from linopy.solver_capabilities import solver_supports
 from linopy.solvers import (
     IO_APIS,
@@ -2201,6 +2203,8 @@ class Model:
         call, but not by garbage collection: a model that merely goes out of
         scope leaves its solver open.
         """
+        self._warn_empty_rows_that_cannot_hold()
+
         if mock_solve:
             return self._mock_solve(
                 sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
@@ -2704,7 +2708,62 @@ class Model:
 
     to_netcdf = to_netcdf
 
-    to_file = to_file
+    def to_file(
+        self,
+        fn: Path | str | None,
+        io_api: str | None = None,
+        integer_label: str = "general",
+        slice_size: int = 2_000_000,
+        progress: bool | None = None,
+        explicit_coordinate_names: bool = False,
+    ) -> Path:
+        """
+        Write out the model to an LP or MPS file, see :func:`linopy.io.to_file`.
+
+        Warns about constraint rows without a nonzero term that cannot hold.
+        """
+        self._warn_empty_rows_that_cannot_hold()
+        return io.to_file(
+            self,
+            fn,
+            io_api=io_api,
+            integer_label=integer_label,
+            slice_size=slice_size,
+            progress=progress,
+            explicit_coordinate_names=explicit_coordinate_names,
+        )
+
+    def _warn_empty_rows_that_cannot_hold(self) -> None:
+        """Warn about rows without a nonzero term whose ``0 sign rhs`` fails."""
+        found = []
+        for con in self.constraints.data.values():
+            if con.is_indicator:
+                continue
+            labels = con._label_values()
+            rhs = con.rhs.values.ravel()
+            sign = con.sign.values.ravel()
+            excess = np.where(sign == LESS_EQUAL, -rhs, rhs)
+            excess = np.where(sign == EQUAL, np.abs(rhs), excess)
+            rows = (labels != -1) & (excess > DROPPED_ROW_TOL)
+            if rows.any():
+                rows &= con._lhs._store.terms(active=rows)[0] == 0
+                found.append(labels[rows])
+        labels = np.concatenate([np.array([], dtype=int), *found])
+        if not labels.size:
+            return
+        shown = options["display_max_rows"]
+        names = [
+            f"{name}{format_coord(coord)}"
+            for name, coord in self.constraints.get_label_position(labels[:shown])
+        ]
+        more = ", ..." if labels.size > shown else ""
+        warn_outside_linopy(
+            f"{labels.size} constraint row(s) have no nonzero term and cannot "
+            f"hold: {', '.join(names)}{more}. They reach the solver, which will "
+            "likely report the model infeasible. Mask them, or fix their "
+            "coefficients or right-hand side.",
+            UserWarning,
+        )
 
     to_gurobipy = to_gurobipy
 

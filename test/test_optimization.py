@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -17,7 +18,7 @@ import pytest
 import xarray as xr
 from xarray.testing import assert_allclose, assert_equal
 
-from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
+from linopy import GREATER_EQUAL, LESS_EQUAL, Model, Variable, solvers
 from linopy.common import to_path
 from linopy.expressions import LinearExpression
 from linopy.solver_capabilities import (
@@ -681,6 +682,63 @@ def test_infeasible_model(
     else:
         with pytest.raises((NotImplementedError, ImportError)):
             model.compute_infeasibilities()
+
+
+EMPTY_ROWS: dict[str, Callable[[Variable], Any]] = {
+    "zero-times-x": lambda x: 0 * x >= 5,
+    "zero-coeff": lambda x: xr.DataArray([0, 1], coords=[x.indexes["i"]]) * x >= 5,
+    "constant": lambda x: LinearExpression(12, x.model) == 13,
+    "all-absent-sum": lambda x: (
+        x.where(xr.DataArray([False, True], coords=[x.indexes["i"]])).sum("j") >= 5
+    ),
+}
+
+
+def add_empty_row(m: Model, case: str) -> Variable:
+    coords = [pd.RangeIndex(2, name="i"), pd.RangeIndex(2, name="j")]
+    x = m.add_variables(lower=0, upper=10, coords=coords, name="x")
+    m.add_constraints(EMPTY_ROWS[case](x), name="con")
+    m.add_objective(x.sum())
+    return x
+
+
+@pytest.mark.filterwarnings("ignore:.*cannot hold:UserWarning")
+@pytest.mark.parametrize("case", EMPTY_ROWS)
+@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
+def test_empty_row_that_cannot_hold_makes_the_model_infeasible(
+    backend: Model,
+    case: str,
+    solver: str,
+    io_api: str,
+    explicit_coordinate_names: bool,
+) -> None:
+    add_empty_row(backend, case)
+    status, condition = backend.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    assert status == "warning"
+    assert "infeasible" in condition
+
+
+@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
+def test_empty_row_that_holds_reaches_the_solver(
+    solver: str, io_api: str, explicit_coordinate_names: bool
+) -> None:
+    m = Model()
+    i = pd.RangeIndex(2, name="i")
+    x = m.add_variables(lower=0, upper=10, coords=[i], name="x")
+    rhs = xr.DataArray([-5, 5], coords=[i])
+    m.add_constraints(xr.DataArray([0, 1], coords=[i]) * x >= rhs, name="con")
+    m.add_objective(x.sum())
+
+    status, _ = m.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+
+    assert status == "ok"
+    assert m.ncons == 2
+    np.testing.assert_allclose(x.solution, [0, 5])
+    assert m.constraints["con"].dual[0] == pytest.approx(0, abs=1e-6)
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)

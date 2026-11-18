@@ -1188,6 +1188,102 @@ def test_to_file_lp_constraint_section(
     assert _lp_constraint_section(m, fn, slice_size) == expected
 
 
+@pytest.mark.parametrize("slice_size", [2_000_000, 1], ids=["default", "slice-1"])
+def test_to_file_lp_writes_empty_row_with_a_zero_term(
+    tmp_path: Path, backend: Model, slice_size: int
+) -> None:
+    m = backend
+    i = pd.RangeIndex(3, name="i")
+    x = m.add_variables(coords=[i], name="x")
+    coeffs = xr.DataArray([0, 1, 0], coords=[i])
+    m.add_constraints(coeffs * x >= -5, name="a")
+    m.add_constraints(LinearExpression(12, m) == 12, name="b")
+    m.add_objective(x.sum())
+
+    fn = tmp_path / "empty.lp"
+    assert _lp_constraint_section(m, fn, slice_size) == (
+        "c0:\n+0.0 x0\n>= -5.0\n"
+        "c1:\n+1.0 x1\n>= -5.0\n"
+        "c2:\n+0.0 x0\n>= -5.0\n"
+        "c3:\n+0.0 x0\n= 0.0\n"
+    )
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="highspy not installed")
+@pytest.mark.parametrize(
+    "io_api,fn",
+    [("lp", "empty.lp"), ("lp-polars", "empty.lp"), ("mps", "empty.mps")],
+)
+def test_to_file_keeps_empty_row(tmp_path: Path, io_api: str, fn: str) -> None:
+    import highspy
+
+    m = Model()
+    x = m.add_variables(lower=0, coords=[pd.RangeIndex(2, name="i")], name="x")
+    m.add_constraints(x >= 1, name="a")
+    m.add_constraints(LinearExpression(12, m) >= 1, name="b")
+    m.add_objective(x.sum())
+    m.to_file(tmp_path / fn, io_api=io_api)
+
+    h = highspy.Highs()
+    h.setOptionValue("output_flag", False)
+    h.readModel(str(tmp_path / fn))
+    assert h.getNumRow() == 3
+
+
+def test_to_file_lp_raises_for_empty_row_without_any_variable(tmp_path: Path) -> None:
+    m = Model()
+    m.add_constraints(LinearExpression(12, m) >= 1, name="con")
+    with pytest.raises(ValueError, match="no variable to write them with"):
+        m.to_file(tmp_path / "empty.lp")
+
+
+def empty_rows_model() -> Model:
+    m = Model()
+    x = m.add_variables(lower=0, coords=[pd.RangeIndex(20, name="i")], name="x")
+    m.add_constraints(LinearExpression(12, m) == 13, name="k")
+    m.add_constraints(0 * x >= 5, name="con")
+    m.add_constraints(0 * x <= 5, name="holds")
+    m.add_constraints(x >= 5, name="live")
+    m.add_objective(x.sum())
+    return m
+
+
+WRITERS: dict[str, Callable[[Model, Path], Any]] = {
+    "to_file-lp": lambda m, p: m.to_file(p / "m.lp"),
+    "to_file-mps": lambda m, p: m.to_file(p / "m.mps"),
+    "solve-mock": lambda m, p: m.solve(mock_solve=True),
+    "solve-lp": lambda m, p: m.solve("highs", io_api="lp"),
+    "solve-direct": lambda m, p: m.solve("highs", io_api="direct"),
+}
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="highspy not installed")
+@pytest.mark.parametrize("write", WRITERS)
+def test_empty_rows_that_cannot_hold_are_named_once(tmp_path: Path, write: str) -> None:
+    with pytest.warns(UserWarning, match="cannot hold") as record:
+        WRITERS[write](empty_rows_model(), tmp_path)
+
+    hints = [str(w.message) for w in record if "cannot hold" in str(w.message)]
+    assert len(hints) == 1
+    assert hints[0].startswith("21 constraint row(s) have no nonzero term")
+    assert ": k, con[0], con[1], " in hints[0]
+    assert "con[12], ..." in hints[0]
+    assert "con[13]" not in hints[0]
+    assert "holds" not in hints[0]
+
+
+def test_empty_rows_that_hold_raise_no_warning(tmp_path: Path) -> None:
+    m = Model()
+    x = m.add_variables(lower=0, coords=[pd.RangeIndex(2, name="i")], name="x")
+    m.add_constraints(0 * x >= [-5, 0], name="a")
+    m.add_constraints(0 * x <= [5, 0], name="b")
+    m.add_constraints(LinearExpression(12, m) == 12, name="c")
+    m.add_objective(x.sum())
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        m.to_file(tmp_path / "m.lp")
+
+
 def test_to_file_lp_unsorted_constraint_labels(tmp_path: Path) -> None:
     m = Model()
     i = pd.RangeIndex(3, name="i")
