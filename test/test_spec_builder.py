@@ -44,6 +44,7 @@ from spec_helpers import (  # noqa: E402
 
 import linopy  # noqa: E402
 from linopy import Model  # noqa: E402
+from linopy.constants import TERM_DIM  # noqa: E402
 from linopy.spec import SpecDataError, evaluate  # noqa: E402
 from linopy.spec.api import lower  # noqa: E402
 from linopy.testing import (  # noqa: E402
@@ -634,6 +635,124 @@ def test_arithmetic_is_not_refused_on_a_row_masked_out() -> None:
     assert int(m.constraints["row"].labels.sel(t=0)) == -1
 
 
+def guarded(row: str, cases: dict[str, Any], otherwise: Any) -> dict[str, Any]:
+    """:func:`quotient` with a row reading the named expression ``used``, defined by *cases*."""
+    used = {"dims": ["t"], "cases": cases, "otherwise": otherwise}
+    return with_(quotient(row), expressions={"used": used})
+
+
+UNRATED = {"unrated": {"when": "a == inf", "expression": 1}}
+RATED = {"rated": {"when": "a < inf", "expression": "a * b"}}
+
+
+@pytest.mark.parametrize(
+    ("cases", "otherwise"),
+    [
+        pytest.param(UNRATED, "a * b", id="otherwise"),
+        pytest.param(RATED, 1, id="case"),
+    ],
+)
+def test_a_case_value_is_not_refused_where_another_case_applies(
+    cases: dict[str, Any], otherwise: Any
+) -> None:
+    """``a * b`` is inf * 0 on ``t=0``, which a case claims: a value is read only within its region (#1148)."""
+    spec = guarded("x <= used", cases, otherwise)
+    m = Model.from_spec(spec, INF_AT_0)
+    row = m.constraints["row"]
+    assert row.rhs.values.tolist() == [1.0, 4.0, 5.0]
+    assert row.coeffs.squeeze().values.tolist() == [1.0, 1.0, 1.0]
+    folded = evaluate(spec, m, "used", sources=INF_AT_0)["used"]
+    assert folded.values.tolist() == [1.0, 4.0, 5.0]
+
+
+def test_a_case_term_is_not_refused_where_another_case_applies() -> None:
+    spec = guarded(
+        "used <= 3", {"unrated": {"when": "a == inf", "expression": "x"}}, "a * b * x"
+    )
+    row = Model.from_spec(spec, INF_AT_0).constraints["row"]
+    assert row.coeffs.where(row.vars != -1).sum(TERM_DIM).values.tolist() == [1, 4, 5]
+    assert row.rhs.values.tolist() == [3.0, 3.0, 3.0]
+
+
+SHIFTED_PRODUCT = "shift(a * b, along=t, offset=1, edge=0)"
+
+
+@pytest.mark.parametrize(
+    ("cases", "otherwise"),
+    [
+        pytest.param({"high": {"when": "b > 4", "expression": 1}}, "a * b", id="own"),
+        pytest.param(
+            {"pos": {"when": "b > 0", "expression": SHIFTED_PRODUCT}}, 0, id="shift"
+        ),
+        pytest.param(UNRATED, SHIFTED_PRODUCT, id="otherwise-shift"),
+        pytest.param(
+            UNRATED, "sum_back(a * b, along=t, window=2)", id="otherwise-window"
+        ),
+    ],
+)
+def test_a_case_value_is_refused_where_it_is_read(
+    cases: dict[str, Any], otherwise: Any
+) -> None:
+    """``a * b`` is inf * 0 on ``t=0``, read there by the case that applies, or from ``t=1`` by a shift or window."""
+    spec = guarded("x <= used", cases, otherwise)
+    with pytest.raises(SpecDataError, match=r"constraint 'row'.*not finite at t=0"):
+        Model.from_spec(spec, INF_AT_0)
+
+
+@pytest.mark.parametrize(
+    ("row", "dims", "case", "rhs"),
+    [
+        pytest.param(
+            "x <= used",
+            ["t"],
+            "sum_back(b, along=t, window=5)",
+            [0.0, 4.0, 5.0],
+            id="unread",
+        ),
+        pytest.param(
+            "x <= sum(used, over=s)", ["t", "s"], "y", [0.0, 8.0, 10.0], id="zero"
+        ),
+    ],
+)
+def test_a_case_that_applies_nowhere_is_not_evaluated(
+    row: str, dims: list[str], case: str, rhs: list[float]
+) -> None:
+    """No ``b`` is negative, so a window wider than ``t`` is never read, and the case is zero over its dimensions."""
+    spec = with_(
+        quotient(row),
+        dimensions={"s": {"dtype": "str"}},
+        variables={"y": {"dims": ["s"], "bounds": {"lower": 0, "upper": 1}}},
+        expressions={
+            "used": {
+                "dims": dims,
+                "cases": {"neg": {"when": "b < 0", "expression": case}},
+                "otherwise": "b",
+            }
+        },
+    )
+    built = Model.from_spec(spec, {**INF_AT_0, "s": GROUPS}).constraints["row"]
+    assert built.rhs.values.tolist() == rhs
+
+
+def test_a_case_value_over_an_empty_dimension_is_read_within_its_region() -> None:
+    """A sum over a dimension without a coordinate builds no term but reads its data, a case's value within its region."""
+    spec = with_(
+        quotient("x <= sum(used, over=s)"),
+        dimensions={"s": {"dtype": "int"}},
+        variables={"y": {"dims": ["s"], "bounds": {"lower": 0, "upper": 1}}},
+        expressions={
+            "used": {
+                "dims": ["t", "s"],
+                "cases": {"unrated": {"when": "a == inf", "expression": "y"}},
+                "otherwise": "a * b * y",
+            }
+        },
+    )
+    data = {**INF_AT_0, "s": pd.Index([], dtype=int, name="s")}
+    row = Model.from_spec(spec, data).constraints["row"]
+    assert row.rhs.values.tolist() == [0.0, 0.0, 0.0]
+
+
 GATED_ON = {
     "variables": {
         "on": {
@@ -669,6 +788,122 @@ def test_arithmetic_masked_out_for_one_row_is_refused_for_the_next_reading_it() 
     )
     with pytest.raises(SpecDataError, match=r"constraint 'open'.*not finite at t=0"):
         Model.from_spec(spec, ZERO_AT_0)
+
+
+SUCC = {"relations": {"succ": {"key": "t", "values": {"u": "t"}}}}
+SUCC_DATA = {**ZERO_AT_0, "succ": pd.DataFrame({"t": T, "u": [1, 0, 1]})}
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        pytest.param("x <= shift(a / b, along=t, offset=1, edge=0)", id="shift"),
+        pytest.param("x <= sum_back(a / b, along=t, window=2)", id="window"),
+        pytest.param("x <= at(a / b, by=succ[u])", id="lookup"),
+        pytest.param("x <= sum(a / b, over=t)", id="sum"),
+        pytest.param("shift(a / b * x, along=t, offset=1, edge=0) <= 1", id="term"),
+    ],
+)
+def test_a_where_does_not_guard_what_a_row_reads_at_another_coordinate(
+    expression: str,
+) -> None:
+    """``b > 0`` masks t=0 only, and row t=1 reads ``a / b`` at t=0."""
+    spec = with_(quotient(expression, where="b > 0"), **SUCC)
+    with pytest.raises(SpecDataError, match="divide of 'a', 'b' is not finite at t=0"):
+        Model.from_spec(spec, SUCC_DATA)
+
+
+@pytest.mark.parametrize(
+    ("expression", "rhs"),
+    [
+        pytest.param("x <= shift(a, along=t, offset=1, edge=0) / b", [0.0, 0.2]),
+        pytest.param("x <= a / b + shift(a, along=t, offset=1, edge=0)", [0.25, 1.2]),
+        pytest.param("x <= sum(a, over=t) / b", [0.5, 0.4]),
+    ],
+    ids=["shift-then-divide", "beside-a-shift", "sum-then-divide"],
+)
+def test_a_where_guards_what_a_row_reads_at_its_own_coordinate(
+    expression: str, rhs: list[float]
+) -> None:
+    m = Model.from_spec(quotient(expression, where="b > 0"), ZERO_AT_0)
+    built = m.constraints["row"]
+    assert built.labels.values.tolist()[0] == -1
+    assert built.rhs.values.tolist()[1:] == pytest.approx(rhs)
+
+
+@pytest.mark.parametrize(
+    "when",
+    [
+        pytest.param("shift(a / b > 0.1, along=t, offset=1)", id="shift"),
+        pytest.param("at(a / b > 0.1, by=succ[u])", id="lookup"),
+        pytest.param("count(a / b > 0.1, over=t) >= 1", id="count"),
+    ],
+)
+def test_a_where_does_not_guard_what_a_condition_reads_at_another_coordinate(
+    when: str,
+) -> None:
+    region = {"on": {"when": when, "expression": "a"}}
+    spec = with_(
+        quotient("x <= r", where="b > 0"),
+        expressions={"r": {"dims": ["t"], "cases": region, "otherwise": 0}},
+        **SUCC,
+    )
+    with pytest.raises(SpecDataError, match="divide of 'a', 'b' is not finite at t=0"):
+        Model.from_spec(spec, SUCC_DATA)
+
+
+def test_a_where_drops_every_guard_along_the_axis_a_reader_moves() -> None:
+    """No kept row reads t=0, yet the shift along t is guarded nowhere on t."""
+    spec = quotient("x <= shift(a / b, along=t, offset=1, edge=0)", where="t > 1")
+    with pytest.raises(SpecDataError, match="divide of 'a', 'b' is not finite at t=0"):
+        Model.from_spec(spec, ZERO_AT_0)
+
+
+def test_a_where_does_not_guard_a_shift_summed_over_an_empty_dimension() -> None:
+    expression = "x + sum(shift(a / b * y, along=t, offset=1, edge=0), over=e) <= 1"
+    spec = with_(
+        quotient(expression, where="b > 0"),
+        dimensions={"e": {"dtype": "str"}},
+        variables={"y": {"dims": ["t", "e"], "bounds": {"lower": 0, "upper": 1}}},
+    )
+    data = {**ZERO_AT_0, "e": pd.Index([], name="e", dtype=str)}
+    with pytest.raises(SpecDataError, match="divide of 'a', 'b' is not finite at t=0"):
+        Model.from_spec(spec, data)
+
+
+@pytest.mark.parametrize(
+    ("expression", "rhs"),
+    [
+        pytest.param(
+            "x <= shift(a / b, along=t, offset=1, edge=0)", [0.0, 0.5, 0.5], id="shift"
+        ),
+        pytest.param("x <= at(a / b, by=lag[u])", [0.5, 0.5, 0.5], id="lookup"),
+    ],
+)
+def test_a_where_guards_a_reader_along_the_axes_it_does_not_move(
+    expression: str, rhs: list[float]
+) -> None:
+    """``b > 0`` masks s=p, where ``a / b`` is inf, and each reader moves along t only."""
+    row = {"dims": ["t", "s"], "where": "b > 0", "expression": expression}
+    spec = with_(
+        quotient(""),
+        dimensions={"s": {"dtype": "str"}},
+        relations={"lag": {"key": ["t", "s"], "values": {"u": "t"}}},
+        parameters={"a": {"dims": ["t", "s"]}, "b": {"dims": ["t", "s"]}},
+        variables={"x": {"dims": ["t", "s"], "bounds": {"lower": 0, "upper": 10}}},
+        constraints={"row": row},
+        objective={"sense": "minimize", "expression": "sum(x, over=[t, s])"},
+    )
+    lag = {"t": [0, 0, 1, 1, 2, 2], "s": ["p", "q"] * 3, "u": [0, 0, 0, 0, 1, 1]}
+    data = {
+        "t": T,
+        "s": GROUPS,
+        "lag": pd.DataFrame(lag),
+        "a": xr.DataArray(np.ones((3, 2)), coords=[T, GROUPS]),
+        "b": xr.DataArray([[0.0, 2.0]] * 3, coords=[T, GROUPS]),
+    }
+    built = Model.from_spec(spec, data).constraints["row"]
+    assert built.rhs.sel(s="q").values.tolist() == rhs
 
 
 @pytest.mark.parametrize(
