@@ -475,23 +475,26 @@ def _gather_by_offset(
 
     Selection is by position, so no label is looked up. Out-of-range
     positions are clipped onto the axis and emptied again, so an edge means
-    what it does for a scalar shift.
+    what it does for a scalar shift. Where the offset is absent the shift is
+    not defined, so no edge speaks for it and it reaches nothing.
     """
     card = int(array.sizes[over])
     labels = np.asarray(array.indexes[over])
     ordinal = xr.DataArray(np.arange(card), coords={over: labels}, dims=[over])
-    source = (ordinal - offset).astype(int)
+    reached = (ordinal - offset).assign_coords({over: labels})
+    defined = reached.notnull()
+    source = reached.fillna(0).astype(int)
 
     def gathered(ordinals: xr.DataArray) -> Array:
         return _read_at(array, over, labels, ordinals)
 
     if wrap:
-        return gathered(source % card)
-    inside = ((source >= 0) & (source < card)).assign_coords({over: labels})
+        return gathered(source % card).where(defined)
+    inside = defined & (source >= 0) & (source < card)
     moved = gathered(source.clip(0, card - 1)).where(inside)
     if fill is None:
         return moved
-    return _vacated(moved, array, over, ~inside, fill)
+    return _vacated(moved, array, over, defined & ~inside, fill)
 
 
 def per_group(offset: Amount, groups: xr.DataArray) -> Amount:
@@ -514,13 +517,15 @@ def _gather_in_groups(
     """
     Translate *array* inside each group rather than along the axis.
 
-    A coordinate in no group reaches nothing, which is not the same as
-    reaching off a group's edge: only the second is what a fill speaks for.
+    A coordinate in no group, or where the offset is absent, reaches
+    nothing, which is not the same as reaching off a group's edge: only the
+    second is what a fill speaks for.
     """
     reached = groups.within - offset
     if wrap:
         reached = reached % groups.size
-    inside = groups.grouped & (reached >= 0) & (reached < groups.size)
+    defined = groups.grouped & reached.notnull()
+    inside = defined & (reached >= 0) & (reached < groups.size)
 
     def peer(group: np.ndarray, position: np.ndarray) -> np.ndarray:
         return groups.roster[group, position]
@@ -530,7 +535,7 @@ def _gather_in_groups(
     gathered = _read_at(array, over, labels, source).where(inside)
     if fill is None:
         return gathered
-    return _vacated(gathered, array, over, groups.grouped & ~inside, fill)
+    return _vacated(gathered, array, over, defined & ~inside, fill)
 
 
 def _read_at(
