@@ -635,6 +635,30 @@ def test_arithmetic_that_makes_data_non_finite_is_refused(
         Model.from_spec(quotient(expression), data)
 
 
+NONZERO_B = {**ZERO_AT_0, "b": xr.DataArray([1.0, 4.0, 5.0], coords=[T])}
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "x + 0 * (x + a / b) <= 5",
+        "x + sum(a * 0 * (x + a / b), over=t) <= 5",
+        "x + sum(b * (0 * x) * x, over=t) <= 5",
+    ],
+    ids=["product", "sum", "quadratic"],
+)
+def test_a_term_the_data_scales_to_nothing_is_built_as_its_constant(
+    expression: str,
+) -> None:
+    """The term is left unbuilt, its data read and refused all the same."""
+    m = Model.from_spec(quotient(expression), NONZERO_B)
+    linear = Model.from_spec(quotient("x <= 5"), NONZERO_B)
+    assert_conequal(m.constraints["row"], linear.constraints["row"], strict=False)
+    if "a / b" in expression:
+        with pytest.raises(SpecDataError, match="divide of 'a', 'b' is not finite"):
+            Model.from_spec(quotient(expression), ZERO_AT_0)
+
+
 HUGE_AT_0 = {"t": T, "a": xr.DataArray([1e308, 1.0, 1.0], coords=[T]), "b": FULL_C}
 
 

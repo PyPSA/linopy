@@ -66,12 +66,64 @@ def evaluate(node: ms.Expression, ctx: Context) -> Value:
     """One node as a linopy term, an array or a number, each node evaluated once per context."""
     if isinstance(node, ms.Constant):
         return node.value
+    if ctx.constant and carries(node, ctx):
+        return _constant_term(node, ctx)
     pinned = isinstance(
         node, ms.ExpressionReference | ms.VariableReference | ms.ParameterReference
     )
     if isinstance(node, ms.ExpressionReference):
         node = node.body
     return ctx.memo.evaluated(node, lambda: _evaluated(node, ctx), pinned=pinned)
+
+
+def carries(node: ms.Expression, ctx: Context) -> bool:
+    """Whether a variable stands under *node*, asked once per node."""
+    facts = ctx.memo.carries
+    key = id(node)
+    if key not in facts:
+        facts[key] = ms.carries_variable(node)
+    return facts[key]
+
+
+def _constant_term(node: ms.Expression, ctx: Context) -> Value:
+    """
+    The term of *node* as its constant alone, with every variable under it the constant of its absence.
+
+    A term kept by the build is read back as its constant; any other is
+    evaluated without its variables, so its data is read, checked and
+    refused as when it is built, and its constant is the same.
+    """
+    body = node.body if isinstance(node, ms.ExpressionReference) else node
+    if body in ctx.memo.values:
+        kept = ctx.memo.evaluated(body, lambda: None)
+        if isinstance(kept, Term):
+            return operators.constant_term(ctx.model, _constant_of(kept))
+        return cast(Value, kept)
+    ctx.memo.used(body)
+    return _evaluated(body, ctx)
+
+
+def _constant_of(value: Term) -> xr.DataArray:
+    """The constant of the term *value*, NaN where it is absent."""
+    if isinstance(value, Variable):
+        return _absent(value)
+    return value.const
+
+
+def _as_constant(ctx: Context) -> Context:
+    """*ctx* evaluating every term as its constant alone."""
+    return replace(ctx, constant=True, fuse=False)
+
+
+def _annihilates(factor: Value) -> bool:
+    """Whether the data *factor* is a zero or a hole at every cell, so no term it scales stays live."""
+    values = np.asarray(factor)
+    if values.dtype.kind not in "fiub" or not values.size:
+        return False
+    head = values.flat[0]
+    if head != 0 and head == head:
+        return False
+    return bool(((values == 0) | np.isnan(values)).all())
 
 
 def _evaluated(node: ms.Expression, ctx: Context) -> Value:
@@ -85,7 +137,7 @@ def _evaluated(node: ms.Expression, ctx: Context) -> Value:
         return _dual(node.constraint, ctx)
     if isinstance(node, ms.ParameterReference):
         return ctx.parameter(node.name).values
-    if not ctx.solved and _sums_nothing(node, ctx) and ms.carries_variable(node):
+    if not ctx.solved and _sums_nothing(node, ctx) and carries(node, ctx):
         return _nothing_summed(node, ctx)
     if isinstance(node, ms.Negate):
         return -evaluate(node.operand, ctx)
@@ -121,7 +173,7 @@ def _cases(node: ms.Cases, ctx: Context) -> Value:
     if total is not None and held >= set(node.dims):
         return total
     zeros = _zeros(node, ctx)
-    if ms.carries_variable(node):
+    if carries(node, ctx):
         return (
             operators.constant_term(ctx.model, zeros)
             if total is None
@@ -208,7 +260,7 @@ def _data_under(node: ms.Expression, ctx: Context) -> None:
 
 def _data_of(operand: ms.Expression, ctx: Context) -> None:
     """Evaluate *operand* if it holds no variable, else what it reads beside its terms."""
-    if not ms.carries_variable(operand):
+    if not carries(operand, ctx):
         evaluate(operand, ctx)
         return
     ctx.memo.used(operand)
@@ -265,12 +317,12 @@ def _factors_of(
     factors: list[_Factor] = []
     while isinstance(node, ms.Multiply | ms.Divide) and node not in ctx.memo.values:
         first, second = _operands(node)
-        carries = ms.carries_variable(first)
-        if carries == ms.carries_variable(second):
+        held = carries(first, ctx)
+        if held == carries(second, ctx):
             break
-        if isinstance(node, ms.Divide) and not carries:
+        if isinstance(node, ms.Divide) and not held:
             break
-        term, data = (first, second) if carries else (second, first)
+        term, data = (first, second) if held else (second, first)
         factors.append((node, term, data))
         node = term
     return factors, node
@@ -282,7 +334,9 @@ def _weighted_sum(
     """
     The sum *node* of *term* scaled by *factors*, built by :func:`_fused`
     where it can, else operator by operator. The operands are evaluated in
-    the order :func:`_combine` evaluates them.
+    the order :func:`_combine` evaluates them, the data first where the
+    build prunes: a term a factor scales by zeros and holes alone is
+    evaluated as its constant, and the sum adds that up.
     """
     columns = _summed(node)[1]
     read: dict[int, Value] = {
@@ -290,14 +344,21 @@ def _weighted_sum(
         for i, (product, _, data) in enumerate(factors)
         if data is _operands(product)[0]
     }
-    value = evaluate(term, ctx)
+    if _prunes(ctx):
+        for i in reversed(range(len(factors))):
+            read.setdefault(i, evaluate(factors[i][2], ctx))
+    zeroed = _prunes(ctx) and any(
+        isinstance(product, ms.Multiply) and _annihilates(_off_rows(read[i], ctx))
+        for i, (product, _, _) in enumerate(factors)
+    )
+    value = evaluate(term, _as_constant(ctx) if zeroed else ctx)
     for i in reversed(range(len(factors))):
         if i not in read:
             read[i] = evaluate(factors[i][2], ctx)
     data = [read[i] for i in range(len(factors))]
     for product, _, _ in factors:
         ctx.memo.used(product)
-    fused = _fused(node, columns, factors, data, value, ctx)
+    fused = None if zeroed else _fused(node, columns, factors, data, value, ctx)
     if fused is not None:
         return fused
     for factor, datum in reversed(list(zip(factors, data))):
@@ -504,8 +565,9 @@ def _variable(name: str, ctx: Context) -> Value:
     if not ctx.solved:
         labels = variable.labels
         fill = np.nan if missing == "absent" else float(missing)
-        if labels.size and not bool((labels.values != -1).any()):
-            const = xr.full_like(labels, fill, dtype=float)
+        held = labels.values != -1
+        if ctx.constant or (labels.size and not bool(held.any())):
+            const = labels.copy(data=np.where(held, 0.0, fill))
             return operators.constant_term(ctx.model, const)
         return variable if missing == "absent" else variable.fillna(missing)
     if "solution" not in variable.data:
@@ -567,12 +629,36 @@ def _combine(node: _Binary, ctx: Context) -> Value:
     read as an absence and silently drop the row, an infinity would stand in
     the problem. A hole beside a term becomes the term's absence.
     """
-    if isinstance(node, ms.Add) and not ctx.solved and ms.carries_variable(node):
+    if isinstance(node, ms.Add) and not ctx.solved and carries(node, ctx):
         return _added(node, ctx)
     first, second = _operands(node)
     if isinstance(node, ms.Add) and isinstance(second, ms.Negate):
         second = second.operand
+    if _prunes(ctx) and isinstance(node, ms.Multiply):
+        if carries(first, ctx) != carries(second, ctx):
+            return _pruned_product(node, first, second, ctx)
     return _made(node, evaluate(first, ctx), evaluate(second, ctx), ctx)
+
+
+def _prunes(ctx: Context) -> bool:
+    """Whether a term the data scales by zeros and holes alone is left unbuilt: in a build, outside a constant evaluation."""
+    return ctx.prune and not ctx.solved and not ctx.constant
+
+
+def _pruned_product(
+    node: ms.Multiply, first: ms.Expression, second: ms.Expression, ctx: Context
+) -> Value:
+    """
+    The product *node* of a term and data, the data read first: a term it
+    scales by zeros and holes alone is evaluated as its constant, which is
+    all the product holds.
+    """
+    term, data = (first, second) if carries(first, ctx) else (second, first)
+    factor = evaluate(data, ctx)
+    zeroed = _annihilates(_off_rows(factor, ctx))
+    value = evaluate(term, _as_constant(ctx) if zeroed else ctx)
+    left, right = (value, factor) if term is first else (factor, value)
+    return _made(node, left, right, ctx)
 
 
 def _made(node: _Binary, left: Value, right: Value, ctx: Context) -> Value:
@@ -684,7 +770,7 @@ def _chain(node: ms.Add, ctx: Context) -> tuple[ms.Expression, list[_Step]]:
         right = left.right
         steps.append((left, right.operand if isinstance(right, ms.Negate) else right))
         left = left.left
-        if left in ctx.memo.values or not ms.carries_variable(left):
+        if left in ctx.memo.values or not carries(left, ctx):
             break
         if isinstance(left, ms.Add):
             ctx.memo.used(left)

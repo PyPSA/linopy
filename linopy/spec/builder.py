@@ -296,7 +296,8 @@ def _objective(ctx: Context) -> None:
     refuse_holes("the objective", [declared.expression], ctx)
     expr = evaluate(declared.expression, ctx)
     if _constant(expr):
-        expr = evaluate(declared.expression, replace(unfused(ctx), zeroes=False))
+        kept = replace(unfused(ctx), zeroes=False, prune=False)
+        expr = evaluate(declared.expression, kept)
         unfused(ctx)
     if not isinstance(expr, Term):
         raise SpecDataError(

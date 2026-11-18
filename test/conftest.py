@@ -118,3 +118,22 @@ def u(m: Model) -> Variable:
         level1=("dim_3", [1, 1, 2, 2]),
         level2=("dim_3", ["a", "b", "a", "b"]),
     )
+
+
+@pytest.fixture(autouse=True)
+def _spec_pruning_builds_the_same_model(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Every spec build of the spec tests is checked against the same build
+    without pruning: pruning is a speed-up only, so the two hold the same
+    model, or raise the same error. The memory tests are left alone.
+    """
+    module = request.module.__name__.rsplit(".", 1)[-1]
+    if not module.startswith("test_spec") or module == "test_spec_memory":
+        return
+    from spec_helpers import checked_against_unpruned
+
+    from linopy.spec import api
+
+    monkeypatch.setattr(api, "build_into", checked_against_unpruned(api.build_into))

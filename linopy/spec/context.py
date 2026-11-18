@@ -55,7 +55,10 @@ class Memo:
 
     ``fused`` counts the sums built from their live cells alone. Such a sum
     holds fewer slots than one built operator by operator: it leaves out a
-    term with a zero coefficient, which still counts as a term of its row.
+    term with a zero coefficient.
+
+    ``carries`` holds, by a node's identity, whether a variable stands
+    under it, which is asked of a node over and over.
     """
 
     values: dict[Hashable, Any] = field(default_factory=dict)
@@ -63,6 +66,7 @@ class Memo:
     fused: int = 0
     uses: dict[ms.Expression, int] = field(default_factory=dict)
     inner: dict[ms.Expression, tuple[ms.Expression, ...]] = field(default_factory=dict)
+    carries: dict[int, bool] = field(default_factory=dict)
 
     def kept(self, key: Hashable, make: Callable[[], _Kept]) -> _Kept:
         """The value kept at *key*, else made by *make* and kept unless a refusal was masked making it."""
@@ -146,6 +150,10 @@ class Context:
     build sum a term scaled by sparse data from its live cells alone.
     ``zeroes`` makes a term the data scales by zero the constant it is
     there, so a row left with such terms alone holds no variable term.
+    ``prune`` lets a build leave a term unbuilt where the data scales it by
+    zeros and holes alone: it is evaluated as its constant, with
+    ``constant`` set, where every variable enters as the constant term of
+    its absence. Pruning is a speed-up only: it builds the same model.
     """
 
     model: Model
@@ -160,6 +168,8 @@ class Context:
     rename: Callable[[str], str] = field(default=str, compare=False, repr=False)
     fuse: bool = True
     zeroes: bool = True
+    prune: bool = True
+    constant: bool = False
 
 
 def is_empty(dims: Iterable[str], ctx: Context) -> bool:

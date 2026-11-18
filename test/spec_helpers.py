@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import functools
 import os
+import unittest.mock
+import warnings
+from collections.abc import Callable
 from typing import Any
 
 import mathspec
@@ -11,7 +15,7 @@ import pytest
 import xarray as xr
 import yaml
 
-from linopy import Model
+from linopy import Model, PerformanceWarning
 
 EXAMPLES_DIR = os.environ.get("MATHSPEC_EXAMPLES")
 needs_examples = pytest.mark.skipif(
@@ -212,3 +216,64 @@ CURVE_DATA: dict[str, Any] = {
     "p_max": pd.DataFrame({"generator": UNITS, "p_max": [40.0, 80.0]}),
     "load": pd.DataFrame({"snapshot": [0], "load": [50.0]}),
 }
+
+
+def _rows(flat: pd.DataFrame) -> pd.DataFrame:
+    keys = [c for c in ("labels", "vars") if c in flat.columns]
+    return flat.sort_values(keys).reset_index(drop=True)
+
+
+def _same_terms(a: Any, b: Any) -> None:
+    """*a* and *b*, two expressions, hold the same terms and constants, however their term slots are laid out."""
+    pd.testing.assert_frame_equal(_rows(a.flat), _rows(b.flat), check_exact=True)
+    assert a.const.transpose(*b.const.dims).equals(b.const)
+
+
+def assert_same_model(a: Model, b: Model) -> None:
+    """*a* and *b* hold the same variables, rows, objective and named expressions, term slots aside."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", PerformanceWarning)
+        _assert_same_model(a, b)
+
+
+def _assert_same_model(a: Model, b: Model) -> None:
+    assert list(a.variables) == list(b.variables)
+    for name in a.variables:
+        for field in ("labels", "lower", "upper"):
+            assert getattr(a.variables[name], field).equals(
+                getattr(b.variables[name], field)
+            ), (name, field)
+    assert list(a.constraints) == list(b.constraints)
+    for name in a.constraints:
+        ca, cb = a.constraints[name], b.constraints[name]
+        assert ca.labels.equals(cb.labels), name
+        pd.testing.assert_frame_equal(_rows(ca._flat()), _rows(cb._flat()))
+    _same_terms(a.objective.expression, b.objective.expression)
+    assert list(a.expressions) == list(b.expressions)
+    for name in a.expressions:
+        _same_terms(a.expressions[name], b.expressions[name])
+
+
+def checked_against_unpruned(build_into: Callable[..., None]) -> Callable[..., None]:
+    """*build_into* that builds every model again without pruning and asserts the two builds agree."""
+    from linopy.spec import api
+    from linopy.spec.context import Context
+
+    def checked(model: Model, *args: Any, **kwargs: Any) -> None:
+        twin = Model(sparse=model.sparse, dtypes=model.dtypes)
+        unpruned = functools.partial(Context, prune=False)
+        error: Exception | None = None
+        with unittest.mock.patch.object(api, "Context", unpruned):
+            try:
+                build_into(twin, *args, **kwargs)
+            except Exception as e:
+                error = e
+        try:
+            build_into(model, *args, **kwargs)
+        except Exception as e:
+            assert (type(e), str(e)) == (type(error), str(error))
+            raise
+        assert error is None, f"only the unpruned build raised: {error!r}"
+        assert_same_model(model, twin)
+
+    return checked
