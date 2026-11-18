@@ -344,7 +344,6 @@ def absent_row(expression: str) -> dict[str, Any]:
         pytest.param("x <= a", [1, 2], id="constant-side"),
         pytest.param("x <= shift(a, along=t, offset=1, edge=0)", [0, 2], id="shift"),
         pytest.param("x <= at(z, by=grp[s])", [2], id="at"),
-        pytest.param("sum_back(a * x, along=t, window=2) <= 4", [1, 2], id="sum-back"),
     ],
 )
 def test_an_absent_row_masks_the_row_it_reaches(

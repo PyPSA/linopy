@@ -278,6 +278,33 @@ def test_a_trailing_sum_wider_than_its_axis_wraps_onto_the_whole_axis() -> None:
     )
 
 
+ABSENT_WINDOWS: dict[str, list[float]] = {
+    "sum-back": [1, 1, 0, 8],
+    "sum-back-wrap": [9, 1, 0, 8],
+    "sum-back-in-groups": [1, 1, 0, 8],
+    "sum-back-group-width": [1, 0, 0, 8],
+}
+
+
+@pytest.mark.parametrize("key", ABSENT_WINDOWS)
+def test_a_window_of_absent_terms_sums_to_zero_like_sum(key: str) -> None:
+    live = xr.DataArray([True, False, False, True], coords=[TT])
+    x = {**operator_spec()["variables"]["x"], "where": "live"}
+    spec = with_(
+        operator_spec(),
+        parameters={"live": {"dims": ["t"], "dtype": "bool"}},
+        variables={"x": x},
+    )
+    m = solved(spec, {**OPERATOR_DATA, "live": live})
+    name = key.replace("-", "_")
+    want = xr.DataArray(ABSENT_WINDOWS[key], coords=[TT], name=f"probe_{name}")
+    assert bool((m.constraints[f"link_{name}"].labels != -1).all())
+    xr.testing.assert_allclose(m.solution[f"y_{name}"], want.rename(f"y_{name}"))
+    xr.testing.assert_allclose(
+        evaluate(spec, m, f"probe_{name}")[f"probe_{name}"], want
+    )
+
+
 # ---------------------------------------------------------------------------
 # grouped sum
 # ---------------------------------------------------------------------------
@@ -913,7 +940,7 @@ PARTIAL_CASES: dict[str, list[float]] = {
     "sum-by": [3.0, 4.0],
     "at": [10.0, 20.0, 80.0, np.nan],
     "shift-wrap-in-groups": [2.0, 1.0, 4.0, np.nan],
-    "sum-back-in-groups": [1.0, 3.0, 4.0, np.nan],
+    "sum-back-in-groups": [1.0, 3.0, 4.0, 0.0],
 }
 
 
@@ -929,7 +956,8 @@ def test_a_member_a_relation_sends_nowhere_reaches_nothing(key: str) -> None:
     )
     xr.testing.assert_allclose(folded, want.rename(folded.name))
     if dims == ["t"]:
-        assert int(m.constraints[f"link_{name}"].labels.sel(t=3)) == -1
+        built = int(m.constraints[f"link_{name}"].labels.sel(t=3)) != -1
+        assert built == bool(folded.sel(t=3).notnull())
 
 
 def test_a_sum_beside_an_empty_dimension_is_the_empty_sum() -> None:
@@ -943,7 +971,7 @@ def test_a_sum_beside_an_empty_dimension_is_the_empty_sum() -> None:
     assert "cap" not in m.constraints
 
 
-def test_a_window_width_no_member_carries_is_a_window_of_nothing() -> None:
+def test_a_window_width_no_member_carries_is_the_empty_sum() -> None:
     data = {
         **OPERATOR_DATA,
         "season_of": pd.DataFrame(
@@ -954,7 +982,7 @@ def test_a_window_width_no_member_carries_is_a_window_of_nothing() -> None:
     folded = evaluate(operator_spec(), m, "probe_sum_back_group_width")[
         "probe_sum_back_group_width"
     ]
-    assert bool(folded.isnull().all())
+    assert bool((folded == 0).all())
 
 
 def test_a_lookup_into_an_empty_dimension_reads_nothing() -> None:
