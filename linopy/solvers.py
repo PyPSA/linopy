@@ -1726,6 +1726,8 @@ class GLPK(Solver[None]):
             "integer optimal": "optimal",
             "integer undefined": "infeasible_or_unbounded",
             "undefined": "infeasible_or_unbounded",
+            "infeasible (final)": "infeasible",
+            "integer empty": "infeasible",
         }
         sense = read_sense_from_problem_file(problem_fn)
         io_api = read_io_api_from_problem_file(problem_fn)

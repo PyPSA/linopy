@@ -869,6 +869,25 @@ def test_milp_model(
     "solver,io_api,explicit_coordinate_names",
     [p for p in params if p[0] not in ["mindopt"]],
 )
+def test_infeasible_milp_model(
+    milp_model: Model, solver: str, io_api: str, explicit_coordinate_names: bool
+) -> None:
+    if solver not in feasible_mip_solvers:
+        pytest.skip(f"{solver} does not support MIP")
+
+    milp_model.add_constraints(milp_model.variables["x"] <= -1)
+
+    status, condition = milp_model.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    assert status == "warning"
+    assert "infeasible" in condition
+
+
+@pytest.mark.parametrize(
+    "solver,io_api,explicit_coordinate_names",
+    [p for p in params if p[0] not in ["mindopt"]],
+)
 def test_milp_model_r(
     milp_model_r: Model, solver: str, io_api: str, explicit_coordinate_names: bool
 ) -> None:
