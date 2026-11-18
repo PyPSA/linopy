@@ -728,29 +728,58 @@ def test_a_where_does_not_guard_what_a_condition_reads_at_another_coordinate(
         Model.from_spec(spec, SUCC_DATA)
 
 
-def test_a_where_guards_a_shift_along_the_axes_it_does_not_move() -> None:
-    """``b > 0`` masks s=p, where ``a / b`` is inf, and the shift reads s=q only."""
-    row = {
-        "dims": ["t", "s"],
-        "where": "b > 0",
-        "expression": "x <= shift(a / b, along=t, offset=1, edge=0)",
-    }
+def test_a_where_drops_every_guard_along_the_axis_a_reader_moves() -> None:
+    """No kept row reads t=0, yet the shift along t is guarded nowhere on t."""
+    spec = quotient("x <= shift(a / b, along=t, offset=1, edge=0)", where="t > 1")
+    with pytest.raises(SpecDataError, match="divide of 'a', 'b' is not finite at t=0"):
+        Model.from_spec(spec, ZERO_AT_0)
+
+
+def test_a_where_does_not_guard_a_shift_summed_over_an_empty_dimension() -> None:
+    expression = "x + sum(shift(a / b * y, along=t, offset=1, edge=0), over=e) <= 1"
+    spec = with_(
+        quotient(expression, where="b > 0"),
+        dimensions={"e": {"dtype": "str"}},
+        variables={"y": {"dims": ["t", "e"], "bounds": {"lower": 0, "upper": 1}}},
+    )
+    data = {**ZERO_AT_0, "e": pd.Index([], name="e", dtype=str)}
+    with pytest.raises(SpecDataError, match="divide of 'a', 'b' is not finite at t=0"):
+        Model.from_spec(spec, data)
+
+
+@pytest.mark.parametrize(
+    ("expression", "rhs"),
+    [
+        pytest.param(
+            "x <= shift(a / b, along=t, offset=1, edge=0)", [0.0, 0.5, 0.5], id="shift"
+        ),
+        pytest.param("x <= at(a / b, by=lag[u])", [0.5, 0.5, 0.5], id="lookup"),
+    ],
+)
+def test_a_where_guards_a_reader_along_the_axes_it_does_not_move(
+    expression: str, rhs: list[float]
+) -> None:
+    """``b > 0`` masks s=p, where ``a / b`` is inf, and each reader moves along t only."""
+    row = {"dims": ["t", "s"], "where": "b > 0", "expression": expression}
     spec = with_(
         quotient(""),
         dimensions={"s": {"dtype": "str"}},
-        parameters={"a": {"dims": ["t", "s"]}, "b": {"dims": ["s"]}},
+        relations={"lag": {"key": ["t", "s"], "values": {"u": "t"}}},
+        parameters={"a": {"dims": ["t", "s"]}, "b": {"dims": ["t", "s"]}},
         variables={"x": {"dims": ["t", "s"], "bounds": {"lower": 0, "upper": 10}}},
         constraints={"row": row},
         objective={"sense": "minimize", "expression": "sum(x, over=[t, s])"},
     )
+    lag = {"t": [0, 0, 1, 1, 2, 2], "s": ["p", "q"] * 3, "u": [0, 0, 0, 0, 1, 1]}
     data = {
         "t": T,
         "s": GROUPS,
+        "lag": pd.DataFrame(lag),
         "a": xr.DataArray(np.ones((3, 2)), coords=[T, GROUPS]),
-        "b": xr.DataArray([0.0, 2.0], coords=[GROUPS]),
+        "b": xr.DataArray([[0.0, 2.0]] * 3, coords=[T, GROUPS]),
     }
     built = Model.from_spec(spec, data).constraints["row"]
-    assert built.rhs.sel(s="q").values.tolist() == [0.0, 0.5, 0.5]
+    assert built.rhs.sel(s="q").values.tolist() == rhs
 
 
 @pytest.mark.parametrize(
