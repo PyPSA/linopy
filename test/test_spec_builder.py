@@ -44,6 +44,7 @@ from spec_helpers import (  # noqa: E402
 
 import linopy  # noqa: E402
 from linopy import Model  # noqa: E402
+from linopy.constants import TERM_DIM  # noqa: E402
 from linopy.spec import SpecDataError, evaluate  # noqa: E402
 from linopy.spec.api import lower  # noqa: E402
 from linopy.testing import (  # noqa: E402
@@ -650,10 +651,13 @@ def test_a_case_value_is_not_refused_where_another_case_applies(
     cases: dict[str, Any], otherwise: Any
 ) -> None:
     """``a * b`` is inf * 0 on ``t=0``, which a case claims: a value is read only within its region (#1148)."""
-    m = Model.from_spec(guarded("x <= used", cases, otherwise), INF_AT_0)
+    spec = guarded("x <= used", cases, otherwise)
+    m = Model.from_spec(spec, INF_AT_0)
     row = m.constraints["row"]
     assert row.rhs.values.tolist() == [1.0, 4.0, 5.0]
     assert row.coeffs.squeeze().values.tolist() == [1.0, 1.0, 1.0]
+    folded = evaluate(spec, m, "used", sources=INF_AT_0)["used"]
+    assert folded.values.tolist() == [1.0, 4.0, 5.0]
 
 
 def test_a_case_term_is_not_refused_where_another_case_applies() -> None:
@@ -661,14 +665,68 @@ def test_a_case_term_is_not_refused_where_another_case_applies() -> None:
         "used <= 3", {"unrated": {"when": "a == inf", "expression": "x"}}, "a * b * x"
     )
     row = Model.from_spec(spec, INF_AT_0).constraints["row"]
-    assert row.coeffs.where(row.vars != -1).sum("_term").values.tolist() == [1, 4, 5]
+    assert row.coeffs.where(row.vars != -1).sum(TERM_DIM).values.tolist() == [1, 4, 5]
     assert row.rhs.values.tolist() == [3.0, 3.0, 3.0]
 
 
-def test_a_case_value_is_refused_within_its_region() -> None:
-    spec = guarded("x <= used", {"high": {"when": "b > 4", "expression": 1}}, "a * b")
+SHIFTED_PRODUCT = "shift(a * b, along=t, offset=1, edge=0)"
+
+
+@pytest.mark.parametrize(
+    ("cases", "otherwise"),
+    [
+        pytest.param({"high": {"when": "b > 4", "expression": 1}}, "a * b", id="own"),
+        pytest.param(
+            {"pos": {"when": "b > 0", "expression": SHIFTED_PRODUCT}}, 0, id="shift"
+        ),
+        pytest.param(UNRATED, SHIFTED_PRODUCT, id="otherwise-shift"),
+        pytest.param(
+            UNRATED, "sum_back(a * b, along=t, window=2)", id="otherwise-window"
+        ),
+    ],
+)
+def test_a_case_value_is_refused_where_it_is_read(
+    cases: dict[str, Any], otherwise: Any
+) -> None:
+    """``a * b`` is inf * 0 on ``t=0``, read there by the case that applies, or from ``t=1`` by a shift or window."""
+    spec = guarded("x <= used", cases, otherwise)
     with pytest.raises(SpecDataError, match=r"constraint 'row'.*not finite at t=0"):
         Model.from_spec(spec, INF_AT_0)
+
+
+@pytest.mark.parametrize(
+    ("row", "dims", "case", "rhs"),
+    [
+        pytest.param(
+            "x <= used",
+            ["t"],
+            "sum_back(b, along=t, window=5)",
+            [0.0, 4.0, 5.0],
+            id="unread",
+        ),
+        pytest.param(
+            "x <= sum(used, over=s)", ["t", "s"], "y", [0.0, 8.0, 10.0], id="zero"
+        ),
+    ],
+)
+def test_a_case_that_applies_nowhere_is_not_evaluated(
+    row: str, dims: list[str], case: str, rhs: list[float]
+) -> None:
+    """No ``b`` is negative, so a window wider than ``t`` is never read, and the case is zero over its dimensions."""
+    spec = with_(
+        quotient(row),
+        dimensions={"s": {"dtype": "str"}},
+        variables={"y": {"dims": ["s"], "bounds": {"lower": 0, "upper": 1}}},
+        expressions={
+            "used": {
+                "dims": dims,
+                "cases": {"neg": {"when": "b < 0", "expression": case}},
+                "otherwise": "b",
+            }
+        },
+    )
+    built = Model.from_spec(spec, {**INF_AT_0, "s": GROUPS}).constraints["row"]
+    assert built.rhs.values.tolist() == rhs
 
 
 def test_a_case_value_over_an_empty_dimension_is_read_within_its_region() -> None:
