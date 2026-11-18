@@ -138,6 +138,8 @@ class Context:
     ``subject`` names what is being built in its refusals. ``memo`` is
     shared by every context replaced from one. ``rename`` gives the model
     name of a variable or constraint the program declares.
+    ``zeroes`` makes a term the data scales by zero the constant it is
+    there, so a row left with such terms alone holds no variable term.
     """
 
     model: Model
@@ -150,6 +152,7 @@ class Context:
     subject: str = "the spec"
     memo: Memo = field(default_factory=Memo, compare=False, repr=False)
     rename: Callable[[str], str] = field(default=str, compare=False, repr=False)
+    zeroes: bool = True
 
 
 def is_empty(dims: Iterable[str], ctx: Context) -> bool:

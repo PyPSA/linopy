@@ -19,6 +19,7 @@ from linopy.constants import (
     GREATER_EQUAL,
     LESS_EQUAL,
     AbsorbedTermsWarning,
+    EmptiedRowWarning,
     EvolvingAPIWarning,
     PerformanceWarning,
 )
@@ -45,6 +46,7 @@ __all__ = (
     "Constraints",
     "Constraint",
     "EQUAL",
+    "EmptiedRowWarning",
     "PerformanceWarning",
     "EvolvingAPIWarning",
     "GREATER_EQUAL",

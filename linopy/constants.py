@@ -108,6 +108,20 @@ SOS_DIM_ATTR = "sos_dim"
 SOS_BIG_M_ATTR = "big_m_upper"
 
 
+class EmptiedRowWarning(UserWarning):
+    """
+    Signals constraint rows that ``Model.from_spec`` dropped because the data
+    left them without a variable term and they hold, e.g. ``0 <= 5``.
+
+    Filter it with::
+
+        import warnings
+        import linopy
+
+        warnings.filterwarnings("ignore", category=linopy.EmptiedRowWarning)
+    """
+
+
 class EvolvingAPIWarning(FutureWarning):
     """
     Signals a newly-added API whose details may evolve in minor releases.
