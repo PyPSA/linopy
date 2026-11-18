@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+import xarray as xr
 
 from linopy import Model
 from linopy.persistent import RebuildReason
@@ -204,6 +205,27 @@ def test_cross_model_in_place(solver_name: str) -> None:
     s_fresh = _built(solver_name, m3)
     s_fresh.solve(assign=True)
     assert np.isclose(cross_obj, _obj(m3))
+
+
+@pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
+@pytest.mark.parametrize(
+    "sign,rhs,update",
+    [(">=", -5.0, {"rhs": 5.0}), ("<=", 5.0, {"sign": ">="})],
+    ids=["rhs", "sign"],
+)
+def test_update_raises_for_dropped_row_that_cannot_hold(
+    solver_name: str, sign: str, rhs: float, update: dict[str, Any]
+) -> None:
+    m = _base_model()
+    x = m.variables["x"]
+    m.add_constraints(xr.DataArray([0, 1, 1]) * x, sign, rhs, name="c3")
+    m.constraints.sanitize_zeros()
+    s = _built(solver_name, m)
+    s.solve(assign=True)
+
+    m.constraints["c3"].update(**update)
+    with pytest.raises(ValueError, match=r"cannot hold, first: c3\[0\]"):
+        s.solve(m)
 
 
 @pytest.mark.parametrize("solver_name", SOLVER_PARAMS)

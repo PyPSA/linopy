@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 import scipy.sparse
+from numpy.typing import DTypeLike
 from xarray import DataArray
 from xarray.indexes import PandasIndex
 
@@ -101,12 +102,16 @@ def _select(containers: Any, indexers: _Indexers) -> dict[str, DataArray]:
     return selected
 
 
+def _flat(selected: dict[str, DataArray], dtype: DTypeLike) -> np.ndarray:
+    """The selected labels of all containers, raveled, in container order."""
+    empty = np.empty(0, dtype=dtype)
+    return np.concatenate([empty, *(lab.values.ravel() for lab in selected.values())])
+
+
 def _positions(
-    selected: dict[str, DataArray], label_to_pos: np.ndarray, distinct: bool
+    flat: np.ndarray, label_to_pos: np.ndarray, distinct: bool
 ) -> np.ndarray:
     """Parent matrix positions of the selected active labels, in container order."""
-    empty = np.empty(0, dtype=label_to_pos.dtype)
-    flat = np.concatenate([empty, *(lab.values.ravel() for lab in selected.values())])
     positions = _active_positions(flat, label_to_pos)
     if not distinct and np.unique(positions).size != positions.size:
         raise RestrictionError("Cannot restrict model: the selection repeats labels.")
@@ -145,23 +150,24 @@ def _equal(value: DataArray, indexes: dict[str, pd.Index]) -> bool:
     )
 
 
-def _check_dropped(
-    rhs: np.ndarray,
-    sense: np.ndarray,
-    magnitude: np.ndarray,
-    clabels: np.ndarray,
-    tol: float,
-) -> None:
-    """Raise when a row that lost every term violates its sign beyond ``tol``."""
-    violated = unsatisfied(rhs, sense, tol * np.maximum(1.0, magnitude))
-    if violated.any():
-        raise RestrictionError(
-            "Cannot window the matrices: folding the dangling terms makes "
-            f"constraint labels {clabels[violated].tolist()} unsatisfiable "
-            f"(folded rhs {rhs[violated].tolist()} against sign "
-            f"{sense[violated].tolist()}). Raise `tol` or exclude the rows "
-            "via `drop`."
-        )
+def _empty_rows(model: Model) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Labels, right-hand sides and signs of the labelled rows without a term,
+    which the model's matrices leave out.
+    """
+    labels, rhs, sense = [], [], []
+    for con in model.constraints.data.values():
+        own = con.labels.values.ravel()
+        rows = (own != -1) & ~con.active_row_mask()
+        labels.append(own[rows])
+        rhs.append(con.rhs.values.ravel()[rows])
+        sense.append(con.sign.values.ravel()[rows].astype("U1"))
+    dtype = model._dtypes["labels"]
+    return (
+        np.concatenate([np.empty(0, dtype=dtype), *labels]),
+        np.concatenate([np.empty(0), *rhs]),
+        np.concatenate([np.empty(0, dtype="U1"), *sense]),
+    )
 
 
 class MatrixWindow:
@@ -191,6 +197,7 @@ class MatrixWindow:
             raise NotImplementedError("Matrix windows require at least one constraint.")
         self._model = model
         self._matrices = matrices
+        self._empty = _empty_rows(model)
         self._A = matrices.A
         frame = {f.name: vars(matrices)[f.name] for f in fields(Matrices)}
         self._frame = Matrices(**{**frame, "A": None})
@@ -211,7 +218,8 @@ class MatrixWindow:
         ``fix`` maps variable names to the values of out-of-window terms, which
         are folded into the right-hand side at their actual coefficient; a row
         that loses every term is dropped when its folded right-hand side
-        satisfies its sign within ``tol``, relative to the folded magnitude.
+        satisfies its sign within ``tol``, relative to the folded magnitude. A
+        selected row without any term in the parent is checked alike.
         ``drop`` maps constraint names to boolean masks of rows removed from
         the window before folding.
 
@@ -230,13 +238,19 @@ class MatrixWindow:
         indexers = _Indexers(selection)
         variables = _select(m.variables, indexers)
         constraints = _select(m.constraints, indexers)
+        dtype = m._dtypes["labels"]
         cols = _positions(
-            variables, m.variables.label_index.label_to_pos, indexers.distinct
+            _flat(variables, dtype),
+            m.variables.label_index.label_to_pos,
+            indexers.distinct,
         )
+        clabels = _flat(constraints, dtype)
         rows = _positions(
-            constraints, m.constraints.label_index.label_to_pos, indexers.distinct
+            clabels, m.constraints.label_index.label_to_pos, indexers.distinct
         )
-        rows = rows[~self._excluded(drop)[rows]]
+        excluded = self._excluded(drop)
+        rows = rows[~excluded[mat.clabels[rows]]]
+        self._check_empty(clabels, excluded, tol)
         if not cols.size:
             raise RestrictionError(
                 f"Cannot restrict model: the selection {dict(selection)} is empty."
@@ -267,7 +281,7 @@ class MatrixWindow:
         keep = counts > 0
         magnitude = np.bincount(outer_rows, np.abs(folded), minlength=rows.size)
         dropped = rows[~keep]
-        _check_dropped(
+        self._check_dropped(
             rhs[~keep], mat.sense[dropped], magnitude[~keep], mat.clabels[dropped], tol
         )
         indptr = indptr_from_counts(counts[keep], A.indptr.dtype)
@@ -295,10 +309,39 @@ class MatrixWindow:
             values[own] = aligned[labels[own] - start]
         return values * mat.var_scaling[cols]
 
+    def _check_dropped(
+        self,
+        rhs: np.ndarray,
+        sense: np.ndarray,
+        magnitude: np.ndarray,
+        clabels: np.ndarray,
+        tol: float,
+    ) -> None:
+        """Raise when a row without a term in the window violates its sign beyond ``tol``."""
+        violated = unsatisfied(rhs, sense, tol * np.maximum(1.0, magnitude))
+        if violated.any():
+            first = self._model.constraints.format_labels(clabels[violated][:1])
+            raise RestrictionError(
+                "Cannot window the matrices: constraint labels "
+                f"{clabels[violated].tolist()} have no term in the window and "
+                f"are unsatisfiable (rhs {rhs[violated].tolist()} against sign "
+                f"{sense[violated].tolist()}), first: {first}. Raise `tol` or "
+                "exclude the rows via `drop`."
+            )
+
+    def _check_empty(
+        self, clabels: np.ndarray, excluded: np.ndarray, tol: float
+    ) -> None:
+        """Raise for a selected row without a term that ``drop`` keeps and that fails."""
+        labels, rhs, sense = self._empty
+        kept = np.isin(labels, clabels) & ~excluded[labels]
+        magnitude = np.zeros(int(kept.sum()))
+        self._check_dropped(rhs[kept], sense[kept], magnitude, labels[kept], tol)
+
     def _excluded(self, drop: Mapping[str, Any] | None) -> np.ndarray:
-        """Whether each parent row is excluded by ``drop``, by matrix position."""
+        """Whether each parent row is excluded by ``drop``, by constraint label."""
         constraints = self._model.constraints
-        excluded = np.zeros(self._matrices.clabels.size, dtype=bool)
+        excluded = np.zeros(self._model._cCounter, dtype=bool)
         for name, given in (drop or {}).items():
             if name not in constraints:
                 raise RestrictionError(
@@ -311,6 +354,6 @@ class MatrixWindow:
                 raise RestrictionError(
                     f"{what} must be boolean, got dtype {mask.dtype}."
                 )
-            label_to_pos = constraints.label_index.label_to_pos
-            excluded[_active_positions(labels.values[mask], label_to_pos)] = True
+            dropped = labels.values[mask]
+            excluded[dropped[dropped != -1]] = True
         return excluded

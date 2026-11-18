@@ -2205,6 +2205,7 @@ class Model:
                     "`m.add_objective(...)` first (e.g. `m.add_objective(0 * x)` "
                     "for a pure feasibility problem)."
                 )
+            self.constraints.check_empty_rows()
             solved = remote.solve_on_remote(
                 self,
                 solver_name=solver_name,
@@ -2619,6 +2620,8 @@ class Model:
 
         if sanitize_infinities:
             self.constraints.sanitize_infinities()
+
+        self.constraints.check_empty_rows()
 
         self.objective._value = 0.0
         self.status = "ok"

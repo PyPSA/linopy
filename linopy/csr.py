@@ -583,6 +583,15 @@ class CSRStore(Store):
             counts -= np.bincount(rows, minlength=self.n_cells).astype(counts.dtype)
         return counts, self.csr.indices[keep], data[keep]
 
+    def has_live_terms(self, cells: np.ndarray) -> np.ndarray:
+        indptr = self.csr.indptr
+        counts = np.diff(indptr)
+        zeros = np.flatnonzero(self.csr.data == 0)
+        if zeros.size:
+            rows = np.searchsorted(indptr, zeros, side="right") - 1
+            counts = counts - np.bincount(rows, minlength=self.n_cells)
+        return counts[cells] > 0
+
     def variable_labels(self) -> np.ndarray:
         return self.csr.indices
 

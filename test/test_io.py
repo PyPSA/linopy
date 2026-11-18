@@ -870,6 +870,19 @@ def test_to_file_rejects_mismatched_extension(
     assert not (tmp_path / fn).exists()
 
 
+@pytest.mark.parametrize(
+    "io_api,fn",
+    [("lp", "problem.lp"), ("lp-polars", "problem.lp"), ("mps", "problem.mps")],
+)
+def test_to_file_raises_for_empty_row_that_cannot_hold(
+    model: Model, tmp_path: Path, io_api: str, fn: str
+) -> None:
+    model.add_constraints(0 * model.variables["x"] >= 5, name="con")
+    with pytest.raises(ValueError, match=r"cannot hold, first: con\[0\]"):
+        model.to_file(tmp_path / fn, io_api=io_api)
+    assert not (tmp_path / fn).exists()
+
+
 def test_to_blocks(tmp_path: Path) -> None:
     m: Model = Model()
 

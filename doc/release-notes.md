@@ -141,7 +141,6 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `LinearExpression.is_constant` is `True` for every expression without variables, also a sparse one and one whose terms a sum removed. ([\#1152](https://github.com/PyPSA/linopy/pull/1152))
 - `add_piecewise_formulation` no longer raises on a dimension labelled by tuples, e.g. `(period, timestep)` snapshots. ([\#1140](https://github.com/PyPSA/linopy/pull/1140))
 - The repr of a long expression shows the last terms of a `QuadraticExpression` after the `...` and prints the constant once. ([\#1023](https://github.com/PyPSA/linopy/pull/1023))
-- `solve` and `to_file` raise for a constraint row without a nonzero term that cannot hold, e.g. `0 * x >= 5`, which was left out silently and solved "optimal". This also covers a constant row such as `LinearExpression(12, m) == 13`. ([\#1170](https://github.com/PyPSA/linopy/issues/1170))
 
 *I/O*
 
@@ -150,6 +149,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 
 *Solvers*
 
+- `solve`, `to_file` and `Model.restrict` raise for a constraint row without a nonzero term that cannot hold, e.g. `0 * x >= 5`, instead of leaving it out and solving "optimal". ([\#1175](https://github.com/PyPSA/linopy/pull/1175))
 - With `add_objective(..., scaling=...)`, the solve log reports objective and dual bound in model units. ([\#1077](https://github.com/PyPSA/linopy/issues/1077))
 - CPLEX: "optimal with unscaled infeasibilities" is reported as `imprecise` and its solution is imported. ([\#368](https://github.com/PyPSA/linopy/issues/368))
 - HiGHS: a solve that stops at a limit without a solution no longer returns all-zero values, and a MIP no longer returns all-zero duals. `log_fn` and solver options also apply to a re-solve of a direct-API model. ([\#1130](https://github.com/PyPSA/linopy/issues/1130))

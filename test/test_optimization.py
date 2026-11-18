@@ -10,6 +10,7 @@ from __future__ import annotations
 import itertools
 import logging
 from typing import Any
+from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,7 @@ from xarray.testing import assert_allclose, assert_equal
 from linopy import GREATER_EQUAL, LESS_EQUAL, Model, Variable, solvers
 from linopy.common import to_path
 from linopy.expressions import LinearExpression
+from linopy.remote import RemoteHandler
 from linopy.solver_capabilities import (
     get_available_solvers_with_feature,
     solver_supports,
@@ -419,12 +421,14 @@ empty_row_params = list(
 )
 
 
-def empty_row_model(coeff: Any, rhs: Any) -> tuple[Model, Variable]:
+def empty_row_model(
+    coeff: Any, rhs: Any, sign: str = GREATER_EQUAL
+) -> tuple[Model, Variable]:
     m = Model()
     i = pd.RangeIndex(2, name="i")
     x = m.add_variables(lower=0, upper=10, coords=[i], name="x")
     coeffs = xr.DataArray(coeff, coords=[i]) if isinstance(coeff, list) else coeff
-    m.add_constraints(coeffs * x >= rhs, name="con")
+    m.add_constraints(coeffs * x, sign, rhs, name="con")
     m.add_objective(x.sum())
     return m, x
 
@@ -441,6 +445,45 @@ def test_empty_row_that_cannot_hold_raises(
     match = rf"Constraint `con` has {rows} row\(s\) .*cannot hold, first: con\[0\]"
     with pytest.raises(ValueError, match=match):
         m.solve("highs", io_api=io_api, sanitize_zeros=sanitize_zeros)
+
+
+@pytest.mark.skipif("highs" not in licensed_solvers, reason="highs not installed")
+@pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
+@pytest.mark.parametrize("sanitize_zeros", [True, False])
+@pytest.mark.parametrize(
+    "sign,rhs,holds",
+    [
+        (">=", 5, False),
+        (">=", -5, True),
+        ("<=", -5, False),
+        ("<=", 5, True),
+        ("==", 1e-8, False),
+        ("==", 1e-10, True),
+    ],
+)
+def test_empty_row_is_checked_against_its_sign(
+    sign: str, rhs: float, holds: bool, sanitize_zeros: bool, sparse: bool
+) -> None:
+    m, _ = empty_row_model([0.0, 1.0], xr.DataArray([rhs, 1.0], dims="i"), sign)
+    if sparse:
+        m.constraints["con"].to_sparse()
+    if holds:
+        assert m.solve("highs", sanitize_zeros=sanitize_zeros) == ("ok", "optimal")
+        return
+    with pytest.raises(ValueError, match=r"cannot hold, first: con\[0\]"):
+        m.solve("highs", sanitize_zeros=sanitize_zeros)
+
+
+@pytest.mark.parametrize("remote", [False, True], ids=["mock", "remote"])
+def test_empty_row_that_cannot_hold_raises_before_mock_or_remote_solve(
+    remote: bool,
+) -> None:
+    m, _ = empty_row_model(0, 5)
+    handler = Mock(spec=RemoteHandler)
+    kwargs: dict[str, Any] = {"remote": handler} if remote else {"mock_solve": True}
+    with pytest.raises(ValueError, match="cannot hold"):
+        m.solve(**kwargs)
+    handler.solve_on_remote.assert_not_called()
 
 
 @pytest.mark.skipif("highs" not in licensed_solvers, reason="highs not installed")

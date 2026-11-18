@@ -211,6 +211,13 @@ class Store(ABC):
         """
 
     @abstractmethod
+    def has_live_terms(self, cells: np.ndarray) -> np.ndarray:
+        """
+        Per cell selected by the boolean ``cells``, whether it holds a term
+        with a label and a nonzero coefficient.
+        """
+
+    @abstractmethod
     def variable_labels(self) -> np.ndarray:
         """
         Variable labels of all stored terms, zero coefficients included, as
@@ -756,6 +763,12 @@ class DenseStore(Store):
         coeffs, vars_, keep = self._active_mask(present)
         counts = np.count_nonzero(keep, axis=-1).reshape(-1)
         return counts, vars_[keep], coeffs[keep]
+
+    def has_live_terms(self, cells: np.ndarray) -> np.ndarray:
+        coeffs, vars_ = self._term_views()
+        live = vars_ != -1
+        live &= coeffs != 0
+        return live.any(axis=-1).reshape(-1)[cells]
 
     def variable_labels(self) -> np.ndarray:
         return self.ds.vars.values.ravel()

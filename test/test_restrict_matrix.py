@@ -157,6 +157,32 @@ def test_folded_residual_passes_within_tol_or_when_dropped(
     assert window.matrices.clabels.size == 2
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "raises"),
+    [
+        ({"time": TIME[:3]}, True),
+        ({"time": TIME[1:3]}, False),
+        ({"time": TIME[:3], "drop": {"pin": TIME == 0}}, False),
+    ],
+    ids=["selected", "outside", "dropped"],
+)
+def test_selected_row_without_terms_is_checked_against_its_sign(
+    kwargs: dict[str, Any], raises: bool
+) -> None:
+    m = Model()
+    x = m.add_variables(lower=0, upper=10, coords=[TIME], name="x")
+    m.add_constraints(xr.DataArray(TIME != 0, coords=[TIME]) * x >= 2, name="pin")
+    m.add_objective(x.sum())
+    m.constraints.sanitize_zeros()
+    if raises:
+        with pytest.raises(RestrictionError, match=r"unsatisfiable.*pin\[0\]"):
+            m.restrict(**kwargs)
+        return
+    window = m.restrict(**kwargs).solve(solver_name="highs", output_flag=False)
+
+    assert window.termination_condition == "optimal"
+
+
 def test_advance_keeps_the_tolerance() -> None:
     window = pinned_model("==", 1e-7).restrict(time=TIME[1:3], fix=ZERO_X, tol=1e-6)
     window.advance(time=TIME[2:4])

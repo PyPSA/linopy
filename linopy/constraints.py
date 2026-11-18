@@ -1018,7 +1018,7 @@ class Constraint:
         rows = self._label_values() != -1
         rows &= unsatisfied(self.rhs.values.ravel(), sense, DROPPED_ROW_TOL)
         if rows.any():
-            rows &= self._lhs._store.terms(active=rows)[0] == 0
+            rows[rows] = ~self._lhs._store.has_live_terms(rows)
         return rows
 
     def active_labels(self) -> np.ndarray:

@@ -1234,6 +1234,7 @@ class Solver(ABC, Generic[EnvType]):
         if isinstance(diff, RebuildReason):
             self._fall_back_to_rebuild(diff, rebuild, disallow_rebuild)
             return diff
+        model.constraints.check_empty_rows()
         n_vars = model.variables.label_index.n_active_vars
         n_cons = model.constraints.label_index.n_active_cons
         if self._apply_or_rebuild(diff, n_vars, n_cons, rebuild, disallow_rebuild):
