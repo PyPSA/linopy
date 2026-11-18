@@ -707,6 +707,27 @@ def test_a_where_guards_what_a_row_reads_at_its_own_coordinate(
     assert built.rhs.values.tolist()[1:] == pytest.approx(rhs)
 
 
+@pytest.mark.parametrize(
+    "when",
+    [
+        pytest.param("shift(a / b > 0.1, along=t, offset=1)", id="shift"),
+        pytest.param("at(a / b > 0.1, by=succ[u])", id="lookup"),
+        pytest.param("count(a / b > 0.1, over=t) >= 1", id="count"),
+    ],
+)
+def test_a_where_does_not_guard_what_a_condition_reads_at_another_coordinate(
+    when: str,
+) -> None:
+    region = {"on": {"when": when, "expression": "a"}}
+    spec = with_(
+        quotient("x <= r", where="b > 0"),
+        expressions={"r": {"dims": ["t"], "cases": region, "otherwise": 0}},
+        **SUCC,
+    )
+    with pytest.raises(SpecDataError, match="divide of 'a', 'b' is not finite at t=0"):
+        Model.from_spec(spec, SUCC_DATA)
+
+
 def test_a_where_guards_a_shift_along_the_axes_it_does_not_move() -> None:
     """``b > 0`` masks s=p, where ``a / b`` is inf, and the shift reads s=q only."""
     row = {
