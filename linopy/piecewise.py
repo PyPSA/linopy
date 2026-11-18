@@ -554,8 +554,6 @@ def _breakpoints_from_slopes(
             (slopes_arr.count(BREAKPOINT_DIM) != xp_arr.count(BREAKPOINT_DIM) - 1).any()
         ):
             raise ValueError("Slope count must be x_point count minus one per entity")
-        if bool((xp_arr.count(BREAKPOINT_DIM) < 1).any()):
-            raise ValueError("At least one x_point is required per entity")
         if isinstance(y0, Real):
             initial = xr.full_like(template, float(y0), dtype=float)
         elif isinstance(y0, DataArray):

@@ -3,7 +3,8 @@ Public multidimensional slope integration contracts.
 
 Failure list: snapshot/name coordinates are lost; shared x or y0 fails to
 broadcast; leading alignment shifts a piece; ragged padding integrates a
-missing piece; malformed counts, interior holes or infinity go unnoticed.
+missing piece; malformed counts, interior holes, infinity or a mapping y0
+go unnoticed.
 Existing tests cover one entity dimension, not snapshot/name arrays. These
 independent arithmetic expectations require no production test seam.
 """
@@ -139,3 +140,9 @@ def test_invalid_initial_values_are_rejected(invalid: str, message: str) -> None
         y0 = np.inf
     with pytest.raises(ValueError, match=message):
         Slopes(slopes, y0=y0).to_breakpoints(x)
+
+
+def test_mapping_initial_values_are_rejected() -> None:
+    x, slopes = arrays()
+    with pytest.raises(TypeError, match="scalar or DataArray y0"):
+        Slopes(slopes, y0={"a": 1.0, "b": 2.0}).to_breakpoints(x)
