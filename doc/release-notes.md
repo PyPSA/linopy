@@ -150,6 +150,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 
 - `to_netcdf` handles timezone-aware datetimes in indexes, coordinates and `Model.parameters`. ([\#1021](https://github.com/PyPSA/linopy/pull/1021))
 - Object-dtype parameters, e.g. strings with `NaN` holes, round-trip through netcdf with their holes. Mixed-type object arrays raise a `TypeError` on write.
+- MPS export raises for indicator constraints instead of silently dropping them. ([\#1186](https://github.com/PyPSA/linopy/issues/1186))
 
 *Solvers*
 
