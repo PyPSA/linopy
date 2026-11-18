@@ -46,7 +46,9 @@ def fold(name: str, ctx: Context) -> xr.DataArray:
     refuse_holes(f"expression '{name}'", [declared.expression], ctx)
     value = evaluate(declared.expression, ctx)
     if isinstance(value, xr.DataArray):
-        return without_strays(value).rename(name).transpose(*declared.dims, ...)
+        return (
+            without_strays(value).rename(name).transpose(*ctx.frame(declared.dims), ...)
+        )
     return xr.DataArray(float(cast(float, value)), name=name)
 
 
@@ -200,7 +202,7 @@ def _dual(constraint: str, ctx: Context) -> xr.DataArray:
     if renamed in built:
         reported = built[renamed]._dual
     elif any(c._dual is not None for c in built.values()):
-        dims = ctx.program.constraints[constraint].dims
+        dims = ctx.frame(ctx.program.constraints[constraint].dims)
         shape = [len(ctx.coords[d]) for d in dims]
         coords = {d: ctx.coords[d] for d in dims}
         reported = xr.DataArray(np.full(shape, np.nan), coords, dims=dims)
