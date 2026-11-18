@@ -8,7 +8,7 @@ from __future__ import annotations
 import io
 import types
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Hashable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -244,7 +244,7 @@ CURVE_SOURCES = {
 }
 
 
-def framed(default: tuple[str, ...], order: list[str]) -> tuple[str, ...]:
+def framed(default: tuple[Hashable, ...], order: list[str]) -> tuple[Hashable, ...]:
     """The dims of an entry built as *default*, the ones *order* names moved to the front."""
     first = tuple(d for d in order if d in default)
     return (*first, *(d for d in default if d not in first))
@@ -290,7 +290,7 @@ def test_dim_order_solves_to_the_default_up_to_transposition(
     default = solved(spec, CURVE_SOURCES, sparse=backend.sparse)
     ordered = solved(spec, CURVE_SOURCES, sparse=backend.sparse, dim_order=order)
     assert ordered.objective.value == pytest.approx(default.objective.value)
-    pairs = [
+    pairs: list[tuple[Mapping[Any, xr.DataArray], Mapping[Any, xr.DataArray]]] = [
         (default.solution, ordered.solution),
         (default.dual, ordered.dual),
         (evaluate(spec, default), evaluate(spec, ordered, dim_order=order)),
