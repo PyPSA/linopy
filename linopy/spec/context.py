@@ -137,7 +137,8 @@ class Context:
     narrows the finiteness check to the rows a constraint builds, and
     ``subject`` names what is being built in its refusals. ``memo`` is
     shared by every context replaced from one. ``rename`` gives the model
-    name of a variable or constraint the program declares.
+    name of a variable or constraint the program declares. ``dim_order``
+    names the dims :meth:`frame` puts first.
     """
 
     model: Model
@@ -150,6 +151,12 @@ class Context:
     subject: str = "the spec"
     memo: Memo = field(default_factory=Memo, compare=False, repr=False)
     rename: Callable[[str], str] = field(default=str, compare=False, repr=False)
+    dim_order: tuple[str, ...] = ()
+
+    def frame(self, dims: tuple[str, ...]) -> tuple[str, ...]:
+        """*dims* of an entry, those ``dim_order`` names first, in its order, the rest after in name order, as mathspec states them."""
+        first = tuple(d for d in self.dim_order if d in dims)
+        return (*first, *(d for d in dims if d not in first))
 
 
 def is_empty(dims: Iterable[str], ctx: Context) -> bool:

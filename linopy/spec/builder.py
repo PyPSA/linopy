@@ -5,7 +5,9 @@ A build hands every variable to linopy as its term, then adds special-ordered
 sets, constraints, the objective and the named expressions that carry a
 variable term; which linopy call each construct becomes is one branch of
 :func:`linopy.spec.evaluator.evaluate`. Everything built is framed in the
-name order of its dims, the order mathspec sorts every ``dims:`` list into.
+order :meth:`~linopy.spec.context.Context.frame` gives its dims: the dims
+``dim_order`` names first, the rest in the name order mathspec sorts every
+``dims:`` list into.
 """
 
 from __future__ import annotations
@@ -104,7 +106,7 @@ def _variables(ctx: Context) -> None:
         ctx.model.add_variables(
             lower=lower,
             upper=upper,
-            coords={d: ctx.coords[d] for d in declared.dims},
+            coords={d: ctx.coords[d] for d in ctx.frame(declared.dims)},
             name=ctx.rename(name),
             mask=mask,
             binary=declared.domain == "binary",
@@ -162,7 +164,11 @@ def _constraints(ctx: Context) -> None:
             )
             term, other = carried(term, other)
         ctx.model.add_constraints(
-            _framed(term, row.dims), sense, other, name=ctx.rename(name), mask=mask
+            _framed(term, row.dims, ctx),
+            sense,
+            other,
+            name=ctx.rename(name),
+            mask=mask,
         )
 
 
@@ -306,19 +312,27 @@ def _expressions(ctx: Context) -> None:
             continue
         reference = ms.ExpressionReference(name, body, dims=declared.dims)
         value = cast(Term, evaluate(reference, ctx))
-        ctx.model.add_expressions(_framed(value, declared.dims), name=name)
+        ctx.model.add_expressions(_framed(value, declared.dims, ctx), name=name)
 
 
 def _framed(
-    term: Term, dims: tuple[str, ...]
+    term: Term, dims: tuple[str, ...], ctx: Context
 ) -> LinearExpression | QuadraticExpression:
     """
-    *term* with its dimensions in the order of the entry's dims, sorted by
-    name, without stray coordinates. A dimension the entry declares and the term lacks is
-    what the other side of a comparison brings in.
+    *term* with its dimensions in the order :meth:`Context.frame` gives the
+    entry's *dims*, without stray coordinates. A dimension the entry declares
+    and the term lacks is what the other side of a comparison brings in, and
+    lands after the term's own, as a piecewise breakpoint dim does; one
+    ``dim_order`` names is spread onto the term to take its place in front.
     """
     expression = without_strays(as_expression(term))
-    order = [d for d in dims if d in expression.coord_dims]
+    order = [
+        d for d in ctx.frame(dims) if d in expression.coord_dims or d in ctx.dim_order
+    ]
+    lacking = {d: ctx.coords[d] for d in order if d not in expression.coord_dims}
+    if lacking:
+        shape = [len(index) for index in lacking.values()]
+        expression = expression + xr.DataArray(np.zeros(shape), coords=lacking)
     if isinstance(expression, LinearExpression) and expression.is_sparse:
         store = expression._store.transpose(order)
         return LinearExpression._from_store(store, expression.model)
