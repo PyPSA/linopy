@@ -19,7 +19,7 @@ import numpy as np
 import xarray as xr
 from mathspec import program as ms
 
-from linopy.constants import FACTOR_DIM, TERM_DIM
+from linopy.constants import FACTOR_DIM, TERM_DIM, EmptiedRowWarning
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec.context import Context, Term, Value, as_expression, is_empty
 from linopy.spec.errors import SpecDataError, first_coordinates
@@ -37,6 +37,7 @@ from linopy.spec.where import admits_a_row, as_linopy_mask, evaluate_where
 from linopy.variables import Variable
 
 _FLIPPED: dict[str, ms.ConstraintSense] = {"==": "==", "<=": ">=", ">=": "<="}
+_COMPARE = {"==": operator.eq, "<=": operator.le, ">=": operator.ge}
 _SENSE = {"minimize": "min", "maximize": "max"}
 
 
@@ -140,7 +141,6 @@ def _constraints(ctx: Context) -> None:
             ctx.memo.skipped(row.lhs, row.rhs)
             continue
         rows = evaluate_where(row.where, ctx)
-        mask = as_linopy_mask(rows)
         scoped = replace(ctx, rows=rows, subject=f"constraint '{name}'")
         refuse_holes(scoped.subject, [row.lhs, row.rhs], ctx, rows)
         lhs, rhs, sense = row.lhs, row.rhs, row.sense
@@ -149,11 +149,10 @@ def _constraints(ctx: Context) -> None:
         term, other = _sides(name, lhs, rhs, rows, scoped)
         if any(term.sizes[d] == 0 for d in term.coord_dims):
             continue
-        dead = _emptied(term, rows)
-        if ctx.memo.fused and (bool(dead.any()) or _constant(term, other)):
-            term, other = _sides(name, lhs, rhs, rows, unfused(scoped))
-            dead = _emptied(term, rows)
-        _check_live(name, row, term, other, dead, ctx)
+        emptied = _emptied(term, other, rows)
+        if bool(emptied.any()):
+            _check_emptied(name, row, term, other, emptied)
+            rows = rows & ~emptied
         if _constant(term, other):
             continue
         if isinstance(other, xr.DataArray):
@@ -163,7 +162,11 @@ def _constraints(ctx: Context) -> None:
             )
             term, other = carried(term, other)
         ctx.model.add_constraints(
-            _framed(term, row.dims), sense, other, name=ctx.rename(name), mask=mask
+            _framed(term, row.dims),
+            sense,
+            other,
+            name=ctx.rename(name),
+            mask=as_linopy_mask(rows),
         )
 
 
@@ -180,21 +183,6 @@ def _constant(*sides: Value) -> bool:
     return all(
         not isinstance(side, Term) or as_expression(side).is_constant for side in sides
     )
-
-
-def _emptied(term: Term, rows: xr.DataArray) -> xr.DataArray:
-    """
-    The rows *rows* keeps where *term* holds no variable term and is not absent.
-
-    An absent row is not emptied: absence spread through arithmetic, a masked
-    variable or a vacated translation, takes the row with it. A bare variable
-    term is never emptied: a row of it exists exactly where the variable does.
-    """
-    if isinstance(term, Variable):
-        return xr.DataArray(False)
-    store = cast(LinearExpression, term)._store
-    alive = store.dataarray(store.has_terms() | np.isnan(store.const), "alive")
-    return rows & ~alive
 
 
 def _linear(name: str, side: Value, rows: xr.DataArray) -> Value:
@@ -221,58 +209,84 @@ def _linear(name: str, side: Value, rows: xr.DataArray) -> Value:
     return LinearExpression(side.data.assign(vars=vars), side.model)
 
 
-def _check_live(
+def _emptied(term: Term, other: Value, rows: xr.DataArray) -> xr.DataArray:
+    """
+    The rows *rows* keeps where neither side holds a variable term and neither is absent.
+
+    An absent row is not emptied: absence spread through arithmetic, a masked
+    variable or a vacated translation, takes the row with it. A row of a bare
+    variable exists exactly where the variable does, so it is never emptied.
+    """
+    held = _held(term) | _held(other)
+    absent = _constant_of(term).isnull() | _constant_of(other).isnull()
+    return rows & ~held & ~absent
+
+
+def _held(side: Value) -> xr.DataArray:
+    """Per row, whether *side* holds a variable term."""
+    if isinstance(side, Variable):
+        return side.labels != -1
+    if not isinstance(side, LinearExpression):
+        return xr.DataArray(False)
+    store = side._store
+    return store.dataarray(store.has_terms(), "held")
+
+
+def _constant_of(side: Value) -> xr.DataArray:
+    """The constant of *side*, NaN where it is absent."""
+    if isinstance(side, Variable):
+        return xr.where(side.labels != -1, 0.0, np.nan)
+    return constant_of(side)
+
+
+def _check_emptied(
     name: str,
     declared: ms.Constraint,
     term: Term,
     other: Value,
-    dead: xr.DataArray,
-    ctx: Context,
+    emptied: xr.DataArray,
 ) -> None:
     """
-    Refuse the rows *dead* names, which the data emptied of every variable term.
+    Drop with a warning the rows *emptied* names where they hold, refuse them where they cannot.
 
-    Such a row reads as ``0 sense rhs``: linopy carries no column there, the
-    row leaves the problem and the constraint silently stops binding. Where
-    every variable of the row declares a ``missing:`` number, the constant
-    left is what the math says, so a row whose two sides are equal there is
-    warned about rather than refused.
+    The data left such a row without a variable term, so it reads as
+    ``constant sense constant``, compared exactly as written. A row that
+    holds constrains nothing; one that cannot hold makes the problem
+    infeasible, and linopy, which carries no row without a term, would drop
+    it silently.
     """
-    if not bool(dead.any()):
-        return
-    said = (
-        f"constraint '{name}': {int(dead.sum())} row(s) hold no variable term once the data "
-        f"is attached, the first at {first_coordinates(dead, 3)}. Nothing is left to constrain there, so "
-        f"the row leaves the problem without saying so."
-    )
-    valued = all(
-        ctx.program.variables[v].missing != "absent"
-        for v in ms.variables_of(declared.lhs, declared.rhs)
-    )
-    if valued and not _binds(other, constant_of(term), dead):
-        warnings.warn(
-            f"{said} Every variable there takes its missing: number and the two sides "
-            f"are equal, so the row is trivially true.",
-            UserWarning,
-            stacklevel=2,
+    lhs, rhs = _constant_of(term), _constant_of(other)
+    if flipped(declared):
+        lhs, rhs = rhs, lhs
+    holds = _COMPARE[declared.sense](lhs, rhs)
+    failing = emptied & ~holds
+    said = f"constraint '{name}': {{}} row(s) hold no variable term once the data is attached"
+    if bool(failing.any()):
+        raise SpecDataError(
+            f"{said.format(int(failing.sum()))} and cannot hold, the first at "
+            f"{_quoted(failing, lhs, rhs, declared.sense)}.\n"
+            f"  Mask them out with a where on the constraint, if the row should not exist there.\n"
+            f"  Supply the rows of the variables, if the row is meant to bind."
         )
-        return
-    supply = (
-        "  Supply the rows of the variables, if the row is meant to bind."
-        if valued
-        else "  Declare missing: 0 on the variables, if an absent term is a zero there."
-    )
-    raise SpecDataError(
-        f"{said}\n"
-        f"  Mask them out with a where on the constraint, if the row should not exist there.\n"
-        f"{supply}"
+    warnings.warn(
+        f"{said.format(int(emptied.sum()))}, the first at "
+        f"{_quoted(emptied, lhs, rhs, declared.sense)}. Each holds, so it is dropped.",
+        EmptiedRowWarning,
+        stacklevel=2,
     )
 
 
-def _binds(other: Value, const: xr.DataArray, dead: xr.DataArray) -> bool:
-    """Whether the side without the variable term differs from the constant *const* left on a row *dead* names."""
-    differs = xr.DataArray(other) != const
-    return bool((differs & dead).any())
+def _quoted(
+    flags: xr.DataArray, lhs: xr.DataArray, rhs: xr.DataArray, sense: str
+) -> str:
+    """The first row *flags* names, with the constants its two sides reduce to."""
+    first = np.unravel_index(int(np.argmax(flags.values)), flags.shape)
+    at = dict(zip(flags.dims, first))
+    left, right = (
+        float(side.broadcast_like(flags).transpose(*flags.dims)[at])
+        for side in (lhs, rhs)
+    )
+    return f"{first_coordinates(flags, 1)}: {left!r} {sense} {right!r}"
 
 
 def _objective(ctx: Context) -> None:
@@ -281,8 +295,9 @@ def _objective(ctx: Context) -> None:
         return
     refuse_holes("the objective", [declared.expression], ctx)
     expr = evaluate(declared.expression, ctx)
-    if ctx.memo.fused and _constant(expr):
-        expr = evaluate(declared.expression, unfused(ctx))
+    if _constant(expr):
+        expr = evaluate(declared.expression, replace(unfused(ctx), zeroes=False))
+        unfused(ctx)
     if not isinstance(expr, Term):
         raise SpecDataError(
             "the objective carries no variable term once the data is attached, so there is nothing to optimize"

@@ -420,9 +420,20 @@ def _through(array: Array, columns: ms.JoinColumns, ctx: Context) -> Array:
 
 
 def _variable(name: str, ctx: Context) -> Value:
+    """
+    Variable *name* as its term, or in a fold as its solved values.
+
+    Where it has no label it is absent, or its ``missing:`` number; one
+    without a label at all is that constant, a term without a variable.
+    """
     variable = ctx.model.variables[ctx.rename(name)]
     missing = ctx.program.variables[name].missing
     if not ctx.solved:
+        labels = variable.labels
+        fill = np.nan if missing == "absent" else float(missing)
+        if labels.size and not bool((labels.values != -1).any()):
+            const = xr.full_like(labels, fill, dtype=float)
+            return operators.constant_term(ctx.model, const)
         return variable if missing == "absent" else variable.fillna(missing)
     if "solution" not in variable.data:
         raise AttributeError(
@@ -499,13 +510,19 @@ def _made(node: _Binary, left: Value, right: Value, ctx: Context) -> Value:
     if _subtracts(node):
         op = operator.sub
     kind = type(node).__name__.lower()
+    if isinstance(node, ms.Multiply) and _of_terms(node, left, right):
+        left, right = _as_data_if_constant(left), _as_data_if_constant(right)
     if isinstance(left, Term) or isinstance(right, Term):
         left, right = _off_rows(left, ctx), _off_rows(right, ctx)
         if isinstance(node, ms.Add):
             a, b = constant_of(left), constant_of(right)
             refuse_made(kind, (node,), op, a, b, ctx)
         made = op(*_paired(left, right))
-        return _without_dead_terms(made) if isinstance(node, ms.Multiply) else made
+        if not isinstance(node, ms.Multiply):
+            return made
+        if ctx.zeroes:
+            made = _without_zeroed_terms(made, left, right)
+        return _without_dead_terms(made)
     if not isinstance(left, xr.DataArray) and not isinstance(right, xr.DataArray):
         return op(left, right)
     a, b = xr.DataArray(left), xr.DataArray(right)
@@ -631,6 +648,33 @@ def _merged(
             return LinearExpression._from_store(summed, terms[0].model)
     signed = [-term if flip else term for term, flip in zip(terms, negate)]
     return merge(signed, cls=LinearExpression)
+
+
+def _as_data_if_constant(value: Value) -> Value:
+    """
+    A term without a variable term as the data it is, so a product of it
+    and another term scales that term rather than multiplying two terms, its
+    absence a hole.
+    """
+    if isinstance(value, LinearExpression) and value.is_constant:
+        return value.const
+    return value
+
+
+def _without_zeroed_terms(made: Value, left: Value, right: Value) -> Value:
+    """
+    A linear *made*, the product of a term and data, without the terms the data zeroes.
+
+    Where the data is zero the product is the term's constant times zero:
+    a constant, and a row left with nothing but such terms holds no
+    variable term.
+    """
+    if not isinstance(made, LinearExpression) or type(made) is not LinearExpression:
+        return made
+    data = right if isinstance(left, Term) else left
+    if isinstance(data, Term) or not bool(np.any(np.asarray(data) == 0)):
+        return made
+    return LinearExpression._from_store(made._store.prune(), made.model)
 
 
 def _without_dead_terms(made: Value) -> Value:

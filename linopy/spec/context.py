@@ -144,6 +144,8 @@ class Context:
     shared by every context replaced from one. ``rename`` gives the model
     name of a variable or constraint the program declares. ``fuse`` lets a
     build sum a term scaled by sparse data from its live cells alone.
+    ``zeroes`` makes a term the data scales by zero the constant it is
+    there, so a row left with such terms alone holds no variable term.
     """
 
     model: Model
@@ -157,6 +159,7 @@ class Context:
     memo: Memo = field(default_factory=Memo, compare=False, repr=False)
     rename: Callable[[str], str] = field(default=str, compare=False, repr=False)
     fuse: bool = True
+    zeroes: bool = True
 
 
 def is_empty(dims: Iterable[str], ctx: Context) -> bool:
