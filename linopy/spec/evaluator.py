@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import functools
 import operator
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import replace
 from typing import TypeAlias, TypeVar, assert_never, cast
 
 import numpy as np
@@ -93,11 +94,7 @@ def _evaluated(node: ms.Expression, ctx: Context) -> Value:
     if isinstance(node, ms.WindowSum):
         return _moved(node, _operand(node.operand, widened(node, ctx)), ctx, None)
     if isinstance(node, ms.Cases):
-        regions = (
-            _in_region(evaluate(region.value, ctx), evaluate_where(region.when, ctx))
-            for region in node.regions
-        )
-        return functools.reduce(lambda a, b: operator.add(*_paired(a, b)), regions)
+        return _cases(node, ctx)
     assert_never(node)
 
 
@@ -124,18 +121,24 @@ def _data_under(node: ms.Expression, ctx: Context) -> None:
     shift or window. A use of every other operand is consumed unbuilt.
     """
     if isinstance(node, ms.Cases):
-        for region in node.regions:
-            evaluate_where(region.when, ctx)
+        for region, rows in _regions(node, ctx):
+            _data_of(region.value, _narrowed(ctx, rows))
+        return
     if isinstance(node, ms.Translate | ms.WindowSum):
         _partition(node.partition, ctx)
         _amount(_amount_of(node), ctx)
     inner = widened(node, ctx)
     for operand in ms.children(node):
-        if not ms.carries_variable(operand):
-            evaluate(operand, inner)
-            continue
-        ctx.memo.used(operand)
-        _data_under(operand, inner)
+        _data_of(operand, inner)
+
+
+def _data_of(operand: ms.Expression, ctx: Context) -> None:
+    """Evaluate *operand* if it holds no variable, else what it reads beside its terms."""
+    if not ms.carries_variable(operand):
+        evaluate(operand, ctx)
+        return
+    ctx.memo.used(operand)
+    _data_under(operand, ctx)
 
 
 def _sum(
@@ -364,6 +367,42 @@ def _in_region(value: Value, rows: xr.DataArray) -> Value:
     if isinstance(value, float | int):
         return rows * value
     return as_expression(value).where(rows, 0)
+
+
+def _cases(node: ms.Cases, ctx: Context) -> Value:
+    """
+    The cases of *node* added up, each its value where it applies and a hard
+    zero elsewhere.
+
+    A case's value is evaluated and checked only where it applies. A case
+    that applies nowhere is not evaluated, as its value is never read: a
+    zero over the dimensions of *node* stands in for it.
+    """
+    parts = [
+        _in_region(evaluate(region.value, _narrowed(ctx, rows)), rows)
+        for region, rows in _regions(node, ctx)
+    ]
+    if len(parts) < len(node.regions):
+        parts.append(_zeros(node, ctx))
+    total = functools.reduce(lambda a, b: operator.add(*_paired(a, b)), parts)
+    if not ctx.solved and ms.carries_variable(node) and isinstance(total, xr.DataArray):
+        return operators.constant_term(ctx.model, total)
+    return total
+
+
+def _regions(node: ms.Cases, ctx: Context) -> Iterator[tuple[ms.Region, xr.DataArray]]:
+    """The cases of *node* that apply somewhere, each with where it applies; a use of every other is consumed unread."""
+    for region in node.regions:
+        rows = evaluate_where(region.when, ctx)
+        if bool(rows.any()):
+            yield region, rows
+        else:
+            ctx.memo.skipped(region.value)
+
+
+def _narrowed(ctx: Context, rows: xr.DataArray) -> Context:
+    """*ctx* checking only the rows *rows* keeps of the ones it checks, so a case's value is refused only where it applies, as :func:`_marks` reads it."""
+    return replace(ctx, rows=rows if ctx.rows is None else ctx.rows & rows)
 
 
 def _amount(amount: int | str, ctx: Context) -> operators.Amount:
