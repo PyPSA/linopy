@@ -80,15 +80,38 @@ def _evaluated(node: ms.Expression, ctx: Context) -> Value:
     if isinstance(node, ms.Sum):
         return _sum(node, ctx)
     if isinstance(node, ms.Join):
-        return looked_up(_operand(node.operand, ctx), node.columns, ctx)
+        return looked_up(_operand(node.operand, _inner(node, ctx)), node.columns, ctx)
     if isinstance(node, ms.Translate):
-        return _moved(node, _operand(node.operand, ctx), ctx, node.fill)
+        return _moved(node, _operand(node.operand, _inner(node, ctx)), ctx, node.fill)
     if isinstance(node, ms.WindowSum):
-        return _moved(node, _operand(node.operand, ctx), ctx, None)
+        return _moved(node, _operand(node.operand, _inner(node, ctx)), ctx, None)
     if isinstance(node, ms.Cases):
         regions = (_case(region, ctx) for region in node.regions)
         return functools.reduce(lambda a, b: operator.add(*_paired(a, b)), regions)
     assert_never(node)
+
+
+def _inner(node: ms.Expression, ctx: Context) -> Context:
+    """
+    *ctx* for the operand of *node*: a sum, a window, a shift and a lookup
+    read their operand at other coordinates along the axes they move, so the
+    rows *ctx* checks are widened along those axes to every row there.
+    """
+    if ctx.rows is None:
+        return ctx
+    along = [d for d in _moved_dims(node) if d in ctx.rows.dims]
+    return replace(ctx, rows=ctx.rows.any(along)) if along else ctx
+
+
+def _moved_dims(node: ms.Expression) -> tuple[str, ...]:
+    """The dimensions along which *node* reads its operand at other coordinates than its own."""
+    if isinstance(node, ms.Sum):
+        return tuple(axis.dimension for axis in node.over)
+    if isinstance(node, ms.Translate | ms.WindowSum):
+        return (node.along,)
+    if isinstance(node, ms.Join):
+        return node.columns.dropped_dims
+    return ()
 
 
 def _sums_nothing(node: ms.Expression, ctx: Context) -> bool:
@@ -113,7 +136,7 @@ def _data_under(node: ms.Expression, ctx: Context) -> None:
     variable, the conditions of its cases, the amount and partition of a
     shift or window. A use of every other operand is consumed unbuilt.
     """
-    scopes = [ctx] * len(ms.children(node))
+    scopes = [_inner(node, ctx)] * len(ms.children(node))
     if isinstance(node, ms.Cases):
         scopes = [_within(evaluate_where(r.when, ctx), ctx) for r in node.regions]
     if isinstance(node, ms.Translate | ms.WindowSum):
@@ -135,7 +158,7 @@ def _sum(
     the operand through the relation, the plain ones by summing them away.
     *of* evaluates an operand, :func:`evaluate` when not given.
     """
-    value = functools.partial(_operand, ctx=ctx) if of is None else of
+    value = functools.partial(_operand, ctx=_inner(node, ctx)) if of is None else of
     operand = node.operand
     plain = [axis.dimension for axis in node.over if axis.column is None]
     if isinstance(operand, ms.Join) and operand.columns.axes:
