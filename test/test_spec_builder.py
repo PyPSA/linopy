@@ -345,7 +345,6 @@ def absent_row(expression: str) -> dict[str, Any]:
         pytest.param("x <= a", [1, 2], id="constant-side"),
         pytest.param("x <= shift(a, along=t, offset=1, edge=0)", [0, 2], id="shift"),
         pytest.param("x <= at(z, by=grp[s])", [2], id="at"),
-        pytest.param("sum_back(a * x, along=t, window=2) <= 4", [1, 2], id="sum-back"),
     ],
 )
 def test_an_absent_row_masks_the_row_it_reaches(
@@ -353,6 +352,12 @@ def test_an_absent_row_masks_the_row_it_reaches(
 ) -> None:
     row = Model.from_spec(absent_row(expression), ABSENT_DATA).constraints["row"]
     assert T[(row.labels != -1).to_numpy()].tolist() == kept
+
+
+def test_a_row_of_nothing_but_an_absent_window_is_refused_like_sum() -> None:
+    spec = absent_row("sum_back(a * x, along=t, window=2) <= 4")
+    with pytest.raises(SpecDataError, match="1 row.*hold no variable term.*at t=0"):
+        Model.from_spec(spec, ABSENT_DATA)
 
 
 def test_an_absent_summand_is_dropped() -> None:
@@ -1011,6 +1016,23 @@ def test_a_missing_row_in_a_where_reads_the_way_missing_says(
         spec, {"f": ["a", "b"], "count": pd.DataFrame({"f": ["a"], "count": [0]})}
     )
     assert (m.variables["x"].labels != -1).values.tolist() == [True, kept]
+
+
+def test_a_where_reads_a_window_of_absent_rows_as_the_sum_of_the_rest() -> None:
+    spec = {
+        "dimensions": {"t": {"dtype": "int", "ordered": True}},
+        "parameters": {"p": {"dims": ["t"], "missing": "absent"}},
+        "variables": {
+            "x": {
+                "dims": ["t"],
+                "where": "sum_back(p, along=t, window=2) <= 1",
+                "bounds": {"lower": 0, "upper": 1},
+            }
+        },
+    }
+    p = pd.DataFrame({"t": [1, 2], "p": [1.0, 5.0]})
+    m = Model.from_spec(spec, {"t": T, "p": p})
+    assert (m.variables["x"].labels != -1).values.tolist() == [True, True, False]
 
 
 @pytest.mark.parametrize(

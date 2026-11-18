@@ -278,6 +278,61 @@ def test_a_trailing_sum_wider_than_its_axis_wraps_onto_the_whole_axis() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("key", "data", "expected"),
+    [
+        pytest.param("sum-back", {}, [1, 1, 0, 8], id="sum-back"),
+        pytest.param("sum-back-wrap", {}, [9, 1, 0, 8], id="sum-back-wrap"),
+        pytest.param("sum-back-in-groups", {}, [1, 1, 0, 8], id="sum-back-in-groups"),
+        pytest.param(
+            "sum-back-group-width", {}, [1, 0, 0, 8], id="sum-back-group-width"
+        ),
+        pytest.param(
+            "sum-back-group-width",
+            {"width": pd.DataFrame({"s": S, "width": [1, 0]})},
+            [1, 0, 0, 0],
+            id="width-of-zero-is-zero",
+        ),
+        pytest.param(
+            "sum-back-in-groups",
+            {"season_of": pd.DataFrame({"t": TT[:3], "s": list("aab")})},
+            [1, 1, 0, np.nan],
+            id="member-in-no-group-keeps-no-row",
+        ),
+        pytest.param(
+            "sum-back-group-width",
+            {"width": pd.DataFrame({"s": S[:1], "width": [1]})},
+            [1, 0, np.nan, np.nan],
+            id="absent-width-keeps-no-row",
+        ),
+    ],
+)
+def test_a_defined_window_of_absent_terms_sums_to_zero_like_sum(
+    key: str, data: dict[str, Any], expected: list[float]
+) -> None:
+    live = xr.DataArray([True, False, False, True], coords=[TT])
+    x = {**operator_spec()["variables"]["x"], "where": "live"}
+    spec = with_(
+        operator_spec(),
+        parameters={
+            "live": {"dims": ["t"], "dtype": "bool"},
+            "width": {"dims": ["s"], "dtype": "int", "missing": "absent"},
+        },
+        variables={"x": x},
+    )
+    m = solved(spec, {**OPERATOR_DATA, "live": live, **data})
+    name = key.replace("-", "_")
+    want = xr.DataArray(expected, coords=[TT], name=f"probe_{name}")
+    built = m.constraints[f"link_{name}"].labels != -1
+    assert built.values.tolist() == want.notnull().values.tolist()
+    xr.testing.assert_allclose(
+        m.solution[f"y_{name}"].where(built), want.rename(f"y_{name}")
+    )
+    xr.testing.assert_allclose(
+        evaluate(spec, m, f"probe_{name}")[f"probe_{name}"], want
+    )
+
+
 # ---------------------------------------------------------------------------
 # grouped sum
 # ---------------------------------------------------------------------------
