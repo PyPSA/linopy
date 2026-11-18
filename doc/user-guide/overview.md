@@ -111,10 +111,13 @@ data, and let linopy build it.
     data in `model.parameters`, reading results, saving and rebuilding,
     typesetting and variants.
 
-linopy supports a subset of mathspec. A constraint row that absence
-leaves without terms (a `missing: absent` parameter, a `missing: 0` parameter such as `0 == load`, or a `where:`-masked
-variable inside a sum) is refused, where mathspec skips and reports it;
-linopy is stricter here ([\#993](https://github.com/PyPSA/linopy/issues/993)). `store=True` stores
+linopy supports a subset of mathspec. A constraint row that the data leaves
+without a variable term (a `missing: 0` parameter such as `0 == load`, a shift
+past its edge, or a sum whose terms are all absent or `where:`-masked) reads
+`constant sense constant`. linopy drops it with a `linopy.EmptiedRowWarning`
+where it holds and refuses it where it cannot, e.g. `0 == 5`. mathspec skips
+and reports such a row; linopy is stricter here
+([\#993](https://github.com/PyPSA/linopy/issues/993)). `store=True` stores
 only relations of one key column and one value column, and raises
 `SpecDataError` for any other.
 

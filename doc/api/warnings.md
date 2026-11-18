@@ -5,6 +5,10 @@
 These warning classes can be silenced or filtered via
 [`warnings.filterwarnings()`][warnings.filterwarnings].
 
+::: linopy.EmptiedRowWarning
+    options:
+      heading_level: 3
+
 ::: linopy.EvolvingAPIWarning
     options:
       heading_level: 3

@@ -29,7 +29,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `Model.from_spec` builds faster: it reads a shifted axis by position, checks a relation's labels against the hash table of their dimension, decides a `where` early when a condition holds nowhere, and sets a scalar scaling factor without broadcasting it. ([\#1169](https://github.com/PyPSA/linopy/pull/1169))
 - `Model.from_spec(..., rename=...)` builds each variable and constraint under the name a mapping or a function gives it, e.g. `Generator-p` for the spec's `Generator_p`. Pass the same `rename` to `linopy.spec.evaluate`. ([\#1160](https://github.com/PyPSA/linopy/pull/1160))
 - A missing row takes the value that `missing:` sets, e.g. `missing: 0`, in bounds, expressions and conditions alike. A parameter's `where:` limits its coordinates, and a dimension's `one_of:` its labels. Built objects follow the name order of their dimensions, as mathspec sorts every `dims:` list. ([\#1137](https://github.com/PyPSA/linopy/pull/1137))
-- Limits: a constraint row that absence leaves without terms raises, where mathspec skips it ([\#993](https://github.com/PyPSA/linopy/issues/993)). `store=True` stores only relations with one key and one value column. A product of two variables in a constraint is accepted only where the data leaves it no live row.
+- Limits: a constraint row that the data leaves without terms raises where it cannot hold, where mathspec skips it ([\#993](https://github.com/PyPSA/linopy/issues/993)). `store=True` stores only relations with one key and one value column. A product of two variables in a constraint is accepted only where the data leaves it no live row.
 
 **Other features**
 
@@ -131,6 +131,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `Model.from_spec` builds a linear objective when the data sets all quadratic coefficients to zero. ([\#1141](https://github.com/PyPSA/linopy/pull/1141))
 - `Model.from_spec` no longer refuses an infinite parameter times a variable absent there, where no row is built. ([\#1143](https://github.com/PyPSA/linopy/pull/1143))
 - `Model.from_spec` adds no constraint where every variable of it is masked, where it raised that both sides are constant. ([\#1154](https://github.com/PyPSA/linopy/pull/1154))
+- `Model.from_spec` checks a constraint row that the data leaves without a variable term, e.g. through a shift's edge, a sum of absent terms or a zero coefficient: it drops the row with a [`linopy.EmptiedRowWarning`][linopy.EmptiedRowWarning] where it holds and refuses it where it cannot, e.g. `0 == 5`, where it refused both or built `0 * x >= 5`. ([\#1164](https://github.com/PyPSA/linopy/pull/1164))
 - `LinearExpression(data, model)` no longer raises on a `.sel` over full coordinates. ([\#1144](https://github.com/PyPSA/linopy/pull/1144))
 - `LinearExpression.from_constant` builds on the model's store, so a sparse model's constant stays sparse and adding it emits no `PerformanceWarning`. ([\#1145](https://github.com/PyPSA/linopy/pull/1145))
 - `Model.from_spec(..., sparse=True)` keeps a `shift` whose offset differs per entity sparse, without a `PerformanceWarning`. ([\#1145](https://github.com/PyPSA/linopy/pull/1145))
