@@ -308,6 +308,8 @@ def objective_to_file(
 
     sense = m.objective.sense
     f.write(f"{sense}\n\nobj:\n\n".encode())
+    if m.objective.expression.is_constant:
+        return
     df = m.objective.to_polars()
 
     if m.is_linear:
