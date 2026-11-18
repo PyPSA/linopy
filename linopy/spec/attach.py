@@ -433,6 +433,16 @@ def _twice(index: pd.Index) -> list[Any]:
 
 
 def _outside(labels: pd.Index, known: pd.Index) -> list[Any]:
+    """
+    The distinct *labels* that are not in *known*.
+
+    When the labels are of the same kind as *known* and *known* holds no
+    label twice, the index of *known* looks them all up at once. Only when
+    that finds a label missing are the missing labels collected.
+    """
+    alike = _kind_name(labels.dtype) == _kind_name(known.dtype)
+    if alike and known.is_unique and (known.get_indexer(labels) >= 0).all():
+        return []
     return labels[~labels.isin(known)].unique().tolist()
 
 

@@ -306,6 +306,49 @@ def test_constraint_scaling_setter_broadcasts_to_rows() -> None:
     np.testing.assert_allclose(m.matrices.b, [2.0, 2.0])
 
 
+def _entry(kind: str) -> tuple[pd.Index, Any]:
+    m = Model()
+    i = pd.Index(["a", "b"], name="i")
+    x = m.add_variables(coords=[i], name="x")
+    return i, x if kind == "variable" else m.add_constraints(x >= 1, name="c")
+
+
+def _masked_entry(kind: str) -> Any:
+    m = Model()
+    i = pd.Index(["a", "b", "c"], name="i")
+    j = pd.RangeIndex(2, name="j")
+    mask = xr.DataArray([[True, False], [False, True], [True, True]], coords=[i, j])
+    x = m.add_variables(coords=[i, j], name="x", mask=mask)
+    return x if kind == "variable" else m.add_constraints(x >= 1, name="c", mask=mask)
+
+
+@pytest.mark.parametrize("kind", ["variable", "constraint"])
+@pytest.mark.parametrize("factor", [1, 2.5, np.float32(4.0)])
+def test_scalar_scaling_setter_fills_every_cell(kind: str, factor: Any) -> None:
+    i, entry = _entry(kind)
+    entry.scaling = factor
+
+    assert entry.scaling.dtype == np.float64
+    assert entry.scaling.indexes["i"].equals(i)
+    np.testing.assert_array_equal(entry.scaling.values, [float(factor)] * 2)
+
+
+@pytest.mark.parametrize("kind", ["variable", "constraint"])
+@pytest.mark.parametrize("factor", [0, -1.0, np.nan, np.inf])
+def test_scalar_scaling_setter_validation(kind: str, factor: float) -> None:
+    _, entry = _entry(kind)
+    with pytest.raises(ValueError, match="finite positive"):
+        entry.scaling = factor
+
+
+@pytest.mark.parametrize("kind", ["variable", "constraint"])
+def test_scalar_scaling_on_a_masked_grid_equals_the_full_factor(kind: str) -> None:
+    scalar, full = _masked_entry(kind), _masked_entry(kind)
+    scalar.scaling = 2.5
+    full.scaling = xr.full_like(full.labels, 2.5, dtype=float)
+    xr.testing.assert_identical(scalar.scaling, full.scaling)
+
+
 @pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS is not installed")
 def test_scaled_solve_preserves_user_units() -> None:
     reference = Model()

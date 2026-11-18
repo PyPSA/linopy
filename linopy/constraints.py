@@ -74,7 +74,7 @@ from linopy.constants import (
 )
 from linopy.containers import LabelContainer
 from linopy.csr import CSRStore, _densify_notice
-from linopy.scaling import validate_scaling
+from linopy.scaling import scalar_scaling, validate_scaling
 from linopy.semantics import assign_flat_coords, check_user_nan
 from linopy.store import NETCDF_STORE_ATTRS, DenseStore, Reason, Store, as_sparse
 from linopy.types import (
@@ -629,14 +629,21 @@ class Constraint:
 
     @scaling.setter
     def scaling(self, value: ConstantLike) -> None:
-        scaling = broadcast_to_coords(
+        label = f"scaling for constraint '{self.name}'"
+        template = self._grid_template()
+        factor = scalar_scaling(value, label)
+        if factor is not None:
+            filled = np.full(template.shape, factor.item())
+            self._scaling = DataArray(filled, template.coords, template.dims)
+            return
+        broadcast = broadcast_to_coords(
             value,
             coords=self.labels.coords,
             dims=self.coord_dims,
-            label=f"scaling for constraint '{self.name}'",
+            label=label,
         )
-        scaling = validate_scaling(scaling, f"scaling for constraint '{self.name}'")
-        self._scaling = _on_grid(scaling, self._grid_template(), "scaling")
+        scaling = validate_scaling(broadcast, label)
+        self._scaling = _on_grid(scaling, template, "scaling")
 
     @property
     def is_indicator(self) -> bool:
