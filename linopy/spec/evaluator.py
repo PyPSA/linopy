@@ -94,11 +94,12 @@ def _evaluated(node: ms.Expression, ctx: Context) -> Value:
     if isinstance(node, ms.Sum):
         return _sum(node, ctx)
     if isinstance(node, ms.Join):
-        return looked_up(_operand(node.operand, ctx), node.columns, ctx)
+        operand = _operand(node.operand, _inner(node, ctx))
+        return looked_up(operand, node.columns, ctx)
     if isinstance(node, ms.Translate):
-        return _moved(node, _operand(node.operand, ctx), ctx, node.fill)
+        return _moved(node, _operand(node.operand, _inner(node, ctx)), ctx, node.fill)
     if isinstance(node, ms.WindowSum):
-        return _moved(node, _operand(node.operand, ctx), ctx, None)
+        return _moved(node, _operand(node.operand, _inner(node, ctx)), ctx, None)
     if isinstance(node, ms.Cases):
         return _cases(node, ctx)
     assert_never(node)
@@ -152,6 +153,26 @@ def _narrowed(ctx: Context, rows: xr.DataArray) -> Context:
     return replace(ctx, rows=rows if ctx.rows is None else ctx.rows & rows)
 
 
+def _inner(node: ms.Expression, ctx: Context) -> Context:
+    """
+    The context *node* evaluates its operand in: a shift, a window and a
+    lookup read their operand at other coordinates than their own along the
+    axes they move, so a narrowing of the rows checked does not reach
+    through them there.
+    """
+    if ctx.rows is None:
+        return ctx
+    moved: tuple[str, ...] = ()
+    if isinstance(node, ms.Translate | ms.WindowSum):
+        moved = (node.along,)
+    elif isinstance(node, ms.Join):
+        moved = tuple(node.columns.dim(role) for role in node.columns.joined)
+    along = [d for d in moved if d in ctx.rows.dims]
+    if not along:
+        return ctx
+    return replace(ctx, rows=ctx.rows.any(along))
+
+
 def _sums_nothing(node: ms.Expression, ctx: Context) -> bool:
     """Whether *node* is over a dimension without a coordinate, or sums an operand that is."""
     return is_empty((node.operand if isinstance(node, ms.Sum) else node).dims, ctx)
@@ -182,7 +203,7 @@ def _data_under(node: ms.Expression, ctx: Context) -> None:
         _partition(node.partition, ctx)
         _amount(_amount_of(node), ctx)
     for operand in ms.children(node):
-        _data_of(operand, ctx)
+        _data_of(operand, _inner(node, ctx))
 
 
 def _data_of(operand: ms.Expression, ctx: Context) -> None:
@@ -205,6 +226,8 @@ def _sum(
     operand, columns = _summed(node)
     if of is not None:
         return _closed(node, of(operand), columns, ctx)
+    if columns is not None:
+        ctx = _inner(node.operand, ctx)
     if ctx.fuse and not ctx.solved:
         factors, term = _factors_of(operand, ctx)
         if factors:

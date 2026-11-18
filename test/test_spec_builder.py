@@ -995,6 +995,22 @@ def test_a_region_is_refused_where_it_applies() -> None:
         Model.from_spec(cased("cap > 0", "pu / pu", "1"), UNRATED_AT_0)
 
 
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "x <= shift(a / b, along=t, offset=1, edge=0)",
+        "x <= sum_back(a / b, along=t, window=2)",
+    ],
+    ids=["shift", "window"],
+)
+def test_a_where_does_not_guard_what_an_operator_reads_from_another_row(
+    expression: str,
+) -> None:
+    """``b > 0`` is false at t=0 only, and row t=1 reads ``a / b`` at t=0."""
+    with pytest.raises(SpecDataError, match="divide of 'a', 'b' is not finite at t=0"):
+        Model.from_spec(quotient(expression, where="b > 0"), ZERO_AT_0)
+
+
 # ---------------------------------------------------------------------------
 # piecewise curves as SOS constraints
 # ---------------------------------------------------------------------------
