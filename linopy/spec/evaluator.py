@@ -358,12 +358,51 @@ def _weighted_sum(
     data = [read[i] for i in range(len(factors))]
     for product, _, _ in factors:
         ctx.memo.used(product)
+    if _prunes(ctx) and _sums_to_zero(factors, data, value, zeroed, ctx):
+        return operators.constant_term(ctx.model, _zeros(node, ctx))
     fused = None if zeroed else _fused(node, columns, factors, data, value, ctx)
     if fused is not None:
         return fused
     for factor, datum in reversed(list(zip(factors, data))):
         value = _scaled(factor, value, datum, ctx)
     return _closed(node, cast(Array, value), columns, ctx)
+
+
+def _sums_to_zero(
+    factors: Sequence[_Factor],
+    data: Sequence[Value],
+    value: Value,
+    zeroed: bool,
+    ctx: Context,
+) -> bool:
+    """
+    Whether a sum of the constant term *value* scaled by *factors* is zero at every cell, no step of it refused.
+
+    A constant of zeros and holes alone, or a factor of them where
+    *zeroed*, leaves every cell a zero or an absence, which a sum leaves
+    out. So it is where the constant and the data are finite, a hole
+    aside, and no divisor is zero: no step then makes a NaN of present
+    operands.
+    """
+    if not isinstance(value, LinearExpression) or not value.is_constant:
+        return False
+    const = np.asarray(value.const)
+    if not zeroed and not bool(((const == 0) | np.isnan(const)).all()):
+        return False
+    if not _finite_or_hole(const):
+        return False
+    for (product, _, _), datum in zip(factors, data):
+        datum = _off_rows(datum, ctx)
+        if not _finite_or_hole(datum):
+            return False
+        if isinstance(product, ms.Divide) and bool(np.any(np.asarray(datum) == 0)):
+            return False
+    return True
+
+
+def _finite_or_hole(value: Value) -> bool:
+    values = np.asarray(value)
+    return values.dtype.kind in "fiub" and not bool(np.isinf(values).any())
 
 
 def _scaled(factor: _Factor, value: Value, datum: Value, ctx: Context) -> Value:
@@ -670,7 +709,10 @@ def _made(node: _Binary, left: Value, right: Value, ctx: Context) -> Value:
         op = operator.sub
     kind = type(node).__name__.lower()
     if isinstance(node, ms.Multiply) and _of_terms(node, left, right):
-        left, right = _as_data_if_constant(left), _as_data_if_constant(right)
+        if _is_constant(right):
+            right = cast(Term, right).const
+        elif _is_constant(left):
+            left = cast(Term, left).const
     if isinstance(left, Term) or isinstance(right, Term):
         left, right = _off_rows(left, ctx), _off_rows(right, ctx)
         if isinstance(node, ms.Add):
@@ -809,15 +851,13 @@ def _merged(
     return merge(signed, cls=LinearExpression)
 
 
-def _as_data_if_constant(value: Value) -> Value:
+def _is_constant(value: Value) -> bool:
     """
-    A term without a variable term as the data it is, so a product of it
-    and another term scales that term rather than multiplying two terms, its
-    absence a hole.
+    Whether *value* is a term without a variable term: a product of it and
+    another term scales that term by its constant, as data, its absence a
+    hole, and stays a term.
     """
-    if isinstance(value, LinearExpression) and value.is_constant:
-        return value.const
-    return value
+    return isinstance(value, LinearExpression) and value.is_constant
 
 
 def _without_zeroed_terms(made: Value, left: Value, right: Value) -> Value:

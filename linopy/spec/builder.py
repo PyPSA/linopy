@@ -217,9 +217,11 @@ def _emptied(term: Term, other: Value, rows: xr.DataArray) -> xr.DataArray:
     variable or a vacated translation, takes the row with it. A row of a bare
     variable exists exactly where the variable does, so it is never emptied.
     """
-    held = _held(term) | _held(other)
+    left = rows & ~(_held(term) | _held(other))
+    if not bool(left.any()):
+        return left
     absent = _constant_of(term).isnull() | _constant_of(other).isnull()
-    return rows & ~held & ~absent
+    return left & ~absent
 
 
 def _held(side: Value) -> xr.DataArray:
