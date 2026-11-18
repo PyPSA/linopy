@@ -144,7 +144,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 
 *I/O*
 
-- A solve through an LP file no longer fails when the objective has no live variable, e.g. when all its variables are masked. ([\#1176](https://github.com/PyPSA/linopy/issues/1176))
+- A solve through an LP file no longer fails when the objective has no live variable, e.g. when all its variables are masked, or, with GLPK, when it is `0 * x`. ([\#1176](https://github.com/PyPSA/linopy/issues/1176))
 - `to_netcdf` handles timezone-aware datetimes in indexes, coordinates and `Model.parameters`. ([\#1021](https://github.com/PyPSA/linopy/pull/1021))
 - Object-dtype parameters, e.g. strings with `NaN` holes, round-trip through netcdf with their holes. Mixed-type object arrays raise a `TypeError` on write.
 

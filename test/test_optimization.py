@@ -1029,17 +1029,19 @@ def test_masked_variable_model_fillna_binds(
     assert (np.isclose(m.variables.x.solution[-2:], 10, rtol=tol)).all()
 
 
+@pytest.mark.parametrize("masked", [True, False])
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_objective_without_live_terms(
     solver: str,
     io_api: str,
     explicit_coordinate_names: bool,
+    masked: bool,
 ) -> None:
     m = Model()
-    x = m.add_variables(lower=0, name="x")
+    x = m.add_variables(lower=0, upper=1, name="x")
     z = m.add_variables(lower=0, coords=[range(2)], mask=pd.Series([False, False]))
     m.add_constraints(x >= 1)
-    m.add_objective(z.sum())
+    m.add_objective(z.sum() if masked else 0 * x)
     status, _ = m.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )
