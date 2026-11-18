@@ -14,7 +14,15 @@ from mathspec import program as ms
 from linopy.constants import FACTOR_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec import operators
-from linopy.spec.context import Array, Context, Term, Value, as_expression, is_empty
+from linopy.spec.context import (
+    Array,
+    Context,
+    Term,
+    Value,
+    as_expression,
+    is_empty,
+    widened,
+)
 from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.where import admitted, evaluate_where, groups_of, looked_up
 from linopy.variables import Variable
@@ -79,11 +87,11 @@ def _evaluated(node: ms.Expression, ctx: Context) -> Value:
     if isinstance(node, ms.Sum):
         return _sum(node, ctx)
     if isinstance(node, ms.Join):
-        return looked_up(_operand(node.operand, ctx), node.columns, ctx)
+        return looked_up(_operand(node.operand, widened(node, ctx)), node.columns, ctx)
     if isinstance(node, ms.Translate):
-        return _moved(node, _operand(node.operand, ctx), ctx, node.fill)
+        return _moved(node, _operand(node.operand, widened(node, ctx)), ctx, node.fill)
     if isinstance(node, ms.WindowSum):
-        return _moved(node, _operand(node.operand, ctx), ctx, None)
+        return _moved(node, _operand(node.operand, widened(node, ctx)), ctx, None)
     if isinstance(node, ms.Cases):
         regions = (
             _in_region(evaluate(region.value, ctx), evaluate_where(region.when, ctx))
@@ -121,12 +129,13 @@ def _data_under(node: ms.Expression, ctx: Context) -> None:
     if isinstance(node, ms.Translate | ms.WindowSum):
         _partition(node.partition, ctx)
         _amount(_amount_of(node), ctx)
+    inner = widened(node, ctx)
     for operand in ms.children(node):
         if not ms.carries_variable(operand):
-            evaluate(operand, ctx)
+            evaluate(operand, inner)
             continue
         ctx.memo.used(operand)
-        _data_under(operand, ctx)
+        _data_under(operand, inner)
 
 
 def _sum(
@@ -137,7 +146,7 @@ def _sum(
     the operand through the relation, the plain ones by summing them away.
     *of* evaluates an operand, :func:`evaluate` when not given.
     """
-    value = functools.partial(_operand, ctx=ctx) if of is None else of
+    value = functools.partial(_operand, ctx=widened(node, ctx)) if of is None else of
     operand = node.operand
     plain = [axis.dimension for axis in node.over if axis.column is None]
     if isinstance(operand, ms.Join) and operand.columns.axes:
