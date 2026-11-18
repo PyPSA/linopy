@@ -955,6 +955,46 @@ def test_a_row_is_emptied_only_where_neither_side_holds_a_variable(
     assert (m.constraints["r"].labels != -1).all()
 
 
+CASED_SPEC: dict[str, Any] = {
+    "dimensions": {"t": {"dtype": "int"}},
+    "parameters": {"cap": {"dims": ["t"]}, "pu": {"dims": ["t"]}},
+    "variables": {"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 1}}},
+    "constraints": {"limit": {"dims": ["t"], "expression": "x <= used"}},
+    "objective": {"sense": "maximize", "expression": "sum(x, over=t)"},
+}
+T2 = pd.Index([0, 1], name="t")
+UNRATED_AT_0 = {
+    "t": T2,
+    "cap": xr.DataArray([float("inf"), 5.0], coords=[T2]),
+    "pu": xr.DataArray([0.0, 1.0], coords=[T2]),
+}
+
+
+def cased(when: str, value: str, otherwise: str) -> dict[str, Any]:
+    used = {"dims": ["t"], "cases": {"case": {"when": when, "expression": value}}}
+    return with_(CASED_SPEC, expressions={"used": {**used, "otherwise": otherwise}})
+
+
+@pytest.mark.parametrize(
+    ("spec", "rhs"),
+    [
+        pytest.param(cased("cap == inf", "1", "cap * pu"), [1.0, 5.0], id="otherwise"),
+        pytest.param(cased("cap != inf", "cap * pu", "1"), [1.0, 5.0], id="case"),
+        pytest.param(cased("cap < 0", "pu / pu", "pu"), [0.0, 1.0], id="nowhere"),
+    ],
+)
+def test_a_region_is_checked_only_where_it_applies(
+    spec: dict[str, Any], rhs: list[float]
+) -> None:
+    m = Model.from_spec(spec, UNRATED_AT_0)
+    assert m.constraints["limit"].rhs.values.tolist() == rhs
+
+
+def test_a_region_is_refused_where_it_applies() -> None:
+    with pytest.raises(SpecDataError, match="divide of 'pu' is not finite at t=0"):
+        Model.from_spec(cased("cap > 0", "pu / pu", "1"), UNRATED_AT_0)
+
+
 # ---------------------------------------------------------------------------
 # piecewise curves as SOS constraints
 # ---------------------------------------------------------------------------
