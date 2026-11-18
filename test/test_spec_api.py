@@ -8,7 +8,7 @@ from __future__ import annotations
 import io
 import types
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from pathlib import Path
 from typing import Any
 
@@ -244,7 +244,7 @@ CURVE_SOURCES = {
 }
 
 
-def framed(default: tuple[str, ...], order: list[str]) -> tuple[str, ...]:
+def framed(default: tuple[Hashable, ...], order: list[str]) -> tuple[Hashable, ...]:
     """The dims of an entry built as *default*, the ones *order* names moved to the front."""
     first = tuple(d for d in order if d in default)
     return (*first, *(d for d in default if d not in first))
@@ -293,7 +293,10 @@ def test_dim_order_solves_to_the_default_up_to_transposition(
     pairs = [
         (default.solution, ordered.solution),
         (default.dual, ordered.dual),
-        (evaluate(spec, default), evaluate(spec, ordered, dim_order=order)),
+        (
+            xr.Dataset(evaluate(spec, default)),
+            xr.Dataset(evaluate(spec, ordered, dim_order=order)),
+        ),
     ]
     for expected, got in pairs:
         assert set(got) == set(expected)
