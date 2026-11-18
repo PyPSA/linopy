@@ -706,18 +706,23 @@ def add_empty_row(m: Model, case: str) -> Variable:
 @pytest.mark.parametrize("case", EMPTY_ROWS)
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_empty_row_that_cannot_hold_makes_the_model_infeasible(
-    backend: Model,
-    case: str,
-    solver: str,
-    io_api: str,
-    explicit_coordinate_names: bool,
+    case: str, solver: str, io_api: str, explicit_coordinate_names: bool
 ) -> None:
-    add_empty_row(backend, case)
-    status, condition = backend.solve(
+    m = Model()
+    add_empty_row(m, case)
+    status, condition = m.solve(
         solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
     )
     assert status == "warning"
     assert "infeasible" in condition
+
+
+@pytest.mark.skipif("highs" not in direct_solvers, reason="highspy not installed")
+@pytest.mark.filterwarnings("ignore:.*cannot hold:UserWarning")
+def test_empty_row_that_cannot_hold_makes_a_sparse_model_infeasible() -> None:
+    m = Model(sparse=True)
+    add_empty_row(m, "all-absent-sum")
+    assert m.solve("highs", io_api="direct") == ("warning", "infeasible")
 
 
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)

@@ -1272,6 +1272,17 @@ def test_empty_rows_that_cannot_hold_are_named_once(tmp_path: Path, write: str) 
     assert "holds" not in hints[0]
 
 
+@pytest.mark.skipif("highs" not in available_solvers, reason="highspy not installed")
+@pytest.mark.parametrize("write", ["solve-mock", "solve-lp", "solve-direct"])
+def test_row_emptied_by_sanitize_zeros_is_named(tmp_path: Path, write: str) -> None:
+    m = Model()
+    x = m.add_variables(lower=0, coords=[pd.RangeIndex(2, name="i")], name="x")
+    m.add_constraints(1e-11 * x >= 5, name="tiny")
+    m.add_objective(x.sum())
+    with pytest.warns(UserWarning, match=r"2 constraint row\(s\).*: tiny\[0\], tiny"):
+        WRITERS[write](m, tmp_path)
+
+
 def test_empty_rows_that_hold_raise_no_warning(tmp_path: Path) -> None:
     m = Model()
     x = m.add_variables(lower=0, coords=[pd.RangeIndex(2, name="i")], name="x")

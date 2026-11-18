@@ -645,6 +645,13 @@ def constraints_to_file(
         m, explicit_coordinate_names=explicit_coordinate_names
     )
     scaled = variable_scaling is not None or constraint_scaling is not None
+    vlabels = m.variables.label_index.vlabels
+    if not vlabels.size and m.constraints.ncons:
+        raise ValueError(
+            "The model has constraint rows without a term, but no variable "
+            "to write them with."
+        )
+    empty_var = int(vlabels[0]) if vlabels.size else None
 
     f.write(b"\n\ns.t.\n\n")
     names = list(regular)
@@ -657,7 +664,8 @@ def constraints_to_file(
 
     for name in names:
         con = regular[name]
-        for df in map(Constraint.to_polars, con.iterate_slices(slice_size)):
+        for part in con.iterate_slices(slice_size):
+            df = part._to_polars(empty_var)
             if df.height == 0:
                 continue
             if scaled:

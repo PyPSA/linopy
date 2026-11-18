@@ -2203,8 +2203,6 @@ class Model:
         call, but not by garbage collection: a model that merely goes out of
         scope leaves its solver open.
         """
-        self._warn_empty_rows_that_cannot_hold()
-
         if mock_solve:
             return self._mock_solve(
                 sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
@@ -2226,6 +2224,7 @@ class Model:
                     "`m.add_objective(...)` first (e.g. `m.add_objective(0 * x)` "
                     "for a pure feasibility problem)."
                 )
+            self._warn_empty_rows_that_cannot_hold()
             solved = remote.solve_on_remote(
                 self,
                 solver_name=solver_name,
@@ -2292,6 +2291,7 @@ class Model:
                 self.constraints.sanitize_zeros()
             if sanitize_infinities:
                 self.constraints.sanitize_infinities()
+            self._warn_empty_rows_that_cannot_hold()
 
             try:
                 self.solver = None  # closes any previous solver
@@ -2640,6 +2640,7 @@ class Model:
 
         if sanitize_infinities:
             self.constraints.sanitize_infinities()
+        self._warn_empty_rows_that_cannot_hold()
 
         self.objective._value = 0.0
         self.status = "ok"

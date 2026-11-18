@@ -1259,26 +1259,25 @@ class Constraint:
         The resulting DataFrame represents a long table format of the all
         non-masked constraints with non-zero coefficients. It typically
         contains the columns `labels`, `coeffs`, `vars`, `rhs`, `sign`.
-        A row without a non-zero coefficient gets the single term
-        ``0 * first variable``, so it is written and reaches the solver.
 
         Returns
         -------
         df : polars.DataFrame
         """
+        return self._to_polars(None)
+
+    def _to_polars(self, empty_var: int | None) -> pl.DataFrame:
+        """
+        Long frame of :meth:`to_polars`. With ``empty_var``, a row without a
+        term gets the single term ``0 * empty_var``, so a writer keeps it.
+        """
         labels_flat = self._label_values()
         mask = labels_flat != -1
         counts, vars_, coeffs = self._lhs._store.terms(active=mask)
         empty = mask & (counts == 0)
-        if empty.any():
-            vlabels = self.model.variables.label_index.vlabels
-            if not vlabels.size:
-                raise ValueError(
-                    f"Constraint `{self.name}` has rows without a term, but the "
-                    "model has no variable to write them with."
-                )
+        if empty_var is not None and empty.any():
             starts = (np.cumsum(counts) - counts)[empty]
-            vars_ = np.insert(vars_, starts, vlabels[0])
+            vars_ = np.insert(vars_, starts, empty_var)
             coeffs = np.insert(coeffs, starts, 0.0)
             counts = np.where(empty, 1, counts)
         long = pl.DataFrame(

@@ -669,6 +669,15 @@ def test_constraint_to_polars(c: linopy.constraints.Constraint) -> None:
     assert isinstance(c.to_polars(), pl.DataFrame)
 
 
+def test_constraint_to_polars_has_no_term_for_an_empty_row(
+    m: Model, x: linopy.Variable
+) -> None:
+    coeffs = xr.DataArray(np.arange(10) % 2, coords=[x.indexes["first"]])
+    df = m.add_constraints(coeffs * x >= 5, name="half").to_polars()
+    assert df["labels"].n_unique() == 5
+    assert (df["coeffs"] == 1).all()
+
+
 def test_constraint_to_polars_mixed_signs(m: Model, x: linopy.Variable) -> None:
     """Test to_polars when a constraint has mixed sign values across dims."""
     # Use Constraint so sign data can be patched
