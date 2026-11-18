@@ -562,8 +562,8 @@ def test_an_edge_value_stands_in_for_the_vacated_row() -> None:
 @pytest.mark.parametrize(
     ("missing", "expression", "row"),
     [
-        pytest.param(0, "size >= relmax", "0.0 >= 0.5", id="zero"),
-        pytest.param(1, "size == relmax", "1.0 == 0.5", id="value"),
+        pytest.param(0, "size >= relmax", "0 >= 0.5", id="zero"),
+        pytest.param(1, "size == relmax", "1 == 0.5", id="value"),
     ],
 )
 def test_a_row_the_data_emptied_that_cannot_hold_is_refused(
@@ -572,7 +572,7 @@ def test_a_row_the_data_emptied_that_cannot_hold_is_refused(
     """``0 >= 0.5`` binds nothing linopy can carry, and dropping it would drop an infeasibility."""
     with pytest.raises(
         SpecDataError,
-        match=rf"(?s)constraint 'sized'.*cannot hold, the first at f='b': {row}.*Supply the rows",
+        match=rf"(?s)constraint 'sized'.*cannot hold, the first at f='b': {row}.*Fix the data",
     ):
         Model.from_spec(sized(missing, expression), ENVELOPE_DATA)
 
@@ -771,12 +771,12 @@ def test_a_dimension_with_no_members_empties_a_summed_row() -> None:
             SPARSE_SPEC, constraints={"budget": {"dims": [], "expression": row}}
         )
 
-    with pytest.warns(linopy.EmptiedRowWarning, match="the only row: 0.0 <= 0.0"):
+    with pytest.warns(linopy.EmptiedRowWarning, match="the only row: 0 <= 0"):
         assert (
             "budget"
             not in Model.from_spec(budget("sum(x, over=t) <= 0"), data).constraints
         )
-    with pytest.raises(SpecDataError, match="the only row: 0.0 >= 5.0"):
+    with pytest.raises(SpecDataError, match="the only row: 0 >= 5"):
         Model.from_spec(budget("sum(x, over=t) >= 5"), data)
 
 
@@ -892,17 +892,18 @@ def delayed(expression: str, load: float = 0.0) -> tuple[dict[str, Any], Any]:
     ("expression", "load", "row"),
     [
         pytest.param(f"{DELAYED_Y} == load", 0.0, None, id="edge-holds"),
-        pytest.param(f"{DELAYED_Y} == load", 5.0, "0.0 == 5.0", id="edge-fails"),
+        pytest.param(f"{DELAYED_Y} == load", 5.0, "0 == 5", id="edge-fails"),
+        pytest.param(f"{DELAYED_Y} + 0.1 + 0.2 == load", 0.3, None, id="rounding"),
         pytest.param(f"{ABSENT_Y} == load", 0.0, None, id="absent-sum-holds"),
-        pytest.param(f"{ABSENT_Y} == load", 5.0, "0.0 == 5.0", id="absent-sum-fails"),
+        pytest.param(f"{ABSENT_Y} == load", 5.0, "0 == 5", id="absent-sum-fails"),
         pytest.param("c * x <= load", 0.0, None, id="zero-coefficient-holds"),
-        pytest.param("c * x >= load + 5", 0.0, "0.0 >= 5.0", id="zero-coefficient"),
-        pytest.param("load + 5 <= c * x", 0.0, "5.0 <= 0.0", id="written-order"),
+        pytest.param("c * x >= load + 5", 0.0, "0 >= 5", id="zero-coefficient"),
+        pytest.param("load + 5 <= c * x", 0.0, "5 <= 0", id="written-order"),
         pytest.param(
-            "sum(c * y, over=k) >= 1", 0.0, "0.0 >= 1.0", id="zero-coefficient-sum"
+            "sum(c * y, over=k) >= 1", 0.0, "0 >= 1", id="zero-coefficient-sum"
         ),
         pytest.param(f"{DELAYED_Y} >= c * x", 0.0, None, id="both-sides-hold"),
-        pytest.param(f"{DELAYED_Y} - 1 >= c * x", 0.0, "-1.0 >= 0.0", id="both-sides"),
+        pytest.param(f"{DELAYED_Y} - 1 >= c * x", 0.0, "-1 >= 0", id="both-sides"),
     ],
 )
 def test_a_row_the_data_empties_is_checked_against_its_constants(
@@ -922,7 +923,9 @@ def test_a_row_the_data_empties_is_checked_against_its_constants(
 
 
 @pytest.mark.parametrize(
-    "expression", [f"{DELAYED_Y} <= x", f"x >= {DELAYED_Y}"], ids=["left", "right"]
+    "expression",
+    [f"{DELAYED_Y} <= x", f"x >= {DELAYED_Y}", f"{DELAYED_Y} == sum(y, over=k) - load"],
+    ids=["left", "right", "left-against-a-sum"],
 )
 def test_a_row_is_emptied_only_where_neither_side_holds_a_variable(
     expression: str,
@@ -931,6 +934,23 @@ def test_a_row_is_emptied_only_where_neither_side_holds_a_variable(
         warnings.simplefilter("error", linopy.EmptiedRowWarning)
         m = Model.from_spec(*delayed(expression))
     assert (m.constraints["r"].labels != -1).all()
+
+
+@pytest.mark.parametrize(
+    ("objective", "expressions"),
+    [
+        pytest.param("sum(c * x, over=t)", {}, id="inline"),
+        pytest.param("spend", {"spend": "sum(c * x, over=t)"}, id="named"),
+    ],
+)
+def test_an_objective_the_data_zeroes_still_solves(
+    objective: str, expressions: dict[str, str]
+) -> None:
+    """Dropping the terms the data zeroes must not leave the objective without a variable."""
+    spec, data = delayed("x >= load")
+    spec = with_(spec, objective={"expression": objective}, expressions=expressions)
+    m = solved(spec, {**data, "c": xr.zeros_like(FULL_C)})
+    assert m.termination_condition == "optimal"
 
 
 # ---------------------------------------------------------------------------

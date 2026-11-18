@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import operator
 import warnings
+from collections.abc import Callable
 from dataclasses import replace
 from typing import cast
 
@@ -21,6 +22,7 @@ from mathspec import program as ms
 
 from linopy.constants import FACTOR_DIM, TERM_DIM, EmptiedRowWarning
 from linopy.expressions import LinearExpression, QuadraticExpression
+from linopy.restrict.matrix import DROPPED_ROW_TOL
 from linopy.spec.context import Context, Term, Value, as_expression, is_empty
 from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.evaluator import (
@@ -36,7 +38,11 @@ from linopy.spec.where import admits_a_row, as_linopy_mask, evaluate_where
 from linopy.variables import Variable
 
 _FLIPPED: dict[str, ms.ConstraintSense] = {"==": "==", "<=": ">=", ">=": "<="}
-_COMPARE = {"==": operator.eq, "<=": operator.le, ">=": operator.ge}
+_VIOLATION: dict[str, Callable[[xr.DataArray], xr.DataArray]] = {
+    "==": abs,
+    "<=": lambda gap: gap,
+    ">=": operator.neg,
+}
 _SENSE = {"minimize": "min", "maximize": "max"}
 
 
@@ -244,23 +250,23 @@ def _check_emptied(
     Drop with a warning the rows *emptied* names where they hold, refuse them where they cannot.
 
     The data left such a row without a variable term, so it reads as
-    ``constant sense constant``, compared exactly as written. A row that
-    holds constrains nothing; one that cannot hold makes the problem
-    infeasible, and linopy, which carries no row without a term, would drop
-    it silently.
+    ``constant sense constant``, compared as written within
+    ``DROPPED_ROW_TOL``, the tolerance of :meth:`linopy.Model.restrict`. A
+    row that holds constrains nothing; one that cannot hold makes the
+    problem infeasible, and linopy, which carries no row without a term,
+    would drop it silently.
     """
     lhs, rhs = _constant_of(term), _constant_of(other)
     if flipped(declared):
         lhs, rhs = rhs, lhs
-    holds = _COMPARE[declared.sense](lhs, rhs)
-    failing = emptied & ~holds
+    failing = emptied & (_VIOLATION[declared.sense](lhs - rhs) > DROPPED_ROW_TOL)
     said = f"constraint '{name}': {{}} row(s) hold no variable term once the data is attached"
     if bool(failing.any()):
         raise SpecDataError(
             f"{said.format(int(failing.sum()))} and cannot hold, the first at "
             f"{_quoted(failing, lhs, rhs, declared.sense)}.\n"
             f"  Mask them out with a where on the constraint, if the row should not exist there.\n"
-            f"  Supply the rows of the variables, if the row is meant to bind."
+            f"  Fix the data that empties the row, if the row is meant to bind."
         )
     warnings.warn(
         f"{said.format(int(emptied.sum()))}, the first at "
@@ -280,7 +286,12 @@ def _quoted(
         float(side.broadcast_like(flags).transpose(*flags.dims)[at])
         for side in (lhs, rhs)
     )
-    return f"{first_coordinates(flags, 1)}: {left!r} {sense} {right!r}"
+    return f"{first_coordinates(flags, 1)}: {_number(left)} {sense} {_number(right)}"
+
+
+def _number(value: float) -> str:
+    """*value* in its shortest exact form, an integral one without a fraction."""
+    return repr(value).removesuffix(".0")
 
 
 def _objective(ctx: Context) -> None:
@@ -290,8 +301,9 @@ def _objective(ctx: Context) -> None:
     refuse_holes("the objective", [declared.expression], ctx)
     expr = evaluate(declared.expression, ctx)
     if _constant(expr):
-        expr = evaluate(declared.expression, _terms_dropped(ctx, zeroes=False))
-        _terms_dropped(ctx)
+        _forget_terms(ctx)
+        expr = evaluate(declared.expression, replace(ctx, zeroes=False))
+        _forget_terms(ctx)
     if not isinstance(expr, Term):
         raise SpecDataError(
             "the objective carries no variable term once the data is attached, so there is nothing to optimize"
@@ -301,8 +313,8 @@ def _objective(ctx: Context) -> None:
     )
 
 
-def _terms_dropped(ctx: Context, zeroes: bool = True) -> Context:
-    """*ctx* with the terms its memo keeps dropped, a term the data scales by zero pruned as *zeroes* says."""
+def _forget_terms(ctx: Context) -> None:
+    """Drop the terms the memo of *ctx* keeps, so the next evaluation makes them again."""
     values = ctx.memo.values
     for key in [
         k
@@ -310,7 +322,6 @@ def _terms_dropped(ctx: Context, zeroes: bool = True) -> Context:
         if isinstance(v, LinearExpression | QuadraticExpression)
     ]:
         del values[key]
-    return replace(ctx, zeroes=zeroes)
 
 
 def _linear_if_no_product(expr: Term) -> Term:

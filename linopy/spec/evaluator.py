@@ -262,11 +262,7 @@ def _combine(node: _Binary, ctx: Context) -> Value:
 
 
 def _is_constant(value: Value) -> bool:
-    """
-    Whether *value* is a term without a variable term: a product of it and
-    another term scales that term by its constant, as data, its absence a
-    hole, and stays a term.
-    """
+    """Whether *value* is a term without a variable term, which scales another term like data."""
     return isinstance(value, LinearExpression) and value.is_constant
 
 
@@ -278,10 +274,10 @@ def _without_zeroed_terms(made: Value, left: Value, right: Value) -> Value:
     a constant, and a row left with nothing but such terms holds no
     variable term.
     """
-    if not isinstance(made, LinearExpression) or type(made) is not LinearExpression:
+    if type(made) is not LinearExpression:
         return made
     data = right if isinstance(left, Term) else left
-    if isinstance(data, Term) or not bool(np.any(np.asarray(data) == 0)):
+    if not bool(np.any(np.asarray(data) == 0)):
         return made
     return LinearExpression._from_store(made._store.prune(), made.model)
 
