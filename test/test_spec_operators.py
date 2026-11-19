@@ -249,6 +249,38 @@ def test_a_missing_shift_amount_is_refused_where_a_live_row_reads_it(
         ]
 
 
+@pytest.mark.parametrize(
+    "within", ["", ", within=season_of[s]"], ids=["axis", "groups"]
+)
+@pytest.mark.parametrize("edge", ["edge=0", "edge='wrap'"])
+def test_an_absent_entity_offset_shifts_to_no_row(
+    backend: Model, edge: str, within: str
+) -> None:
+    e = pd.Index(["a", "b"], name="e")
+    shifted = f"shift(x, along=t, offset=lag, {edge}{within})"
+    spec = {
+        "dimensions": {
+            "t": {"dtype": "int", "ordered": True},
+            "s": {"dtype": "str"},
+            "e": {"dtype": "str"},
+        },
+        "relations": {"season_of": {"key": "t", "values": "s"}},
+        "parameters": {"lag": {"dims": ["e"], "dtype": "int", "missing": "absent"}},
+        "variables": {"x": {"dims": ["t", "e"]}},
+        "constraints": {"c": {"dims": ["t", "e"], "expression": f"x + {shifted} >= 0"}},
+    }
+    data = {
+        "t": TT,
+        "s": S,
+        "e": e,
+        "season_of": pd.DataFrame({"t": TT, "s": ["a", "a", "b", "b"]}),
+        "lag": pd.DataFrame({"e": ["a"], "lag": [1]}),
+    }
+    m = Model.from_spec(spec, data, sparse=backend.sparse)
+    live = m.constraints["c"].labels != -1
+    assert live.sum("t").values.tolist() == [4, 0]
+
+
 WINDOW_SPEC: dict[str, Any] = {
     "dimensions": {"t": {"dtype": "int", "ordered": True}},
     "parameters": {"v": {"dims": ["t"]}},
@@ -275,6 +307,61 @@ def test_a_trailing_sum_wider_than_its_axis_wraps_onto_the_whole_axis() -> None:
     want = xr.DataArray([V.sum()] * len(TT), coords={"t": TT}, name="recent")
     xr.testing.assert_allclose(
         evaluate(spec, solved(spec, WINDOW_DATA), "recent")["recent"], want
+    )
+
+
+@pytest.mark.parametrize(
+    ("key", "data", "expected"),
+    [
+        pytest.param("sum-back", {}, [1, 1, 0, 8], id="sum-back"),
+        pytest.param("sum-back-wrap", {}, [9, 1, 0, 8], id="sum-back-wrap"),
+        pytest.param("sum-back-in-groups", {}, [1, 1, 0, 8], id="sum-back-in-groups"),
+        pytest.param(
+            "sum-back-group-width", {}, [1, 0, 0, 8], id="sum-back-group-width"
+        ),
+        pytest.param(
+            "sum-back-group-width",
+            {"width": pd.DataFrame({"s": S, "width": [1, 0]})},
+            [1, 0, 0, 0],
+            id="width-of-zero-is-zero",
+        ),
+        pytest.param(
+            "sum-back-in-groups",
+            {"season_of": pd.DataFrame({"t": TT[:3], "s": list("aab")})},
+            [1, 1, 0, np.nan],
+            id="member-in-no-group-keeps-no-row",
+        ),
+        pytest.param(
+            "sum-back-group-width",
+            {"width": pd.DataFrame({"s": S[:1], "width": [1]})},
+            [1, 0, np.nan, np.nan],
+            id="absent-width-keeps-no-row",
+        ),
+    ],
+)
+def test_a_defined_window_of_absent_terms_sums_to_zero_like_sum(
+    key: str, data: dict[str, Any], expected: list[float]
+) -> None:
+    live = xr.DataArray([True, False, False, True], coords=[TT])
+    x = {**operator_spec()["variables"]["x"], "where": "live"}
+    spec = with_(
+        operator_spec(),
+        parameters={
+            "live": {"dims": ["t"], "dtype": "bool"},
+            "width": {"dims": ["s"], "dtype": "int", "missing": "absent"},
+        },
+        variables={"x": x},
+    )
+    m = solved(spec, {**OPERATOR_DATA, "live": live, **data})
+    name = key.replace("-", "_")
+    want = xr.DataArray(expected, coords=[TT], name=f"probe_{name}")
+    built = m.constraints[f"link_{name}"].labels != -1
+    assert built.values.tolist() == want.notnull().values.tolist()
+    xr.testing.assert_allclose(
+        m.solution[f"y_{name}"].where(built), want.rename(f"y_{name}")
+    )
+    xr.testing.assert_allclose(
+        evaluate(spec, m, f"probe_{name}")[f"probe_{name}"], want
     )
 
 
@@ -995,3 +1082,19 @@ def test_a_lookup_into_an_empty_dimension_reads_nothing() -> None:
     }
     m = Model.from_spec(spec, sources)
     assert int((m.constraints["cap"].labels != -1).sum()) == 1
+
+
+def test_a_grouped_sum_onto_a_mostly_empty_grid_does_not_warn() -> None:
+    from linopy.spec.operators import grouped_sum
+
+    rows = np.arange(200)
+    onto = {"a": pd.Index(rows, name="a"), "p": pd.Index(range(101), name="p")}
+    grouped = {"a": rows, "p": rows % 101}
+    summed = {}
+    for sparse in (True, False):
+        x = Model(sparse=sparse).add_variables(coords=[onto["a"]], name="x")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            summed[sparse] = grouped_sum(1 * x, {"a": rows}, grouped, onto)
+    assert summed[True].is_sparse
+    assert_linequal(summed[True], summed[False])

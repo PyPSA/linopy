@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import functools
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, TypeAlias
@@ -57,13 +57,15 @@ def build_into(
     store: bool,
     expressions: bool,
     rename: Rename | None = None,
+    dim_order: Sequence[str] | None = None,
 ) -> None:
     """
     Build *spec* with *sources* into the fresh *model*.
 
     With *store* its data goes into ``model.parameters``, with
     *expressions* its named expressions into ``model.expressions``, and
-    each variable and constraint under the name *rename* gives it.
+    each variable and constraint under the name *rename* gives it, its dims
+    in the order *dim_order* sets.
 
     Raises
     ------
@@ -81,10 +83,13 @@ def build_into(
         A constraint multiplies two variable-carrying operands.
     KeyError, ValueError
         What :func:`_renamer` raises for *rename*.
+    TypeError, ValueError
+        What :func:`_dim_order` raises for *dim_order*.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE, stacklevel=4)
+    order = _dim_order(dim_order)
     program, uses = _normalized(spec)
-    _build(model, program, uses, sources, store, expressions, rename)
+    _build(model, program, uses, sources, store, expressions, rename, order)
 
 
 def _build(
@@ -95,6 +100,7 @@ def _build(
     store: bool,
     expressions: bool,
     rename: Rename | None,
+    dim_order: tuple[str, ...],
 ) -> None:
     """
     The body of :func:`build_into`, in a frame of its own.
@@ -112,8 +118,35 @@ def _build(
     if store:
         unfilled = {name: raw(name).values for name in program.parameters}
         model.parameters = xr.Dataset(unfilled | relations, coords=attached.coords)
-    ctx = _context(attached, uses, model, raw, solved=False, rename=named)
+    ctx = _context(
+        attached, uses, model, raw, solved=False, rename=named, dim_order=dim_order
+    )
     build(ctx, expressions)
+
+
+def _dim_order(dim_order: Sequence[str] | None) -> tuple[str, ...]:
+    """
+    *dim_order* as the tuple :meth:`Context.frame` reads, empty for ``None``.
+
+    Raises
+    ------
+    TypeError
+        *dim_order* is a ``str``, which would read as one dim per character.
+    ValueError
+        *dim_order* names a dim twice.
+    """
+    if dim_order is None:
+        return ()
+    if isinstance(dim_order, str):
+        raise TypeError(
+            f"dim_order takes a sequence of dim names, not the str {dim_order!r}; "
+            f"pass [{dim_order!r}]"
+        )
+    order = tuple(dim_order)
+    twice = sorted(d for d, count in Counter(order).items() if count > 1)
+    if twice:
+        raise ValueError(f"dim_order names the dim {twice[0]!r} twice")
+    return order
 
 
 def _renamer(program: ms.Program, rename: Rename | None) -> Callable[[str], str]:
@@ -192,6 +225,7 @@ def evaluate(
     *names: str,
     sources: Sources | None = None,
     rename: Rename | None = None,
+    dim_order: Sequence[str] | None = None,
 ) -> dict[str, xr.DataArray]:
     """
     The named expressions *names* of *spec*, all in name order when none is named, folded over *model*.
@@ -201,7 +235,8 @@ def evaluate(
     ``Model.from_spec(..., store=True)`` writes it: a body over data alone
     needs no solve.
     A model built with ``Model.from_spec(..., rename=...)`` is read with the
-    same *rename*.
+    same *rename*, and each expression is laid out in the order *dim_order*
+    sets, as ``Model.from_spec(..., dim_order=...)`` lays out what it builds.
 
     Raises
     ------
@@ -215,10 +250,15 @@ def evaluate(
     SpecDataError
         The data does not fit the spec, or a body reads a missing row of a
         ``missing: refused`` parameter.
+    TypeError
+        *dim_order* is a ``str``.
+    ValueError
+        *dim_order* names a dim twice.
     """
     _warn_evolving_api("spec", EVOLVING_MESSAGE)
+    order = _dim_order(dim_order)
     program, uses = _normalized(spec)
-    return _folded(program, uses, model, names, sources, rename)
+    return _folded(program, uses, model, names, sources, rename, order)
 
 
 def _folded(
@@ -228,6 +268,7 @@ def _folded(
     names: tuple[str, ...],
     sources: Sources | None,
     rename: Rename | None,
+    dim_order: tuple[str, ...],
 ) -> dict[str, xr.DataArray]:
     """The body of :func:`evaluate`, in a frame of its own for the reason :func:`_build` gives."""
     for name in names:
@@ -235,7 +276,15 @@ def _folded(
             raise unknown("expression", name, program.expressions)
     named = _renamer(program, rename)
     attached = attach(program, _stored(program, model) if sources is None else sources)
-    ctx = _context(attached, uses, model, attached.read, solved=True, rename=named)
+    ctx = _context(
+        attached,
+        uses,
+        model,
+        attached.read,
+        solved=True,
+        rename=named,
+        dim_order=dim_order,
+    )
     return {name: fold(name, ctx) for name in names or program.expressions}
 
 
@@ -273,6 +322,7 @@ def _context(
     *,
     solved: bool,
     rename: Callable[[str], str],
+    dim_order: tuple[str, ...],
 ) -> Context:
     program = attached.program
     tables = (model, program, attached.coords, attached.relations)
@@ -282,7 +332,9 @@ def _context(
         parameter = raw(name)
         return Parameter(fill(program, name, parameter), parameter.present)
 
-    conditions = Context(*tables, unmasked, solved=solved, rename=rename)
+    conditions = Context(
+        *tables, unmasked, solved=solved, rename=rename, dim_order=dim_order
+    )
 
     def read(name: str) -> Parameter:
         if program.parameters[name].where is None:
@@ -298,6 +350,7 @@ def _context(
         solved=solved,
         memo=Memo(uses=dict(uses)),
         rename=rename,
+        dim_order=dim_order,
     )
 
 
