@@ -151,13 +151,17 @@ def _sum(
     the operand through the relation, the plain ones by summing them away.
     *of* evaluates an operand, :func:`evaluate` when not given.
     """
-    value = functools.partial(_operand, ctx=widened(node, ctx)) if of is None else of
     operand = node.operand
+    join = operand if isinstance(operand, ms.Join) and operand.columns.axes else None
+    inner = widened(node, ctx)
+    if join is not None:
+        inner = widened(join, inner)
+    value = functools.partial(_operand, ctx=inner) if of is None else of
     plain = [axis.dimension for axis in node.over if axis.column is None]
-    if isinstance(operand, ms.Join) and operand.columns.axes:
-        summed = _through(value(operand.operand), operand.columns, ctx)
-    else:
+    if join is None:
         summed = value(operand)
+    else:
+        summed = _through(value(join.operand), join.columns, ctx)
     for dimension in plain:
         summed = operators.sum_over(summed, dimension)
     return summed

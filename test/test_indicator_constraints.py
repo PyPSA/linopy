@@ -7,7 +7,8 @@ import pandas as pd
 import pytest
 
 import linopy
-from linopy import Constraint, Model, available_solvers, licensed_solvers
+from linopy import Constraint, Model, SolverFeature, available_solvers, licensed_solvers
+from linopy.solver_capabilities import solver_supports
 from linopy.variables import Variable
 
 requires_gurobi = pytest.mark.skipif(
@@ -335,6 +336,15 @@ class TestLPFile:
         assert "s.t." in content
         assert "= 1 ->" in content
 
+    def test_mps_raises(
+        self, mbx: tuple[Model, Variable, Variable], tmp_path: Path
+    ) -> None:
+        """MPS export refuses indicators instead of dropping them."""
+        m, b, x = mbx
+        m.add_indicator_constraints(b, 1, x, "<=", 5, name="ic0")
+        with pytest.raises(NotImplementedError, match="Indicator constraints"):
+            m.to_file(tmp_path / "test.mps")
+
 
 class TestSolve:
     """Solving models with indicator constraints."""
@@ -398,6 +408,24 @@ class TestSolve:
         m.solve(solver_name="gurobi")
         assert m.objective.value is not None
         assert np.isclose(m.objective.value, 5, atol=1e-6)
+
+    @pytest.mark.parametrize(
+        "solver",
+        [
+            s
+            for s in licensed_solvers
+            if solver_supports(s, SolverFeature.INDICATOR_CONSTRAINTS)
+        ],
+    )
+    def test_mps_solve_raises(
+        self, mbx: tuple[Model, Variable, Variable], solver: str
+    ) -> None:
+        """Solving via MPS raises instead of ignoring the indicator."""
+        m, b, x = mbx
+        m.add_indicator_constraints(b, 1, x, "<=", 5, name="ic0")
+        m.add_objective(x, sense="max")
+        with pytest.raises(NotImplementedError, match="Indicator constraints"):
+            m.solve(solver_name=solver, io_api="mps")
 
     def test_unsupported_solver_raises(
         self, mbx: tuple[Model, Variable, Variable]

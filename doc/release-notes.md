@@ -134,9 +134,12 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `Model.from_spec` builds a linear objective when the data sets all quadratic coefficients to zero. ([\#1141](https://github.com/PyPSA/linopy/pull/1141))
 - `Model.from_spec` no longer refuses an infinite parameter times a variable absent there, where no row is built. ([\#1143](https://github.com/PyPSA/linopy/pull/1143))
 - `Model.from_spec` adds no constraint where every variable of it is masked, where it raised that both sides are constant. ([\#1154](https://github.com/PyPSA/linopy/pull/1154))
+- `Model.from_spec` leaves no row where a per-entity `shift` offset is absent; it read `x[t=0]` with `edge='wrap'` and 0 with `edge=<number>`. ([\#1185](https://github.com/PyPSA/linopy/pull/1185))
+- `Model.from_spec` on a sparse model no longer warns of a dense grid when `at` reads along its own key, a grid the build needs. ([\#1192](https://github.com/PyPSA/linopy/pull/1192))
 - `Model.from_spec` reads a `sum_back` window that holds only absent terms as 0, like `sum`, in a constraint and in a `where:`, where it was absent; a row left with no variable term is then refused, as for `sum`. ([\#1174](https://github.com/PyPSA/linopy/pull/1174))
 - `Model.from_spec` no longer lets a `where` guard what a `shift`, window, `sum`, `count` or `at()` lookup reads at another coordinate, so a non-finite value there raises instead of entering a row or a `when:`. ([\#1173](https://github.com/PyPSA/linopy/pull/1173))
 - `Model.from_spec` checks a case's value, `otherwise:` included, only where that case applies, and skips a case that applies nowhere, so a guard like `cap == inf` no longer leaves `otherwise:` refused there. ([\#1163](https://github.com/PyPSA/linopy/pull/1163))
+- `Model.from_spec` no longer builds a row mask over every group × member for a grouped `sum` or an `at()` lookup, which made large builds slow and memory-hungry. ([\#1191](https://github.com/PyPSA/linopy/pull/1191))
 - `LinearExpression(data, model)` no longer raises on a `.sel` over full coordinates. ([\#1144](https://github.com/PyPSA/linopy/pull/1144))
 - `LinearExpression.from_constant` builds on the model's store, so a sparse model's constant stays sparse and adding it emits no `PerformanceWarning`. ([\#1145](https://github.com/PyPSA/linopy/pull/1145))
 - `Model.from_spec(..., sparse=True)` keeps a `shift` whose offset differs per entity sparse, without a `PerformanceWarning`. ([\#1145](https://github.com/PyPSA/linopy/pull/1145))
@@ -150,8 +153,10 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 
 *I/O*
 
+- A solve through an LP file no longer fails when the objective has no live variable, e.g. when all its variables are masked, or, with GLPK, when it is `0 * x`. ([\#1176](https://github.com/PyPSA/linopy/issues/1176))
 - `to_netcdf` handles timezone-aware datetimes in indexes, coordinates and `Model.parameters`. ([\#1021](https://github.com/PyPSA/linopy/pull/1021))
 - Object-dtype parameters, e.g. strings with `NaN` holes, round-trip through netcdf with their holes. Mixed-type object arrays raise a `TypeError` on write.
+- MPS export raises for indicator constraints instead of silently dropping them. ([\#1186](https://github.com/PyPSA/linopy/issues/1186))
 
 *Solvers*
 
@@ -167,6 +172,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 **Documentation**
 
 - The documentation moved from Sphinx to [MkDocs](https://www.mkdocs.org/) with the Material theme and the layout of the [PyPSA documentation](https://docs.pypsa.org). The example notebooks moved from `examples/` into `doc/`, and redirects keep the old links working.
+- [Upgrading to linopy 1.0](user-guide/migrating-to-v1.md#listing-affected-lines-on-linopy-010) has a snippet that lists every line a 0.10 model must change, in one pass before the upgrade ([#1188](https://github.com/PyPSA/linopy/pull/1188)).
 
 **Internal**
 
