@@ -3027,8 +3027,14 @@ class LinearExpression(BaseExpression):
         return type(self)._from_store(store.with_grid(grid), self._model)
 
     def to_quadexpr(self) -> QuadraticExpression:
-        """Convert LinearExpression to QuadraticExpression."""
-        data = self.data
+        """
+        Convert LinearExpression to QuadraticExpression.
+
+        A QuadraticExpression has no sparse (CSR) backing, so a CSR-backed
+        expression converts to dense. Like any explicit conversion, this emits
+        no densify notice.
+        """
+        data = self._dense_store(None).ds
         vars = data.vars.expand_dims(FACTOR_DIM)
         fill_value = self._fill_value["vars"]
         vars = xr.concat([vars, xr.full_like(vars, fill_value)], dim=FACTOR_DIM)

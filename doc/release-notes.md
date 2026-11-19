@@ -109,6 +109,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 
 - More operations keep an expression sparse: arithmetic on variables (`2 * x`, `x + y`), merges of operands over a subset or superset of dimensions, `assign_coords` and `groupby` on auxiliary coordinates of the grid, vectorised `sel`, `isel`, `[]` and `where` over a new labelled dimension, `densify_terms`, `Constraint.update(rhs=...)`, `Model.assign_coords`, `add_expressions`, `Model.copy` and netcdf writing. ([\#1020](https://github.com/PyPSA/linopy/issues/1020), [\#1049](https://github.com/PyPSA/linopy/issues/1049))
 - Variable operations without a sparse path, e.g. quadratic products, `rolling` and `cumsum`, build the dense expression directly, without a `PerformanceWarning`.
+- Adding a sparse linear expression to a quadratic one, or `to_quadexpr()`, converts it to dense without a `PerformanceWarning`, as a quadratic expression has no sparse backing. ([\#1193](https://github.com/PyPSA/linopy/issues/1193))
 - Sparse merges and sums are faster: rows are sorted and deduplicated once, when a constraint is added. Like a dense expression, a sparse one may now hold the same variable more than once, and `nterm` counts the stored terms.
 - A conformance suite checks that every operation on a sparse expression stays sparse or names its densify fallback, and that both backends agree. ([\#1044](https://github.com/PyPSA/linopy/issues/1044))
 

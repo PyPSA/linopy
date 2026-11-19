@@ -1,7 +1,7 @@
 """
 Conformance of the dense and the sparse (CSR) backend: every operation either
-keeps the sparse backing or names why it falls back to dense, and both
-backends agree on the result.
+keeps the sparse backing, converts to a quadratic expression, which has none,
+or names why it falls back to dense, and both backends agree on the result.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from linopy.store import DenseStore
 from linopy.testing import assert_equivalent, assert_quadequal
 
 KEPT = "kept"
+CONVERTED = "converted"
 ELLIPSIS: Any = ...
 DATA_READ = "data(read)"
 QUADRATIC = "mul(quadratic product)"
@@ -415,7 +416,9 @@ CASES: dict[str, Case] = {
     ),
     "coeffs": Case(grid, lambda e: e.coeffs.sum(TERM_DIM), DATA_READ),
     "vars": Case(grid, lambda e: e.vars.max(TERM_DIM), DATA_READ),
-    "to-quadexpr": Case(grid, lambda e: e.to_quadexpr(), DATA_READ),
+    "to-quadexpr": Case(grid, lambda e: e.to_quadexpr(), CONVERTED),
+    "add-quadratic": Case(grid, lambda e: e + var(e, "y") * var(e, "y"), CONVERTED),
+    "quadratic-sub": Case(grid, lambda e: var(e, "y") * var(e, "y") - e, CONVERTED),
     "simplify": Case(grid, lambda e: e.simplify(), DATA_READ),
     "densify-terms": Case(grid, lambda e: (e + 0 * e).densify_terms(), KEPT),
     "reset-const": Case(grid, lambda e: (e + 1).where(COND).reset_const(), KEPT),
@@ -526,7 +529,7 @@ def test_operation(backend: Model, case: str) -> None:
     want = op(build(Model()))
     expr = build(backend)
     assert expr.is_sparse == backend.sparse
-    if not backend.sparse or expected == KEPT:
+    if not backend.sparse or expected in (KEPT, CONVERTED):
         with no_densify():
             res = op(expr)
     else:
@@ -537,6 +540,8 @@ def test_operation(backend: Model, case: str) -> None:
     assert_same(res, want)
     if backend.sparse and expected not in (ASSIGNMENT, ASSIGN_COEFFS):
         assert expr.is_sparse
+    if expected == CONVERTED:
+        assert isinstance(res, QuadraticExpression)
     if backend.sparse and expected in (KEPT, SPARSIFIED):
         if isinstance(res, LinearExpression):
             assert res.is_sparse
