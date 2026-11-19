@@ -680,6 +680,18 @@ def test_quadratic_groupby_sum_is_dense_without_a_notice() -> None:
     assert set(labels[1][labels[1] >= 0].tolist()) == {1}
 
 
+def test_dense_linear_groupby_without_a_sparse_path_names_it() -> None:
+    m = Model(sparse=True)
+    x = m.add_variables(coords=[A, B], name="x")
+    group = xr.DataArray([[0, 1], [1, 0], [0, 0]], coords=[A, B], name="g")
+    with pytest.warns(
+        linopy.PerformanceWarning,
+        match=re.escape("groupby.sum(grouper without a sparse path)"),
+    ):
+        res = dense_linexpr(x).groupby(group).sum()
+    assert not res.is_sparse
+
+
 DIFFERENCES: dict[str, Callable[[LinearExpression], LinearExpression]] = {
     "coeffs": lambda e: e * 2,
     "const": lambda e: e + 1,
