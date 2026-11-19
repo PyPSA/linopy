@@ -139,6 +139,7 @@ from linopy.store import (
     Store,
     coord_sizes_agree,
     expression_dataset,
+    laid_on,
     merge_datasets,
     merge_stores,
     pruned_terms,
@@ -890,6 +891,14 @@ def _over_new_dims(const: DataArray, dims: Iterable[str]) -> bool:
     """Whether ``const`` adds labelled dims to ``dims``, which the sparse arithmetic spreads the cells over."""
     new = set(const.dims) - set(dims)
     return bool(new) and not new & set(HELPER_DIMS) and new <= set(const.indexes)
+
+
+def _cells_kept(store: Store, cond: DataArray) -> np.ndarray | None:
+    """The flat cells of ``store`` a boolean ``cond`` lying on its grid keeps, or None where ``cond`` leaves the grid."""
+    if not isinstance(store, CSRStore) or cond.dtype != bool:
+        return None
+    keep = laid_on(cond, store.grid.dims, store.grid.to_dataset())
+    return None if keep is None else keep.reshape(-1)
 
 
 def _grid_of(ds: Dataset | DataArray, dims: tuple[str, ...]) -> Grid | None:
@@ -2616,6 +2625,14 @@ class LinearExpression(BaseExpression):
             store = "where(non-scalar other)"
         elif not absent and drop:
             store = "where(other with drop)"
+        elif not drop and (keep := _cells_kept(dense, cond_da)) is not None:
+            kept = dense
+            if not keep.all():
+                kept = dense.assign_const(np.where(keep, dense.const, np.nan))
+            if not absent:
+                filled = np.where(keep, dense.const, cast(float, other))
+                kept = kept.assign_const(filled)
+            return type(self)._from_store(kept, self._model)
         else:
             store = self._selected(
                 lambda rows: (

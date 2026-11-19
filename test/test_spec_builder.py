@@ -1221,6 +1221,9 @@ def capped(expression: str) -> dict[str, Any]:
         pytest.param(
             "sum(k * x * y, over=t) + x <= 5", [0.0, 0.0], id="absent-summand"
         ),
+        pytest.param(
+            "sum(x * y * k * 2, over=t) + x <= 5", [0.0, 0.0], id="absent-factor"
+        ),
     ],
 )
 def test_a_quadratic_constraint_the_data_linearises_builds(

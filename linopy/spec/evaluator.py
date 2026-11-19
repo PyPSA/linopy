@@ -158,6 +158,11 @@ def _sum(
         inner = widened(join, inner)
     value = functools.partial(_operand, ctx=inner) if of is None else of
     plain = [axis.dimension for axis in node.over if axis.column is None]
+    if join is None and of is None and not ctx.solved:
+        factors = _factors(operand)
+        if len(factors) > 1 and sum(map(ms.carries_variable, factors)) == 1:
+            ctx.memo.used(operand)
+            return _summed_chain(operand, factors, plain, inner)
     if join is None:
         summed = value(operand)
     else:
@@ -165,6 +170,37 @@ def _sum(
     for dimension in plain:
         summed = operators.sum_over(summed, dimension)
     return summed
+
+
+def _summed_chain(
+    node: ms.Expression, factors: list[ms.Expression], over: list[str], ctx: Context
+) -> Array:
+    """
+    The sum over *over* of a product chain of one term and data.
+
+    Where the product is absent at most of its cells, as a weight read only
+    where a set holds or a variable that exists only for some units, it is
+    made on its present cells alone.
+    """
+    term, data = _chain(node, factors, ctx)
+    if isinstance(term, Variable | LinearExpression) and _aligned(term, data):
+        live = ~term.isnull()
+        if isinstance(data, xr.DataArray):
+            live = live & data.notnull()
+        if 2 * int(live.sum()) <= live.size:
+            return operators.contracted(term, data, live, over)
+    summed = _product(term, data)
+    for dimension in over:
+        summed = operators.sum_over(cast(Array, summed), dimension)
+    return cast(Array, summed)
+
+
+def _aligned(term: Term, data: xr.DataArray | float) -> bool:
+    """Whether *data* is labelled as *term* along every dimension they share."""
+    if not isinstance(data, xr.DataArray):
+        return True
+    shared = set(data.dims) & set(term.indexes)
+    return all(term.indexes[d].equals(data.indexes[d]) for d in shared)
 
 
 def _through(array: Array, columns: ms.JoinColumns, ctx: Context) -> Array:
@@ -244,6 +280,10 @@ def _combine(node: _Binary, ctx: Context) -> Value:
     first, second = _operands(node)
     if isinstance(node, ms.Add) and isinstance(second, ms.Negate):
         op, second = operator.sub, second.operand
+    if isinstance(node, ms.Multiply) and not ctx.solved:
+        factors = _factors(node)
+        if len(factors) > 2 and sum(map(ms.carries_variable, factors)) == 1:
+            return _scaled(node, factors, ctx)
     left, right = evaluate(first, ctx), evaluate(second, ctx)
     kind = type(node).__name__.lower()
     if isinstance(left, Term) or isinstance(right, Term):
@@ -253,6 +293,77 @@ def _combine(node: _Binary, ctx: Context) -> Value:
             refuse_made(kind, (node,), op, a, b, ctx)
         made = op(*_paired(left, right))
         return _without_dead_terms(made) if isinstance(node, ms.Multiply) else made
+    return _data(kind, (node,), op, left, right, ctx)
+
+
+def _factors(node: ms.Expression) -> list[ms.Expression]:
+    """The factors of a product chain through *node*, a product of two terms or of data kept whole."""
+    if not isinstance(node, ms.Multiply) or not ms.carries_variable(node):
+        return [node]
+    if ms.carries_variable(node.left) and ms.carries_variable(node.right):
+        return [node]
+    return [*_factors(node.left), *_factors(node.right)]
+
+
+def _scaled(node: ms.Multiply, factors: list[ms.Expression], ctx: Context) -> Value:
+    """
+    A product chain of one term and data, the data multiplied first and the term once.
+
+    The term is the large operand: scaling it once by the folded data, rather
+    than once per factor, saves a pass over every slot it holds.
+    """
+    term, data = _chain(node, factors, ctx)
+    return _product(term, data)
+
+
+def _chain(
+    node: ms.Expression, factors: list[ms.Expression], ctx: Context
+) -> tuple[Term, xr.DataArray | float]:
+    """The term of a product chain through *node* and the product of its data *factors*."""
+    _consume_chain(node, factors, ctx)
+    values = [_off_rows(evaluate(f, ctx), ctx) for f in factors]
+    carrying = [ms.carries_variable(f) for f in factors]
+    data = [f for f, c in zip(factors, carrying) if not c]
+    folded = functools.reduce(
+        lambda a, b: _data("multiply", data, operator.mul, a, b, ctx),
+        [v for v, c in zip(values, carrying) if not c],
+    )
+    return cast(Term, values[carrying.index(True)]), cast(xr.DataArray | float, folded)
+
+
+def _product(term: Term, data: xr.DataArray | float) -> Value:
+    """*term* times *data*; a quadratic the data zeroes wherever it is present is the constant it leaves, its products never made."""
+    if isinstance(term, QuadraticExpression) and _zeroes(data):
+        return operators.constant_term(term.model, xr.DataArray(term.const * data))
+    return _without_dead_terms(operator.mul(*_paired(term, data)))
+
+
+def _zeroes(data: xr.DataArray | float) -> bool:
+    """Whether *data* is zero wherever it is present."""
+    return not bool((xr.DataArray(data).fillna(0) != 0).any())
+
+
+def _consume_chain(
+    node: ms.Expression, factors: list[ms.Expression], ctx: Context
+) -> None:
+    """Consume a use of each product between *node* and its *factors*, as evaluating them would."""
+    if not isinstance(node, ms.Multiply) or any(node is f for f in factors):
+        return
+    for child in (node.left, node.right):
+        if isinstance(child, ms.Multiply) and not any(child is f for f in factors):
+            ctx.memo.used(child)
+        _consume_chain(child, factors, ctx)
+
+
+def _data(
+    kind: str,
+    nodes: Sequence[ms.Expression],
+    op: Callable[[Value, Value], Value],
+    left: Value,
+    right: Value,
+    ctx: Context,
+) -> Value:
+    """*op* of two data operands, which have to agree on their shared coordinates and make finite data where both are present."""
     if not isinstance(left, xr.DataArray) and not isinstance(right, xr.DataArray):
         return op(left, right)
     a, b = xr.DataArray(left), xr.DataArray(right)
@@ -263,7 +374,7 @@ def _combine(node: _Binary, ctx: Context) -> Value:
                 f"{b.indexes[dim].tolist()[:5]}. Every operand is read on the master "
                 f"coordinates, so the data was attached against other labels than the model was built on."
             )
-    return refuse_made(kind, (node,), op, a, b, ctx)
+    return refuse_made(kind, nodes, op, a, b, ctx)
 
 
 def _without_dead_terms(made: Value) -> Value:
@@ -279,7 +390,7 @@ def _without_dead_terms(made: Value) -> Value:
     live = (data.coeffs != 0) & (data.vars != -1).any(FACTOR_DIM)
     if bool(live.any()):
         return made
-    return LinearExpression.from_constant(made.model, data.const)
+    return operators.constant_term(made.model, data.const)
 
 
 def _off_rows(value: Value, ctx: Context) -> Value:
@@ -382,12 +493,18 @@ def _cases(node: ms.Cases, ctx: Context) -> Value:
 
     A case's value is evaluated and checked only where it applies. A case
     that applies nowhere is not evaluated, as its value is never read: a
-    zero over the dimensions of *node* stands in for it.
+    zero over the dimensions of *node* stands in for it. A term of a case
+    that applies everywhere is the whole value as it stands.
     """
-    parts = [
-        _in_region(evaluate(region.value, _narrowed(ctx, rows)), rows)
+    values = [
+        (evaluate(region.value, _narrowed(ctx, rows)), rows)
         for region, rows in _regions(node, ctx)
     ]
+    if len(values) == 1 and isinstance(values[0][0], Term):
+        whole = as_expression(values[0][0])
+        if set(whole.coord_dims) == set(node.dims) and bool(values[0][1].all()):
+            return whole
+    parts = [_in_region(value, rows) for value, rows in values]
     if len(parts) < len(node.regions):
         parts.append(_zeros(node, ctx))
     total = functools.reduce(lambda a, b: operator.add(*_paired(a, b)), parts)
