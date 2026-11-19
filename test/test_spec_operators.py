@@ -249,6 +249,38 @@ def test_a_missing_shift_amount_is_refused_where_a_live_row_reads_it(
         ]
 
 
+@pytest.mark.parametrize(
+    "within", ["", ", within=season_of[s]"], ids=["axis", "groups"]
+)
+@pytest.mark.parametrize("edge", ["edge=0", "edge='wrap'"])
+def test_an_absent_entity_offset_shifts_to_no_row(
+    backend: Model, edge: str, within: str
+) -> None:
+    e = pd.Index(["a", "b"], name="e")
+    shifted = f"shift(x, along=t, offset=lag, {edge}{within})"
+    spec = {
+        "dimensions": {
+            "t": {"dtype": "int", "ordered": True},
+            "s": {"dtype": "str"},
+            "e": {"dtype": "str"},
+        },
+        "relations": {"season_of": {"key": "t", "values": "s"}},
+        "parameters": {"lag": {"dims": ["e"], "dtype": "int", "missing": "absent"}},
+        "variables": {"x": {"dims": ["t", "e"]}},
+        "constraints": {"c": {"dims": ["t", "e"], "expression": f"x + {shifted} >= 0"}},
+    }
+    data = {
+        "t": TT,
+        "s": S,
+        "e": e,
+        "season_of": pd.DataFrame({"t": TT, "s": ["a", "a", "b", "b"]}),
+        "lag": pd.DataFrame({"e": ["a"], "lag": [1]}),
+    }
+    m = Model.from_spec(spec, data, sparse=backend.sparse)
+    live = m.constraints["c"].labels != -1
+    assert live.sum("t").values.tolist() == [4, 0]
+
+
 WINDOW_SPEC: dict[str, Any] = {
     "dimensions": {"t": {"dtype": "int", "ordered": True}},
     "parameters": {"v": {"dims": ["t"]}},
