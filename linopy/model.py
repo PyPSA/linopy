@@ -2200,8 +2200,7 @@ class Model:
             warn_outside_linopy(
                 "`sanitize_zeros` is no longer supported and has no effect. linopy "
                 "skips terms with a zero coefficient; the solver handles near-zero "
-                "ones. Call `m.constraints.sanitize_zeros()` before "
-                "solving to drop them from the model.",
+                "ones.",
                 FutureWarning,
             )
 

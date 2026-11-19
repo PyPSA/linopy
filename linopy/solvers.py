@@ -936,8 +936,8 @@ class Solver(ABC, Generic[EnvType]):
         Dispatch to direct or file build based on ``io_api``.
 
         The Solver never mutates ``self.model``. Constraint sanitization
-        (``model.constraints.sanitize_zeros()`` /
-        ``.sanitize_infinities()`` / ``.sanitize_missings()``) and SOS reformulation
+        (``model.constraints.sanitize_infinities()`` /
+        ``.sanitize_missings()``) and SOS reformulation
         (``model.apply_sos_reformulation()``) are Model-level operations
         the caller applies first; this builder consumes whatever shape it
         is handed.

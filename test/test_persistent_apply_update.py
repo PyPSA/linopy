@@ -213,13 +213,17 @@ def test_cross_model_in_place(solver_name: str) -> None:
     [(">=", -5.0, {"rhs": 5.0}), ("<=", 5.0, {"sign": ">="})],
     ids=["rhs", "sign"],
 )
+@pytest.mark.parametrize("stored", [True, False], ids=["zero-term", "no-term"])
 def test_update_makes_empty_row_infeasible(
-    solver_name: str, sign: str, rhs: float, update: dict[str, Any]
+    solver_name: str, sign: str, rhs: float, update: dict[str, Any], stored: bool
 ) -> None:
     m = _base_model()
     x = m.variables["x"]
-    m.add_constraints(xr.DataArray([0, 1, 1]) * x, sign, rhs, name="c3")
-    m.constraints.sanitize_zeros()
+    if stored:
+        lhs = xr.DataArray([0, 1, 1]) * x
+    else:
+        lhs = (1 * x).where(xr.DataArray([False, True, True])).fillna(0)
+    m.add_constraints(lhs, sign, rhs, name="c3")
     s = _built(solver_name, m)
     s.solve(assign=True)
 

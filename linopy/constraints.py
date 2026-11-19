@@ -1027,11 +1027,6 @@ class Constraint:
         sense = self.sign.values.ravel()[active].astype("U1")
         return csr, con_labels, b, sense
 
-    def sanitize_zeros(self) -> Constraint:
-        """Remove terms with zero or near-zero coefficients."""
-        self._replace_store(self._lhs._store.prune(1e-10))
-        return self
-
     def sanitize_missings(self) -> Constraint:
         """Mask out rows where all variables are missing (-1)."""
         has_terms = self._lhs._store.dataarray(self._lhs._store.has_terms(), "labels")
@@ -1508,13 +1503,6 @@ class Constraints(LabelContainer[Constraint]):
         Get the subset of constraints which are not indicator constraints.
         """
         return self[[n for n, c in self.items() if not c.is_indicator]]
-
-    def sanitize_zeros(self) -> None:
-        """
-        Filter out terms with zero and close-to-zero coefficient.
-        """
-        for con in self.data.values():
-            con.sanitize_zeros()
 
     def sanitize_missings(self) -> None:
         """

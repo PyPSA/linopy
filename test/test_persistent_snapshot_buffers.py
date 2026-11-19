@@ -199,7 +199,7 @@ def test_sparse_con_positional_csr_follows_csr_rebind() -> None:
     con = m.constraints["c"]
     label_index = m.variables.label_index
     before = _extract_con_buffers(con, label_index)
-    con.sanitize_zeros()
+    con.update(lhs=x)
     after = _extract_con_buffers(con, label_index)
     np.testing.assert_array_equal(before.indices, [0, 3, 1, 3, 2, 3])
     np.testing.assert_array_equal(after.indices, [0, 1, 2])

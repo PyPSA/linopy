@@ -173,7 +173,6 @@ def test_selected_row_without_terms_is_checked_against_its_sign(
     x = m.add_variables(lower=0, upper=10, coords=[TIME], name="x")
     m.add_constraints(xr.DataArray(TIME != 0, coords=[TIME]) * x >= 2, name="pin")
     m.add_objective(x.sum())
-    m.constraints.sanitize_zeros()
     if raises:
         with pytest.raises(RestrictionError, match=r"labels \[0\] have no term"):
             m.restrict(**kwargs)
