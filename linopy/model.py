@@ -491,6 +491,7 @@ class Model:
         store: bool = False,
         expressions: bool = True,
         rename: Mapping[str, str] | Callable[[str], str] | None = None,
+        dim_order: Sequence[str] | None = None,
         **model_kwargs: Any,
     ) -> Model:
         """
@@ -535,6 +536,18 @@ class Model:
             name, and the entries a ``piecewise:`` curve expands into are
             named too. Expressions and duals in the spec keep reading spec
             names. Pass the same *rename* to :func:`linopy.spec.evaluate`.
+        dim_order : sequence of str, optional
+            The axis order of each variable, constraint and named expression
+            the spec builds, and so the order its labels are allocated in.
+            The dims of an entry named here come first, in this order; the
+            rest keep the order ``None`` gives them: by name, except that a
+            dim only the data side of a constraint carries, such as a
+            piecewise breakpoint dim, comes last. A name an entry lacks is
+            ignored there. For instance, ``dim_order=["store"]`` builds a
+            variable over ``snapshot`` and ``store`` as
+            ``(store, snapshot)``, where ``None`` gives
+            ``(snapshot, store)``. Pass the same *dim_order* to
+            :func:`linopy.spec.evaluate`.
         **model_kwargs
             Passed to :class:`Model`, such as ``sparse=True``.
 
@@ -552,6 +565,10 @@ class Model:
             If a key of a mapping *rename* names no variable or constraint.
         ValueError
             If *rename* gives two variables, or two constraints, one name.
+        TypeError
+            If *dim_order* is a ``str``.
+        ValueError
+            If *dim_order* names a dim twice.
 
         Warns
         -----
@@ -562,7 +579,7 @@ class Model:
         from linopy.spec.api import build_into
 
         model = cls(**model_kwargs)
-        build_into(model, spec, sources, store, expressions, rename)
+        build_into(model, spec, sources, store, expressions, rename, dim_order)
         return model
 
     @property

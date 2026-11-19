@@ -8,7 +8,7 @@ from __future__ import annotations
 import io
 import types
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Hashable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -21,13 +21,18 @@ yaml = pytest.importorskip("yaml")
 pytest.importorskip("highspy")
 
 from spec_helpers import (  # noqa: E402
+    BP,
+    CURVE_DATA,
+    CURVE_SPEC,
     DISPATCH_DATA,
     DISPATCH_P,
     EXAMPLE_DISPATCH,
     GENERATOR,
     TT,
+    UNITS,
     WHERE_DATA,
     WHERE_SPEC,
+    curve,
     solved,
     with_,
     yaml_dict,
@@ -37,7 +42,7 @@ import linopy  # noqa: E402
 from linopy import LinearExpression, Model  # noqa: E402
 from linopy.spec import SpecDataError, evaluate  # noqa: E402
 from linopy.spec.api import lower  # noqa: E402
-from linopy.testing import synthetic_sources  # noqa: E402
+from linopy.testing import assert_model_equal, synthetic_sources  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # inputs and model integration
@@ -211,6 +216,106 @@ def test_rename_is_refused_before_the_build(
 ) -> None:
     with pytest.raises(error, match=match):
         Model.from_spec(spec, DISPATCH_DATA, rename=rename)
+
+
+def curves(method: str) -> dict[str, Any]:
+    return with_(
+        CURVE_SPEC,
+        piecewise={
+            "cost_curve": {**CURVE_SPEC["piecewise"]["cost_curve"], "method": method}
+        },
+        expressions={
+            "net": {"dims": ["snapshot", "generator"], "expression": "op_cost - p"}
+        },
+    )
+
+
+CURVE_SOURCES = {
+    **CURVE_DATA,
+    "snapshot": [0, 1, 2],
+    "load": pd.DataFrame({"snapshot": [0, 1, 2], "load": [50.0, 55.0, 80.0]}),
+    "bp_x": curve({(g, k): x for g in UNITS for k, x in zip(BP, [0, 20, 50, 80])}),
+    "bp_y": curve(
+        {
+            **{("hydro", k): y for k, y in zip(BP, [0, 100, 300, 600])},
+            **{("gas", k): y for k, y in zip(BP, [0, 150, 450, 900])},
+        }
+    ),
+}
+
+
+def framed(default: tuple[Hashable, ...], order: list[str]) -> tuple[Hashable, ...]:
+    """The dims of an entry built as *default*, the ones *order* names moved to the front."""
+    first = tuple(d for d in order if d in default)
+    return (*first, *(d for d in default if d not in first))
+
+
+@pytest.mark.parametrize("method", ["lp", "sos2", "incremental"])
+@pytest.mark.parametrize(
+    "order", [["snapshot"], ["snapshot", "generator"], ["bp", "snapshot", "nowhere"]]
+)
+def test_dim_order_lays_out_every_entry(
+    method: str, order: list[str], backend: Model
+) -> None:
+    spec = curves(method)
+    default = Model.from_spec(spec, CURVE_SOURCES, sparse=backend.sparse)
+    m = Model.from_spec(spec, CURVE_SOURCES, dim_order=order, sparse=backend.sparse)
+    for name, variable in default.variables.items():
+        assert m.variables[name].labels.dims == framed(variable.labels.dims, order)
+    for name, constraint in default.constraints.items():
+        dims = framed(constraint.labels.dims, order)
+        assert m.constraints[name].labels.dims == dims
+        assert m.constraints[name].lhs.coord_dims == dims
+    for name, expression in default.expressions.items():
+        assert m.expressions[name].coord_dims == framed(expression.coord_dims, order)
+
+
+@pytest.mark.parametrize("order", [None, [], ["nowhere"], ["bp", "generator"]])
+def test_a_dim_order_the_name_order_meets_builds_the_default(
+    order: list[str] | None, backend: Model
+) -> None:
+    spec = curves("sos2")
+    default = Model.from_spec(spec, CURVE_SOURCES, sparse=backend.sparse)
+    ordered = Model.from_spec(
+        spec, CURVE_SOURCES, dim_order=order, sparse=backend.sparse
+    )
+    assert_model_equal(ordered, default)
+
+
+@pytest.mark.parametrize("method", ["lp", "sos2"])
+def test_dim_order_solves_to_the_default_up_to_transposition(
+    method: str, backend: Model
+) -> None:
+    spec, order = curves(method), ["snapshot", "bp"]
+    default = solved(spec, CURVE_SOURCES, sparse=backend.sparse)
+    ordered = solved(spec, CURVE_SOURCES, sparse=backend.sparse, dim_order=order)
+    assert ordered.objective.value == pytest.approx(default.objective.value)
+    pairs: list[tuple[Mapping[Any, xr.DataArray], Mapping[Any, xr.DataArray]]] = [
+        (default.solution, ordered.solution),
+        (default.dual, ordered.dual),
+        (evaluate(spec, default), evaluate(spec, ordered, dim_order=order)),
+    ]
+    for expected, got in pairs:
+        assert set(got) == set(expected)
+        for name, value in expected.items():
+            assert got[name].dims == framed(value.dims, order)
+            xr.testing.assert_allclose(got[name].transpose(*value.dims), value)
+
+
+@pytest.mark.parametrize(
+    ("dim_order", "error", "match"),
+    [
+        pytest.param("snapshot", TypeError, "not the str 'snapshot'", id="str"),
+        pytest.param(["generator"] * 2, ValueError, "'generator' twice", id="twice"),
+    ],
+)
+def test_dim_order_is_refused_before_the_build(
+    dim_order: Any, error: type[Exception], match: str
+) -> None:
+    with pytest.raises(error, match=match):
+        Model.from_spec(yaml_dict(), DISPATCH_DATA, dim_order=dim_order)
+    with pytest.raises(error, match=match):
+        evaluate(yaml_dict(), Model(), dim_order=dim_order)
 
 
 def test_the_spec_package_exports() -> None:

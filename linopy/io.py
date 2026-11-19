@@ -863,6 +863,11 @@ def matrices_to_file(M: Matrices, fn: Path, names: Printers, sos: list[SosSet]) 
         raise RuntimeError(
             "Package highspy not installed. It is required to write matrices to file."
         )
+    if M.indicator_b.size:
+        raise NotImplementedError(
+            "Indicator constraints cannot be written with HiGHS, which "
+            "linopy uses for MPS files. Use io_api='lp' or io_api='direct'."
+        )
     h = solvers.Highs._build_solver_model(M, names=names, sos=sos)
     h.writeModel(str(fn))
 

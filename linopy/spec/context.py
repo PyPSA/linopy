@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, TypeVar, cast, overload
 
 import pandas as pd
@@ -137,7 +137,8 @@ class Context:
     narrows the finiteness check to the rows a constraint builds, and
     ``subject`` names what is being built in its refusals. ``memo`` is
     shared by every context replaced from one. ``rename`` gives the model
-    name of a variable or constraint the program declares.
+    name of a variable or constraint the program declares. ``dim_order``
+    names the dims :meth:`frame` puts first.
     """
 
     model: Model
@@ -150,8 +151,41 @@ class Context:
     subject: str = "the spec"
     memo: Memo = field(default_factory=Memo, compare=False, repr=False)
     rename: Callable[[str], str] = field(default=str, compare=False, repr=False)
+    dim_order: tuple[str, ...] = ()
+
+    def frame(self, dims: tuple[str, ...]) -> tuple[str, ...]:
+        """*dims* of an entry, those ``dim_order`` names first, in its order, the rest after in name order, as mathspec states them."""
+        first = tuple(d for d in self.dim_order if d in dims)
+        return (*first, *(d for d in dims if d not in first))
 
 
 def is_empty(dims: Iterable[str], ctx: Context) -> bool:
     """Whether one of *dims* has no coordinate, so what is over them has no cell."""
     return any(not len(ctx.coords[d]) for d in dims)
+
+
+def widened(node: ms.Expression | ms.Condition, ctx: Context) -> Context:
+    """
+    *ctx* for the operand of *node*: a sum, a window, a shift, a lookup and a
+    count read their operand at other coordinates along the axes they move, so
+    the rows *ctx* checks are widened along those axes to every row there. A
+    join reads its operand off the dims it adds, so it widens along those too:
+    a row of the operand is checked if any group it lands in is checked.
+    """
+    if ctx.rows is None:
+        return ctx
+    along = [d for d in _moved_dims(node) if d in ctx.rows.dims]
+    return replace(ctx, rows=ctx.rows.any(along)) if along else ctx
+
+
+def _moved_dims(node: ms.Expression | ms.Condition) -> tuple[str, ...]:
+    """The dimensions along which *node* reads its operand at other coordinates than its own."""
+    if isinstance(node, ms.Sum):
+        return tuple(axis.dimension for axis in node.over)
+    if isinstance(node, ms.CountComparison):
+        return (node.over,)
+    if isinstance(node, ms.Translate | ms.WindowSum | ms.TranslatedCondition):
+        return (node.along,)
+    if isinstance(node, ms.Join | ms.JoinedCondition):
+        return tuple(dict.fromkeys(node.columns.dropped_dims + node.columns.added_dims))
+    return ()

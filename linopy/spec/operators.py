@@ -367,8 +367,11 @@ def sum_back(
     """
     Sum *array* over a trailing window along *over*: positions ``t - within + 1`` through ``t``.
 
-    A position the window cannot reach contributes a zero; a window that
-    reaches nothing keeps no row. *by* stops the window at each group's edge.
+    A position the window cannot reach contributes a zero, as an absent term
+    does, so a window of nothing but such positions is 0, as :func:`sum_over`
+    is. A window that is not defined there, at a member *by* places in no
+    group or where the width is absent, keeps no row. *by* stops the window
+    at each group's edge.
 
     With *wrap* the window continues from the other end of *over*, so a width
     above the axis size still reads every position and is taken as the whole
@@ -386,15 +389,16 @@ def sum_back(
         )
     widest = max(1, min(asked, size))
     lagged_terms: list[Array] = []
-    reached: list[xr.DataArray] = []
     for lag in range(widest):
-        lagged = _gather(array, over, lag, partition, wrap, None)
-        live, term = ~lagged.isnull(), _filled(lagged, 0.0)
+        term = _filled(_gather(array, over, lag, partition, wrap, None), 0.0)
         if isinstance(within, xr.DataArray):
-            live, term = live & (within > lag), term * (within > lag).astype(float)
+            term = term * (within > lag).astype(float)
         lagged_terms.append(term)
-        reached.append(live)
-    return _merged(lagged_terms).where(reduce(operator.or_, reached))
+    defined: list[xr.DataArray] = [] if partition is None else [partition.grouped]
+    if isinstance(within, xr.DataArray):
+        defined.append(within.notnull())
+    summed = _merged(lagged_terms)
+    return summed.where(reduce(operator.and_, defined)) if defined else summed
 
 
 def _widest(within: Amount) -> int:
