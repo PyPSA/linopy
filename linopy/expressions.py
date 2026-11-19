@@ -625,7 +625,8 @@ class LinearExpressionGroupby:
             if isinstance(self.obj, LinearExpression) and self.obj.is_sparse:
                 data = self.obj._fallback(reason).data
             else:
-                _densify_notice(reason, self.model)
+                if not carries_factor:
+                    _densify_notice(reason, self.model)
                 data = self.data
         else:
             data = self.data
@@ -3030,8 +3031,8 @@ class LinearExpression(BaseExpression):
         """
         Convert LinearExpression to QuadraticExpression.
 
-        A QuadraticExpression has no sparse (CSR) backing, so a CSR-backed
-        expression converts to dense, without a densify notice.
+        A QuadraticExpression has no sparse (CSR) backing; a CSR-backed
+        expression converts to dense without a densify notice.
         """
         data = self._dense_store(None).ds
         vars = data.vars.expand_dims(FACTOR_DIM)

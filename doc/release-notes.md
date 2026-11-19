@@ -129,6 +129,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `add_constraints` rejects dimensions named after reserved fields (`sign`, `rhs`, ...), like `add_variables`.
 - Multiplying a constant or one-term expression by a multi-term expression no longer raises a `TypeError`. ([\#1055](https://github.com/PyPSA/linopy/issues/1055))
 - `QuadraticExpression.groupby(...).map` returns a `QuadraticExpression`. ([\#1064](https://github.com/PyPSA/linopy/issues/1064))
+- On a sparse model, building or grouping a quadratic expression, e.g. `2 * x + x * x`, `(2 * x) * x` or `(x * x).groupby(g).sum()`, no longer emits a `PerformanceWarning`. ([\#1193](https://github.com/PyPSA/linopy/issues/1193))
 - `Variable.fix` accepts NaN or non-binary fix values at masked positions of a binary variable. `Variables.fix` validates all variables before fixing any.
 - `Model.from_spec` no longer raises on an `at()` lookup into an empty dimension. ([\#1141](https://github.com/PyPSA/linopy/pull/1141))
 - `Model.from_spec` builds a linear objective when the data sets all quadratic coefficients to zero. ([\#1141](https://github.com/PyPSA/linopy/pull/1141))
@@ -136,7 +137,6 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `Model.from_spec` adds no constraint where every variable of it is masked, where it raised that both sides are constant. ([\#1154](https://github.com/PyPSA/linopy/pull/1154))
 - `Model.from_spec` leaves no row where a per-entity `shift` offset is absent; it read `x[t=0]` with `edge='wrap'` and 0 with `edge=<number>`. ([\#1185](https://github.com/PyPSA/linopy/pull/1185))
 - `Model.from_spec` on a sparse model no longer warns of a dense grid when `at` reads along its own key, a grid the build needs. ([\#1192](https://github.com/PyPSA/linopy/pull/1192))
-- On a sparse model, building a quadratic expression from a linear one, e.g. `2 * x + x * x` or `(2 * x) * x`, no longer emits a `PerformanceWarning`. ([\#1193](https://github.com/PyPSA/linopy/issues/1193))
 - `Model.from_spec` reads a `sum_back` window that holds only absent terms as 0, like `sum`, in a constraint and in a `where:`, where it was absent; a row left with no variable term is then refused, as for `sum`. ([\#1174](https://github.com/PyPSA/linopy/pull/1174))
 - `Model.from_spec` no longer lets a `where` guard what a `shift`, window, `sum`, `count` or `at()` lookup reads at another coordinate, so a non-finite value there raises instead of entering a row or a `when:`. ([\#1173](https://github.com/PyPSA/linopy/pull/1173))
 - `Model.from_spec` checks a case's value, `otherwise:` included, only where that case applies, and skips a case that applies nowhere, so a guard like `cap == inf` no longer leaves `otherwise:` refused there. ([\#1163](https://github.com/PyPSA/linopy/pull/1163))

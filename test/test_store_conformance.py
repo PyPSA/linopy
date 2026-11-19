@@ -660,21 +660,14 @@ def test_sum_over_missing_dim_raises_without_densifying(
 
 
 def _squared(sparse: bool) -> LinearExpression | QuadraticExpression:
-    m = Model(sparse=sparse)
-    x = m.add_variables(coords=[A], name="x")
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", linopy.PerformanceWarning)
-        return x * x
+    x = Model(sparse=sparse).add_variables(coords=[A], name="x")
+    return x * x
 
 
-def test_quadratic_groupby_sum_densifies() -> None:
+def test_quadratic_groupby_sum_is_dense_without_a_notice() -> None:
     group = pd.Series(SERIES)
     with no_densify():
         dense = _squared(False).groupby(group).sum()
-    with pytest.warns(
-        linopy.PerformanceWarning,
-        match=re.escape("groupby.sum(grouper without a sparse path)"),
-    ):
         sparse = _squared(True).groupby(group).sum()
 
     assert isinstance(dense, QuadraticExpression)
