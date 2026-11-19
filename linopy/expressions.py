@@ -1348,8 +1348,17 @@ class BaseExpression(ABC):
                 "expression, or nothing at all with fill_value=linopy.ABSENT."
             )
         other = as_expression(other, model=self.model, dims=self.coord_dims)
-        if isinstance(other, LinearExpression) and isinstance(
-            self, QuadraticExpression
+        if isinstance(self, LinearExpression) and isinstance(
+            other, QuadraticExpression
+        ):
+            return merge(
+                [self.to_quadexpr(), other],
+                cls=QuadraticExpression,
+                join=join,
+                fill_value=fill_value,
+            )
+        if isinstance(self, QuadraticExpression) and isinstance(
+            other, LinearExpression
         ):
             other = other.to_quadexpr()
         return merge(
