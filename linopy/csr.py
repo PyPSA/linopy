@@ -96,11 +96,17 @@ class Grid:
 
     indexes: dict[str, pd.Index]
     aux: AuxCoords = field(default_factory=dict)
+    _dataset: Dataset | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "aux", {n: (d, _readonly(v)) for n, (d, v) in self.aux.items()}
         )
+
+    def __getstate__(self) -> dict[str, Any]:
+        return {**self.__dict__, "_dataset": None}
 
     @classmethod
     def from_dataset(cls, ds: Dataset | DataArray, dims: Iterable[str]) -> Grid:
@@ -122,8 +128,17 @@ class Grid:
         return tuple(len(i) for i in self.indexes.values())
 
     def to_dataset(self) -> Dataset:
-        """The grid's indexes and auxiliary coordinates as a coordinate-only Dataset."""
-        return Dataset(coords=self.indexes | self.aux)
+        """
+        The grid's indexes and auxiliary coordinates as a coordinate-only Dataset.
+
+        It is built once per grid and handed out as a shallow copy: building
+        one from the indexes costs several times the copy.
+        """
+        built = self._dataset
+        if built is None:
+            built = Dataset(coords=self.indexes | self.aux)
+            object.__setattr__(self, "_dataset", built)
+        return built.copy(deep=False)
 
     @property
     def size(self) -> int:

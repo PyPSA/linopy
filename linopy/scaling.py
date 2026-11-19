@@ -37,6 +37,13 @@ def validate_scaling(scaling: ScalingT, label: str = "scaling") -> ScalingT:
     return scaling
 
 
+def scalar_scaling(value: object, label: str = "scaling") -> DataArray | None:
+    """*value* as a validated 0-d scaling factor when it is one number, else None."""
+    if not isinstance(value, int | float | np.number):
+        return None
+    return validate_scaling(DataArray(float(value)), label)
+
+
 def ensure_scaling(data: Dataset, like: DataArray) -> Dataset:
     """
     Default-fill the ``scaling`` field of a data set when it is missing.

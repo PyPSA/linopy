@@ -10,6 +10,7 @@ evaluates the operands and the keywords and calls in.
 from __future__ import annotations
 
 import operator
+import warnings
 from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
 from functools import reduce
@@ -96,7 +97,10 @@ def grouped_sum(
     if isinstance(picked, LinearExpression) and not picked.is_sparse:
         return _gathered(picked, grouped, onto)
     keyed = picked.assign_coords({d: (_ROW, labels) for d, labels in grouped.items()})
-    return keyed.groupby(list(grouped)).sum().reindex(onto).fillna(0)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", "Grouping a LinearExpression", UserWarning)
+        summed = keyed.groupby(list(grouped)).sum()
+    return summed.reindex(onto).fillna(0)
 
 
 def _gathered(
@@ -367,8 +371,11 @@ def sum_back(
     """
     Sum *array* over a trailing window along *over*: positions ``t - within + 1`` through ``t``.
 
-    A position the window cannot reach contributes a zero; a window that
-    reaches nothing keeps no row. *by* stops the window at each group's edge.
+    A position the window cannot reach contributes a zero, as an absent term
+    does, so a window of nothing but such positions is 0, as :func:`sum_over`
+    is. A window that is not defined there, at a member *by* places in no
+    group or where the width is absent, keeps no row. *by* stops the window
+    at each group's edge.
 
     With *wrap* the window continues from the other end of *over*, so a width
     above the axis size still reads every position and is taken as the whole
@@ -386,15 +393,16 @@ def sum_back(
         )
     widest = max(1, min(asked, size))
     lagged_terms: list[Array] = []
-    reached: list[xr.DataArray] = []
     for lag in range(widest):
-        lagged = _gather(array, over, lag, partition, wrap, None)
-        live, term = ~lagged.isnull(), _filled(lagged, 0.0)
+        term = _filled(_gather(array, over, lag, partition, wrap, None), 0.0)
         if isinstance(within, xr.DataArray):
-            live, term = live & (within > lag), term * (within > lag).astype(float)
+            term = term * (within > lag).astype(float)
         lagged_terms.append(term)
-        reached.append(live)
-    return _merged(lagged_terms).where(reduce(operator.or_, reached))
+    defined: list[xr.DataArray] = [] if partition is None else [partition.grouped]
+    if isinstance(within, xr.DataArray):
+        defined.append(within.notnull())
+    summed = _merged(lagged_terms)
+    return summed.where(reduce(operator.and_, defined)) if defined else summed
 
 
 def _widest(within: Amount) -> int:
@@ -469,26 +477,28 @@ def _gather_by_offset(
     """
     Translate *array* along *over* by an offset that may differ per entity.
 
-    Selection is by label, so a non-integer axis works. Out-of-range
+    Selection is by position, so no label is looked up. Out-of-range
     positions are clipped onto the axis and emptied again, so an edge means
-    what it does for a scalar shift.
+    what it does for a scalar shift. Where the offset is absent the shift is
+    not defined, so no edge speaks for it and it reaches nothing.
     """
     card = int(array.sizes[over])
     labels = np.asarray(array.indexes[over])
     ordinal = xr.DataArray(np.arange(card), coords={over: labels}, dims=[over])
-    source = (ordinal - offset).astype(int)
+    reached = (ordinal - offset).assign_coords({over: labels})
+    defined = reached.notnull()
+    source = reached.fillna(0).astype(int)
 
     def gathered(ordinals: xr.DataArray) -> Array:
-        picked = array.sel({over: _labelled(labels, ordinals)})
-        return picked.assign_coords({over: labels})
+        return _read_at(array, over, labels, ordinals)
 
     if wrap:
-        return gathered(source % card)
-    inside = ((source >= 0) & (source < card)).assign_coords({over: labels})
+        return gathered(source % card).where(defined)
+    inside = defined & (source >= 0) & (source < card)
     moved = gathered(source.clip(0, card - 1)).where(inside)
     if fill is None:
         return moved
-    return _vacated(moved, array, over, ~inside, fill)
+    return _vacated(moved, array, over, defined & ~inside, fill)
 
 
 def per_group(offset: Amount, groups: xr.DataArray) -> Amount:
@@ -511,29 +521,37 @@ def _gather_in_groups(
     """
     Translate *array* inside each group rather than along the axis.
 
-    A coordinate in no group reaches nothing, which is not the same as
-    reaching off a group's edge: only the second is what a fill speaks for.
+    A coordinate in no group, or where the offset is absent, reaches
+    nothing, which is not the same as reaching off a group's edge: only the
+    second is what a fill speaks for.
     """
     reached = groups.within - offset
     if wrap:
         reached = reached % groups.size
-    inside = groups.grouped & (reached >= 0) & (reached < groups.size)
+    defined = groups.grouped & reached.notnull()
+    inside = defined & (reached >= 0) & (reached < groups.size)
 
     def peer(group: np.ndarray, position: np.ndarray) -> np.ndarray:
         return groups.roster[group, position]
 
     source = xr.apply_ufunc(peer, groups.belongs, reached.where(inside, 0).astype(int))
     labels = groups.labels
-    gathered = (
-        array.sel({over: _labelled(labels, source)})
-        .assign_coords({over: labels})
-        .where(inside)
-    )
+    gathered = _read_at(array, over, labels, source).where(inside)
     if fill is None:
         return gathered
-    return _vacated(gathered, array, over, groups.grouped & ~inside, fill)
+    return _vacated(gathered, array, over, defined & ~inside, fill)
 
 
-def _labelled(labels: np.ndarray, ordinals: xr.DataArray) -> xr.DataArray:
-    """*ordinals* as the labels they stand for, carrying no coordinates of their own."""
-    return xr.DataArray(labels[ordinals.values], dims=ordinals.dims)
+def _read_at(
+    array: Array, over: str, labels: np.ndarray, ordinals: xr.DataArray
+) -> Array:
+    """
+    *array* read along *over* at the positions *ordinals*, labelled *labels* where they land.
+
+    The axis is numbered while it is read: a gather over several dimensions
+    copies the labels it reads into a coordinate over all of them, and dates
+    copied that way cost more than the gather.
+    """
+    numbered = array.assign_coords({over: np.arange(len(labels))})
+    positions = xr.DataArray(ordinals.values, dims=ordinals.dims)
+    return numbered.isel({over: positions}).assign_coords({over: labels})

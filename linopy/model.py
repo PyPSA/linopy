@@ -93,7 +93,7 @@ from linopy.piecewise import (
 )
 from linopy.remote import RemoteHandler
 from linopy.restrict.matrix import DROPPED_ROW_TOL
-from linopy.scaling import validate_scaling
+from linopy.scaling import scalar_scaling, validate_scaling
 from linopy.semantics import check_user_nan, enforce_no_multiindex
 from linopy.solver_capabilities import solver_supports
 from linopy.solvers import (
@@ -495,6 +495,7 @@ class Model:
         store: bool = False,
         expressions: bool = True,
         rename: Mapping[str, str] | Callable[[str], str] | None = None,
+        dim_order: Sequence[str] | None = None,
         **model_kwargs: Any,
     ) -> Model:
         """
@@ -539,6 +540,18 @@ class Model:
             name, and the entries a ``piecewise:`` curve expands into are
             named too. Expressions and duals in the spec keep reading spec
             names. Pass the same *rename* to :func:`linopy.spec.evaluate`.
+        dim_order : sequence of str, optional
+            The axis order of each variable, constraint and named expression
+            the spec builds, and so the order its labels are allocated in.
+            The dims of an entry named here come first, in this order; the
+            rest keep the order ``None`` gives them: by name, except that a
+            dim only the data side of a constraint carries, such as a
+            piecewise breakpoint dim, comes last. A name an entry lacks is
+            ignored there. For instance, ``dim_order=["store"]`` builds a
+            variable over ``snapshot`` and ``store`` as
+            ``(store, snapshot)``, where ``None`` gives
+            ``(snapshot, store)``. Pass the same *dim_order* to
+            :func:`linopy.spec.evaluate`.
         **model_kwargs
             Passed to :class:`Model`, such as ``sparse=True``.
 
@@ -556,6 +569,10 @@ class Model:
             If a key of a mapping *rename* names no variable or constraint.
         ValueError
             If *rename* gives two variables, or two constraints, one name.
+        TypeError
+            If *dim_order* is a ``str``.
+        ValueError
+            If *dim_order* names a dim twice.
 
         Warns
         -----
@@ -566,7 +583,7 @@ class Model:
         from linopy.spec.api import build_into
 
         model = cls(**model_kwargs)
-        build_into(model, spec, sources, store, expressions, rename)
+        build_into(model, spec, sources, store, expressions, rename, dim_order)
         return model
 
     @property
@@ -1413,13 +1430,12 @@ class Model:
                 else (as_dataarray(mask).astype(bool) & rhs_mask)
             )
 
-        if isinstance(scaling, int | float | np.number):
-            scaling = DataArray(float(scaling))
-        else:
-            scaling = broadcast_to_coords(
+        row_scaling = scalar_scaling(scaling, "constraint scaling")
+        if row_scaling is None:
+            broadcast = broadcast_to_coords(
                 scaling, rhs.coords, label="constraint scaling"
             )
-        row_scaling = validate_scaling(scaling, "constraint scaling")
+            row_scaling = validate_scaling(broadcast, "constraint scaling")
 
         if mask is not None:
             on_grid = (

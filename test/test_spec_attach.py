@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from typing import Any
@@ -1023,6 +1024,57 @@ def test_a_stray_relation_value_over_an_int_target_is_shown_as_written() -> None
     with pytest.raises(SpecDataError, match=r"not 'b' labels: 99\b") as error:
         read_all(program, sources)
     assert "int64" not in str(error.value)
+
+
+STRAY_KINDS: dict[str, tuple[str, pd.Index, Any]] = {
+    "int": ("int", pd.Index([0, 1, 2]), 9),
+    "float": ("float", pd.Index([0.5, 1.5, 2.5]), 9.5),
+    "datetime": (
+        "datetime",
+        pd.date_range("2030-01-01", periods=3),
+        pd.Timestamp("2030-02-01"),
+    ),
+    "object-str": ("str", pd.Index(["a", "b", "c"], dtype=object), "zz"),
+    "arrow-str": ("str", pd.Index(["a", "b", "c"], dtype="string[pyarrow]"), "zz"),
+}
+
+
+def _stray_sources(
+    labels: pd.Index, stray: Any, into: str
+) -> tuple[dict[str, Any], str]:
+    """Sources with *stray* among the *into* labels of 'd', and the message that names it."""
+    column = pd.Series([labels[0], stray, labels[1]], dtype=labels.dtype)
+    if into == "parameter":
+        parameter = pd.DataFrame({"d": column, "p": [1.0, 2.0, 3.0]})
+        relation = pd.DataFrame({"h": ["u"], "d": column[:1]})
+        message = f"not coordinates of it: {stray!r}.\n"
+    else:
+        parameter = pd.DataFrame({"d": labels, "p": [1.0, 2.0, 3.0]})
+        relation = pd.DataFrame({"h": ["u", "v", "w"], "d": column})
+        message = f"not 'd' labels: {stray!r}. Every"
+    return {"d": labels, "h": ["u", "v", "w"], "p": parameter, "r": relation}, message
+
+
+@pytest.mark.parametrize("into", ["parameter", "relation"])
+@pytest.mark.parametrize("kind", STRAY_KINDS)
+def test_a_label_outside_its_dimension_is_named(kind: str, into: str) -> None:
+    dtype, labels, stray = STRAY_KINDS[kind]
+    program = lower(
+        {
+            "dimensions": {"d": {"dtype": dtype}, "h": {"dtype": "str"}},
+            "relations": {"r": {"key": "h", "values": "d", "missing": "absent"}},
+            "parameters": {"p": {"dims": ["d"], "missing": "absent"}},
+        }
+    )
+    sources, message = _stray_sources(labels, stray, into)
+    with pytest.raises(SpecDataError, match=re.escape(message)):
+        read_all(program, sources)
+
+
+def test_a_label_its_one_of_lacks_is_named_once_however_often_it_comes() -> None:
+    program = lower({"dimensions": {"carrier": {"one_of": ["ccgt", "wind"]}}})
+    with pytest.raises(SpecDataError, match=r"label\(s\) 'solar' that its one_of"):
+        attach(program, {"carrier": ["wind", "solar", "wind", "solar"]})
 
 
 def test_a_table_label_equal_to_a_coordinate_in_value_only_is_refused() -> None:

@@ -142,6 +142,61 @@ def test_an_operator_builds_and_folds_alike(operators_model: Model, key: str) ->
     xr.testing.assert_allclose(folded, want.rename(f"probe_{name}"))
 
 
+HOURS = pd.date_range("2030-01-01", periods=12, freq="h", name="t")
+SEASON = ["a", "b", "a", "a", "c", "b", "a", "a", "b", "a", "a", "a"]
+HOURLY = pd.DataFrame({"s": SEASON, "v": np.arange(1.0, 13.0)}, index=HOURS)
+EDGES = {"none": "", "fill": ", edge=0", "wrap": ", edge='wrap'"}
+
+
+def hourly_shift(offset: int, edge: str, within: str) -> dict[str, Any]:
+    shifted = f"shift(x, along=t, offset={offset}{EDGES[edge]}{within})"
+    return {
+        "dimensions": {
+            "t": {"dtype": "datetime", "ordered": True},
+            "s": {"dtype": "str"},
+        },
+        "relations": {"season_of": {"key": "t", "values": "s"}},
+        "parameters": {"v": {"dims": ["t"]}},
+        "variables": {
+            "x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 100}},
+            "y": {"dims": ["t"], "bounds": {"lower": -100, "upper": 100}},
+        },
+        "constraints": {
+            "fix": {"dims": ["t"], "expression": "x == v"},
+            "link": {"dims": ["t"], "expression": f"y == {shifted}"},
+        },
+        "objective": {"sense": "minimize", "expression": "sum(x)"},
+    }
+
+
+def pandas_shift(
+    values: pd.api.typing.SeriesGroupBy, offset: int, edge: str
+) -> pd.Series:
+    if edge == "wrap":
+        return values.transform(lambda group: np.roll(group.to_numpy(), offset))
+    return values.shift(offset, fill_value=0.0 if edge == "fill" else None)
+
+
+@pytest.mark.parametrize("grouped", [True, False], ids=["in-groups", "whole-axis"])
+@pytest.mark.parametrize("edge", EDGES)
+@pytest.mark.parametrize("offset", [-7, -1, 0, 1, 7])
+def test_a_shift_on_a_datetime_axis_matches_a_pandas_shift(
+    offset: int, edge: str, grouped: bool
+) -> None:
+    within = ", within=season_of[s]" if grouped else ""
+    sources = {
+        "t": HOURS,
+        "s": ["a", "b", "c"],
+        "season_of": HOURLY.s.rename_axis("t").reset_index(),
+        "v": HOURLY.v.rename_axis("t").reset_index(),
+    }
+    m = solved(hourly_shift(offset, edge, within), sources)
+    groups = HOURLY.s if grouped else np.zeros(len(HOURLY))
+    want = pandas_shift(HOURLY.groupby(groups).v, offset, edge)
+    rows = m.constraints["link"].labels != -1
+    np.testing.assert_allclose(m.solution["y"].where(rows), want, equal_nan=True)
+
+
 AMOUNT_SPEC: dict[str, Any] = {
     "dimensions": {"t": {"dtype": "int", "ordered": True}, "g": {"dtype": "int"}},
     "relations": {"grp": {"key": "t", "values": "g", "missing": "absent"}},
@@ -194,6 +249,38 @@ def test_a_missing_shift_amount_is_refused_where_a_live_row_reads_it(
         ]
 
 
+@pytest.mark.parametrize(
+    "within", ["", ", within=season_of[s]"], ids=["axis", "groups"]
+)
+@pytest.mark.parametrize("edge", ["edge=0", "edge='wrap'"])
+def test_an_absent_entity_offset_shifts_to_no_row(
+    backend: Model, edge: str, within: str
+) -> None:
+    e = pd.Index(["a", "b"], name="e")
+    shifted = f"shift(x, along=t, offset=lag, {edge}{within})"
+    spec = {
+        "dimensions": {
+            "t": {"dtype": "int", "ordered": True},
+            "s": {"dtype": "str"},
+            "e": {"dtype": "str"},
+        },
+        "relations": {"season_of": {"key": "t", "values": "s"}},
+        "parameters": {"lag": {"dims": ["e"], "dtype": "int", "missing": "absent"}},
+        "variables": {"x": {"dims": ["t", "e"]}},
+        "constraints": {"c": {"dims": ["t", "e"], "expression": f"x + {shifted} >= 0"}},
+    }
+    data = {
+        "t": TT,
+        "s": S,
+        "e": e,
+        "season_of": pd.DataFrame({"t": TT, "s": ["a", "a", "b", "b"]}),
+        "lag": pd.DataFrame({"e": ["a"], "lag": [1]}),
+    }
+    m = Model.from_spec(spec, data, sparse=backend.sparse)
+    live = m.constraints["c"].labels != -1
+    assert live.sum("t").values.tolist() == [4, 0]
+
+
 WINDOW_SPEC: dict[str, Any] = {
     "dimensions": {"t": {"dtype": "int", "ordered": True}},
     "parameters": {"v": {"dims": ["t"]}},
@@ -220,6 +307,61 @@ def test_a_trailing_sum_wider_than_its_axis_wraps_onto_the_whole_axis() -> None:
     want = xr.DataArray([V.sum()] * len(TT), coords={"t": TT}, name="recent")
     xr.testing.assert_allclose(
         evaluate(spec, solved(spec, WINDOW_DATA), "recent")["recent"], want
+    )
+
+
+@pytest.mark.parametrize(
+    ("key", "data", "expected"),
+    [
+        pytest.param("sum-back", {}, [1, 1, 0, 8], id="sum-back"),
+        pytest.param("sum-back-wrap", {}, [9, 1, 0, 8], id="sum-back-wrap"),
+        pytest.param("sum-back-in-groups", {}, [1, 1, 0, 8], id="sum-back-in-groups"),
+        pytest.param(
+            "sum-back-group-width", {}, [1, 0, 0, 8], id="sum-back-group-width"
+        ),
+        pytest.param(
+            "sum-back-group-width",
+            {"width": pd.DataFrame({"s": S, "width": [1, 0]})},
+            [1, 0, 0, 0],
+            id="width-of-zero-is-zero",
+        ),
+        pytest.param(
+            "sum-back-in-groups",
+            {"season_of": pd.DataFrame({"t": TT[:3], "s": list("aab")})},
+            [1, 1, 0, np.nan],
+            id="member-in-no-group-keeps-no-row",
+        ),
+        pytest.param(
+            "sum-back-group-width",
+            {"width": pd.DataFrame({"s": S[:1], "width": [1]})},
+            [1, 0, np.nan, np.nan],
+            id="absent-width-keeps-no-row",
+        ),
+    ],
+)
+def test_a_defined_window_of_absent_terms_sums_to_zero_like_sum(
+    key: str, data: dict[str, Any], expected: list[float]
+) -> None:
+    live = xr.DataArray([True, False, False, True], coords=[TT])
+    x = {**operator_spec()["variables"]["x"], "where": "live"}
+    spec = with_(
+        operator_spec(),
+        parameters={
+            "live": {"dims": ["t"], "dtype": "bool"},
+            "width": {"dims": ["s"], "dtype": "int", "missing": "absent"},
+        },
+        variables={"x": x},
+    )
+    m = solved(spec, {**OPERATOR_DATA, "live": live, **data})
+    name = key.replace("-", "_")
+    want = xr.DataArray(expected, coords=[TT], name=f"probe_{name}")
+    built = m.constraints[f"link_{name}"].labels != -1
+    assert built.values.tolist() == want.notnull().values.tolist()
+    xr.testing.assert_allclose(
+        m.solution[f"y_{name}"].where(built), want.rename(f"y_{name}")
+    )
+    xr.testing.assert_allclose(
+        evaluate(spec, m, f"probe_{name}")[f"probe_{name}"], want
     )
 
 
@@ -812,6 +954,29 @@ def test_a_where_picks_the_rows_it_names(case: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("predicate", "rows"),
+    [
+        pytest.param("false AND t > 1", None, id="false-flag-first"),
+        pytest.param("t > 1 AND false", None, id="false-flag-last"),
+        pytest.param("t < 2 AND t > 1", None, id="disjoint"),
+        pytest.param("flag AND late", None, id="disjoint-bool-parameter"),
+        pytest.param("t > 0 AND t < 3", [1, 2], id="overlapping"),
+        pytest.param("late AND cost > 2 AND t < 3", [2], id="overlapping-three"),
+    ],
+)
+def test_a_where_joined_by_and_builds_only_the_rows_all_its_conditions_hold(
+    predicate: str, rows: list[int] | None
+) -> None:
+    row = {"dims": ["t"], "expression": "x >= 0", "where": predicate}
+    m = Model.from_spec(with_(WHERE_SPEC, constraints={"k": row}), WHERE_DATA)
+    if rows is None:
+        assert "k" not in m.constraints
+        return
+    labels = m.constraints["k"].labels
+    assert labels["t"][(labels != -1).to_numpy()].to_numpy().tolist() == rows
+
+
+@pytest.mark.parametrize(
     ("predicate", "match"),
     [
         ("position(t) == 7", "names position 7 of 't', which has 4"),
@@ -917,3 +1082,19 @@ def test_a_lookup_into_an_empty_dimension_reads_nothing() -> None:
     }
     m = Model.from_spec(spec, sources)
     assert int((m.constraints["cap"].labels != -1).sum()) == 1
+
+
+def test_a_grouped_sum_onto_a_mostly_empty_grid_does_not_warn() -> None:
+    from linopy.spec.operators import grouped_sum
+
+    rows = np.arange(200)
+    onto = {"a": pd.Index(rows, name="a"), "p": pd.Index(range(101), name="p")}
+    grouped = {"a": rows, "p": rows % 101}
+    summed = {}
+    for sparse in (True, False):
+        x = Model(sparse=sparse).add_variables(coords=[onto["a"]], name="x")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            summed[sparse] = grouped_sum(1 * x, {"a": rows}, grouped, onto)
+    assert summed[True].is_sparse
+    assert_linequal(summed[True], summed[False])

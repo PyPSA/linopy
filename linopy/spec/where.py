@@ -11,7 +11,7 @@ import xarray as xr
 from mathspec import program as ms
 
 from linopy.spec import operators
-from linopy.spec.context import Array, Context
+from linopy.spec.context import Array, Context, widened
 from linopy.spec.errors import SpecDataError
 
 _COMPARISONS: dict[str, Callable[..., xr.DataArray]] = {
@@ -37,14 +37,18 @@ def admits_a_row(mask: ms.Mask | None, ctx: Context) -> bool:
 
     The conditions ``AND`` joins are read left to right and the reading
     stops at the first that leaves no row, so a declaration a flag switches
-    off costs that flag alone.
+    off costs that flag alone: one that holds nowhere decides before it is
+    joined to the ones read so far.
     """
     if mask is None:
         return True
-    kept = xr.DataArray(True)
+    kept: xr.DataArray | None = None
     for node in _conjuncts(mask.root):
-        kept = kept & _node(node, ctx)
-        if not bool(kept.any()):
+        held = _node(node, ctx)
+        if not held.values.any():
+            return False
+        kept = held if kept is None else kept & held
+        if not kept.values.any():
             return False
     return True
 
@@ -104,13 +108,15 @@ def _condition(node: ms.Condition, ctx: Context) -> xr.DataArray:
     if isinstance(node, ms.ExpressionComparison):
         return _both(node.op, _side(node.left, ctx), _side(node.right, ctx))
     if isinstance(node, ms.CountComparison):
-        count = _node(node.condition.root, ctx).sum(node.over)
+        count = _node(node.condition.root, widened(node, ctx)).sum(node.over)
         return _COMPARISONS[node.op](count, node.value)
     if isinstance(node, ms.TranslatedCondition):
-        shifted = _node(node.operand.root, ctx).shift({node.along: node.offset})
+        inner = widened(node, ctx)
+        shifted = _node(node.operand.root, inner).shift({node.along: node.offset})
         return _bool(shifted)
     if isinstance(node, ms.JoinedCondition):
-        pulled = looked_up(_node(node.operand.root, ctx), node.columns, ctx)
+        inner = widened(node, ctx)
+        pulled = looked_up(_node(node.operand.root, inner), node.columns, ctx)
         return _bool(cast(xr.DataArray, pulled))
     if isinstance(node, ms.DimensionComparison):
         labels = ctx.coords[node.name]
@@ -180,7 +186,9 @@ def _defined(name: str, ctx: Context) -> xr.DataArray:
 
 
 def _bool(arr: xr.DataArray) -> xr.DataArray:
-    """*arr* as a boolean mask, a hole reading as exclusion."""
+    """*arr* as a boolean mask, a hole reading as exclusion; a boolean array has no hole and is the mask."""
+    if arr.dtype == bool:
+        return arr
     return arr.fillna(False).astype(bool)
 
 

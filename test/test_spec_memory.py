@@ -95,3 +95,49 @@ def test_a_build_frees_the_grids_it_read_when_it_returns(
             gc.enable()
     assert model.constraints["k"].shape == (len(G),)
     assert held < 0.25 * GRID
+
+
+BUSES = pd.Index([f"b{i}" for i in range(400)], name="b")
+JOINED = """
+dimensions: {t: {dtype: int}, g: {}, b: {}}
+relations: {gen_bus: {key: g, values: b}}
+parameters: {c: {dims: [g]}, d: {dims: [b]}}
+variables: {x: {dims: [g, t], bounds: {lower: 0, upper: 1}}}
+expressions:
+  rated: {dims: [g, t], cases: {on: {when: "c > 0", expression: "c * x"}}, otherwise: 0}
+  rating: {dims: [b], cases: {on: {when: "d > 0", expression: "d"}}, otherwise: 0}
+objective: {sense: minimize, expression: "sum(x)"}
+"""
+
+
+@pytest.mark.parametrize(
+    "constraint",
+    [
+        pytest.param(
+            "{dims: [b, t], where: \"b != 'b0' and t >= 0\", "
+            'expression: "sum(rated, over=g, by=gen_bus[b]) <= 1"}',
+            id="grouped-sum",
+        ),
+        pytest.param(
+            "{dims: [g, t], where: \"g != 'g0' and t >= 0\", "
+            'expression: "x <= at(rating, by=gen_bus[b])"}',
+            id="lookup",
+        ),
+    ],
+)
+def test_a_join_checks_its_operand_rows_without_the_dims_it_adds(
+    constraint: str,
+) -> None:
+    """The rows a join checks reach its operand without the dims it adds, not as one mask over bus x generator x t (#1190)."""
+    t = T[:50]
+    sources = {
+        "t": t,
+        "g": G,
+        "b": BUSES,
+        "gen_bus": pd.DataFrame({"g": G, "b": np.resize(BUSES, len(G))}),
+        "c": pd.DataFrame({"g": G, "c": 1.0}),
+        "d": pd.DataFrame({"b": BUSES, "d": 1.0}),
+    }
+    spec = JOINED + f"constraints: {{k: {constraint}}}\n"
+    used = peak(lambda: Model.from_spec(spec, sources))
+    assert used < 0.5 * len(BUSES) * len(t) * len(G)

@@ -297,6 +297,9 @@ The other operators read past an edge in their own way:
 
 - `sum_back(p, along=s, window=3)` is a sum, so it shortens its window at the
     start rather than dropping the row: the first `s` reads `p[0]` alone.
+    A window that holds only absent terms is 0, as a `sum` of them is.
+    A member that `within=` places in no group, or one with no width, has
+    no window, and the row goes with it.
     `edge='wrap'` reaches back into the end, `within=rel[col]` stops at each
     group's edge.
 - `at(p, by=rel[col])` reads nothing for a member the relation maps nowhere,
