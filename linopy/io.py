@@ -665,7 +665,7 @@ def constraints_to_file(
     for name in names:
         con = regular[name]
         for part in con.iterate_slices(slice_size):
-            df = part._to_polars(empty_var)
+            df = part.to_polars(empty_var=empty_var)
             if df.height == 0:
                 continue
             if scaled:

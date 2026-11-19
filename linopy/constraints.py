@@ -1247,7 +1247,7 @@ class Constraint:
         rhs = DataArray(array([c.rhs for c in cons]).reshape(shape), coords)
         return cls(lhs, sign, rhs, model)
 
-    def to_polars(self) -> pl.DataFrame:
+    def to_polars(self, *, empty_var: int | None = None) -> pl.DataFrame:
         """
         Convert the constraint to a polars DataFrame.
 
@@ -1255,16 +1255,15 @@ class Constraint:
         non-masked constraints with non-zero coefficients. It typically
         contains the columns `labels`, `coeffs`, `vars`, `rhs`, `sign`.
 
+        Parameters
+        ----------
+        empty_var : int, optional
+            Variable label for rows without a term. Each such row gets the
+            single term ``0 * empty_var``, so a file writer keeps it.
+
         Returns
         -------
         df : polars.DataFrame
-        """
-        return self._to_polars(None)
-
-    def _to_polars(self, empty_var: int | None) -> pl.DataFrame:
-        """
-        Long frame of :meth:`to_polars`. With ``empty_var``, a row without a
-        term gets the single term ``0 * empty_var``, so a writer keeps it.
         """
         labels_flat = self._label_values()
         mask = labels_flat != -1
