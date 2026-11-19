@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -17,7 +18,7 @@ import pytest
 import xarray as xr
 from xarray.testing import assert_allclose, assert_equal
 
-from linopy import GREATER_EQUAL, LESS_EQUAL, Model, solvers
+from linopy import GREATER_EQUAL, LESS_EQUAL, Model, Variable, solvers
 from linopy.common import to_path
 from linopy.expressions import LinearExpression
 from linopy.solver_capabilities import (
@@ -486,6 +487,18 @@ def test_mock_solve(model_maximization: Model) -> None:
     assert (x_solution == 0).all()
 
 
+@pytest.mark.parametrize("value", [True, False])
+def test_solve_sanitize_zeros_warns_and_keeps_terms(value: bool) -> None:
+    m = Model()
+    x = m.add_variables(lower=0, name="x")
+    m.add_constraints(1e-11 * x >= 0, name="tiny")
+    m.add_objective(x)
+
+    with pytest.warns(FutureWarning, match="`sanitize_zeros` is no longer supported"):
+        m.solve(mock_solve=True, sanitize_zeros=value)
+    assert m.constraints["tiny"].coeffs.item() == 1e-11
+
+
 @pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS is not installed")
 def test_mock_solve_clears_existing_solver_state(model: Model) -> None:
     status, condition = model.solve(solver_name="highs", io_api="direct")
@@ -683,6 +696,66 @@ def test_infeasible_model(
             model.compute_infeasibilities()
 
 
+EMPTY_ROWS: dict[str, Callable[[Variable], Any]] = {
+    "zero-times-x": lambda x: 0 * x >= 5,
+    "zero-coeff": lambda x: xr.DataArray([0, 1], coords=[x.indexes["i"]]) * x >= 5,
+    "constant": lambda x: LinearExpression(12, x.model) == 13,
+    "all-absent-sum": lambda x: (
+        x.where(xr.DataArray([False, True], coords=[x.indexes["i"]])).sum("j") >= 5
+    ),
+}
+
+
+def add_empty_row(m: Model, case: str) -> Variable:
+    coords = [pd.RangeIndex(2, name="i"), pd.RangeIndex(2, name="j")]
+    x = m.add_variables(lower=0, upper=10, coords=coords, name="x")
+    m.add_constraints(EMPTY_ROWS[case](x), name="con")
+    m.add_objective(x.sum())
+    return x
+
+
+@pytest.mark.parametrize("case", EMPTY_ROWS)
+@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
+def test_empty_row_that_cannot_hold_makes_the_model_infeasible(
+    case: str, solver: str, io_api: str, explicit_coordinate_names: bool
+) -> None:
+    m = Model()
+    add_empty_row(m, case)
+    status, condition = m.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    assert status == "warning"
+    assert "infeasible" in condition
+
+
+@pytest.mark.skipif("highs" not in direct_solvers, reason="highspy not installed")
+def test_empty_row_that_cannot_hold_makes_a_sparse_model_infeasible() -> None:
+    m = Model(sparse=True)
+    add_empty_row(m, "all-absent-sum")
+    assert m.solve("highs", io_api="direct") == ("warning", "infeasible")
+
+
+@pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
+def test_empty_row_that_holds_reaches_the_solver(
+    solver: str, io_api: str, explicit_coordinate_names: bool
+) -> None:
+    m = Model()
+    i = pd.RangeIndex(2, name="i")
+    x = m.add_variables(lower=0, upper=10, coords=[i], name="x")
+    rhs = xr.DataArray([-5, 5], coords=[i])
+    m.add_constraints(xr.DataArray([0, 1], coords=[i]) * x >= rhs, name="con")
+    m.add_objective(x.sum())
+
+    status, _ = m.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+
+    assert status == "ok"
+    assert m.ncons == 2
+    np.testing.assert_allclose(x.solution, [0, 5])
+    assert m.constraints["con"].dual[0] == pytest.approx(0, abs=1e-6)
+
+
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_model_with_inf(
     model_with_inf: Model, solver: str, io_api: str, explicit_coordinate_names: bool
@@ -805,6 +878,25 @@ def test_milp_model(
         report = milp_model.solver.report
         assert report is not None
         assert report.dual_bound is not None
+
+
+@pytest.mark.parametrize(
+    "solver,io_api,explicit_coordinate_names",
+    [p for p in params if p[0] not in ["mindopt"]],
+)
+def test_infeasible_milp_model(
+    milp_model: Model, solver: str, io_api: str, explicit_coordinate_names: bool
+) -> None:
+    if solver not in feasible_mip_solvers:
+        pytest.skip(f"{solver} does not support MIP")
+
+    milp_model.add_constraints(milp_model.variables["x"] <= -1)
+
+    status, condition = milp_model.solve(
+        solver, io_api=io_api, explicit_coordinate_names=explicit_coordinate_names
+    )
+    assert status == "warning"
+    assert "infeasible" in condition
 
 
 @pytest.mark.parametrize(

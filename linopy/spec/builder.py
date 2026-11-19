@@ -13,7 +13,6 @@ order :meth:`~linopy.spec.context.Context.frame` gives its dims: the dims
 from __future__ import annotations
 
 import operator
-import warnings
 from dataclasses import replace
 from typing import cast
 
@@ -153,9 +152,7 @@ def _constraints(ctx: Context) -> None:
         term = cast(Term, term)
         if any(term.sizes[d] == 0 for d in term.coord_dims):
             continue
-        _check_live(name, row, term, other, rows, ctx)
-        sides = [term, other] if isinstance(other, Term) else [term]
-        if all(as_expression(side).is_constant for side in sides):
+        if not bool((rows & _present(term) & _present(other)).any()):
             continue
         if isinstance(other, xr.DataArray):
             const = constant_of(term)
@@ -196,66 +193,18 @@ def _linear(name: str, side: Value, rows: xr.DataArray) -> Value:
     return LinearExpression(side.data.assign(vars=vars), side.model)
 
 
-def _check_live(
-    name: str,
-    declared: ms.Constraint,
-    term: Term,
-    other: Value,
-    rows: xr.DataArray,
-    ctx: Context,
-) -> None:
+def _present(side: Value) -> xr.DataArray:
     """
-    Refuse a row the data emptied of every variable term.
+    Per row, whether *side* is present there.
 
-    Such a row reads as ``0 sense rhs``: linopy carries no column there, the
-    row leaves the problem and the constraint silently stops binding. Where
-    every variable of the row declares a ``missing:`` number, the constant
-    left is what the math says, so a row whose two sides are equal there is
-    warned about rather than refused.
-    An absent row is not emptied: absence spread through arithmetic, a masked
-    variable or a vacated translation, takes the row with it. A bare variable
-    term is never emptied: a row of it exists exactly where the variable does.
+    Absence spread through arithmetic, a masked variable or a vacated
+    translation, takes the row with it. A present row stays, also one the
+    data leaves without a variable term: it reaches the solver as
+    ``constant sense constant``, like any row core linopy builds.
     """
-    if isinstance(term, Variable):
-        return
-    store = cast(LinearExpression, term)._store
-    alive = store.dataarray(store.has_terms() | np.isnan(store.const), "alive")
-    dead = rows & ~alive
-    if not bool(dead.any()):
-        return
-    said = (
-        f"constraint '{name}': {int(dead.sum())} row(s) hold no variable term once the data "
-        f"is attached, the first at {first_coordinates(dead, 3)}. Nothing is left to constrain there, so "
-        f"the row leaves the problem without saying so."
-    )
-    valued = all(
-        ctx.program.variables[v].missing != "absent"
-        for v in ms.variables_of(declared.lhs, declared.rhs)
-    )
-    if valued and not _binds(other, constant_of(term), dead):
-        warnings.warn(
-            f"{said} Every variable there takes its missing: number and the two sides "
-            f"are equal, so the row is trivially true.",
-            UserWarning,
-            stacklevel=2,
-        )
-        return
-    supply = (
-        "  Supply the rows of the variables, if the row is meant to bind."
-        if valued
-        else "  Declare missing: 0 on the variables, if an absent term is a zero there."
-    )
-    raise SpecDataError(
-        f"{said}\n"
-        f"  Mask them out with a where on the constraint, if the row should not exist there.\n"
-        f"{supply}"
-    )
-
-
-def _binds(other: Value, const: xr.DataArray, dead: xr.DataArray) -> bool:
-    """Whether the side without the variable term differs from the constant *const* left on a row *dead* names."""
-    differs = xr.DataArray(other) != const
-    return bool((differs & dead).any())
+    if isinstance(side, Variable):
+        return side.labels != -1
+    return constant_of(side).notnull()
 
 
 def _objective(ctx: Context) -> None:

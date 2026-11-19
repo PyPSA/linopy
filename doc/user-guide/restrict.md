@@ -48,8 +48,9 @@ $$
 where $x_W$ are the window's variables, $x_B$ the variables
 outside it, and $x_B$ on the right-hand side the values you pass in
 `fix`. In words, each outside term adds `coefficient * fixed value` to the
-right-hand side. Rows that lose every term are checked and dropped when they
-are satisfied.
+right-hand side. Rows that have no term in the window, also those without a
+term in the model, are checked against `tol` and dropped when they are
+satisfied.
 
 Without `fix`, a window that cuts a coupling raises
 [`RestrictionError`][linopy.restrict.RestrictionError] naming the constraints. A window

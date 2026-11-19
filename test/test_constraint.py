@@ -669,6 +669,15 @@ def test_constraint_to_polars(c: linopy.constraints.Constraint) -> None:
     assert isinstance(c.to_polars(), pl.DataFrame)
 
 
+def test_constraint_to_polars_has_no_term_for_an_empty_row(
+    m: Model, x: linopy.Variable
+) -> None:
+    coeffs = xr.DataArray(np.arange(10) % 2, coords=[x.indexes["first"]])
+    df = m.add_constraints(coeffs * x >= 5, name="half").to_polars()
+    assert df["labels"].n_unique() == 5
+    assert (df["coeffs"] == 1).all()
+
+
 def test_constraint_to_polars_mixed_signs(m: Model, x: linopy.Variable) -> None:
     """Test to_polars when a constraint has mixed sign values across dims."""
     # Use Constraint so sign data can be patched
@@ -688,23 +697,6 @@ def test_constraint_assignment_with_anonymous_constraints(
     m.add_constraints(x + y == 0, name="c2")
     assert m.constraints["c2"].vars.notnull().all()
     assert m.constraints["c2"].coeffs.notnull().all()
-
-
-@pytest.mark.parametrize("coeff", [0.0, 1e-12])
-@pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
-def test_constraint_assignment_sanitize_zeros(
-    m: Model, x: linopy.Variable, y: linopy.Variable, sparse: bool, coeff: float
-) -> None:
-    con = m.add_constraints(coeff * x + y == 0, name="c2")
-    if sparse:
-        con.to_sparse()
-    m.constraints.sanitize_zeros()
-    c2 = m.constraints["c2"]
-    assert c2.nterm == 1
-    assert c2.has_variable(y)
-    assert not c2.has_variable(x)
-    csr, _ = c2.to_matrix(m.variables.label_index)
-    assert (csr.data == 1).all()
 
 
 def test_constraint_assignment_with_args(

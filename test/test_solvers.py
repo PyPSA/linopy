@@ -672,7 +672,7 @@ class TestSolverDoesNotMutateModel:
         assert np.allclose(before, after, equal_nan=True), (
             "Solver.from_model() must not mutate model constraints. "
             "Sanitization is a Model-level primitive; call "
-            "model.constraints.sanitize_zeros() / .sanitize_infinities() "
+            "model.constraints.sanitize_infinities() "
             "explicitly before building."
         )
 

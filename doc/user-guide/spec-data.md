@@ -251,11 +251,13 @@ variables:
     propagate to the whole row. An `absent` row read outside a sum takes the
     row with it, so `x <= c` has no row where `c` is absent; write
     `where: c` on the constraint to make that visible in the spec.
-- Inside a sum, an absent term is left out. A row the data leaves without any
-    variable term, such as a sum over variables a `where:` masked away
-    entirely, is refused rather than dropped: nothing is left to constrain, and
-    the row would leave the problem without saying so. Mask it with a `where:`
-    on the constraint ([\#993](https://github.com/PyPSA/linopy/issues/993)).
+- Inside a sum, an absent term is left out, and a sum of absent terms only
+    is 0. A row the data leaves without any variable term, such as a sum over
+    variables a `where:` masked away entirely, the vacated end of a `shift`
+    with `edge=0` or a coefficient of 0, is present: it stays and reaches the
+    solver as `constant sense constant`, like any row linopy builds. Where it
+    cannot hold, e.g. `0 >= 5`, the solver reports the problem infeasible.
+    Mask such rows with a `where:` on the constraint if they should not exist.
 - linopy carries a product of two variables in the objective only. A
     constraint whose spec multiplies two variables builds wherever the data
     leaves no such product on a row its `where:` keeps: its coefficient is
@@ -308,8 +310,8 @@ The other operators read past an edge in their own way:
 - Inside a sum a hole is a term left out, so
     `sum(shift(q, along=s, offset=1), over=s)` builds every row.
 
-A row the data leaves present but without a variable term is the other case,
-refused as described above. To see which rows a built constraint lacks, read
+A row the data leaves present but without a variable term is the other case:
+it stays, as described above. To see which rows a built constraint lacks, read
 `m.constraints["ramp"].labels == -1`: a row absence dropped or a `where:`
 masked has no label.
 

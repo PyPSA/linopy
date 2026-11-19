@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+import xarray as xr
 
 from linopy import Model
 from linopy.persistent import RebuildReason
@@ -204,6 +205,47 @@ def test_cross_model_in_place(solver_name: str) -> None:
     s_fresh = _built(solver_name, m3)
     s_fresh.solve(assign=True)
     assert np.isclose(cross_obj, _obj(m3))
+
+
+@pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
+@pytest.mark.parametrize(
+    "sign,rhs,update",
+    [(">=", -5.0, {"rhs": 5.0}), ("<=", 5.0, {"sign": ">="})],
+    ids=["rhs", "sign"],
+)
+@pytest.mark.parametrize("stored", [True, False], ids=["zero-term", "no-term"])
+def test_update_makes_empty_row_infeasible(
+    solver_name: str, sign: str, rhs: float, update: dict[str, Any], stored: bool
+) -> None:
+    m = _base_model()
+    x = m.variables["x"]
+    if stored:
+        lhs = xr.DataArray([0, 1, 1]) * x
+    else:
+        lhs = (1 * x).where(xr.DataArray([False, True, True])).fillna(0)
+    m.add_constraints(lhs, sign, rhs, name="c3")
+    s = _built(solver_name, m)
+    s.solve(assign=True)
+
+    m.constraints["c3"].update(**update)
+    result = s.solve(m)
+
+    assert result.status.termination_condition.value == "infeasible"
+
+
+@pytest.mark.parametrize("solver_name", SOLVER_PARAMS)
+def test_update_fills_row_without_stored_term(solver_name: str) -> None:
+    m = _base_model()
+    x = m.variables["x"]
+    lhs = (1 * x).where(xr.DataArray([False, True, True])).fillna(0)
+    m.add_constraints(lhs >= xr.DataArray([-5, 0, 0]), name="c3")
+    s = _built(solver_name, m)
+    s.solve(assign=True)
+
+    m.constraints["c3"].update(lhs=1 * x, rhs=xr.DataArray([7.0, 0, 0]))
+    s.solve(m, assign=True)
+
+    assert np.isclose(x.solution[0], 7)
 
 
 @pytest.mark.parametrize("solver_name", SOLVER_PARAMS)

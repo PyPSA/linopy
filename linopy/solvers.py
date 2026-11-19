@@ -936,8 +936,8 @@ class Solver(ABC, Generic[EnvType]):
         Dispatch to direct or file build based on ``io_api``.
 
         The Solver never mutates ``self.model``. Constraint sanitization
-        (``model.constraints.sanitize_zeros()`` /
-        ``.sanitize_infinities()`` / ``.sanitize_missings()``) and SOS reformulation
+        (``model.constraints.sanitize_infinities()`` /
+        ``.sanitize_missings()``) and SOS reformulation
         (``model.apply_sos_reformulation()``) are Model-level operations
         the caller applies first; this builder consumes whatever shape it
         is handed.
@@ -1725,6 +1725,8 @@ class GLPK(Solver[None]):
             "integer optimal": "optimal",
             "integer undefined": "infeasible_or_unbounded",
             "undefined": "infeasible_or_unbounded",
+            "infeasible (final)": "infeasible",
+            "integer empty": "infeasible",
         }
         sense = read_sense_from_problem_file(problem_fn)
         io_api = read_io_api_from_problem_file(problem_fn)
