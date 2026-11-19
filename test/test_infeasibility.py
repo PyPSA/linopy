@@ -7,6 +7,7 @@ from typing import cast
 
 import pandas as pd
 import pytest
+import xarray as xr
 
 from linopy import Model, licensed_solvers
 
@@ -282,3 +283,22 @@ class TestInfeasibility:
         for time_coord in grouped_coords["sum_lower"]:
             assert f"sum_lower[{time_coord}]" in output
             assert f"x_upper[{time_coord}]" in output
+
+    @pytest.mark.parametrize("solver", ["gurobi", "xpress", "highs"])
+    @pytest.mark.parametrize("io_api", ["lp", "direct"])
+    def test_rows_after_an_empty_row_keep_their_names(
+        self, solver: str, io_api: str
+    ) -> None:
+        if solver not in licensed_solvers:
+            pytest.skip(f"{solver} not available")
+
+        m = Model()
+        i = pd.RangeIndex(2, name="i")
+        x = m.add_variables(lower=0, upper=10, coords=[i], name="x")
+        rhs = xr.DataArray([-1, 1], coords=[i])
+        m.add_constraints(xr.DataArray([0, 1], coords=[i]) * x >= rhs, name="c")
+        m.add_constraints(x.sum() >= 30, name="d")
+        m.add_objective(x.sum())
+        m.solve(solver_name=solver, io_api=io_api)
+
+        assert m.compute_infeasibilities() == [2]

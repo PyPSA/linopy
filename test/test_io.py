@@ -1188,6 +1188,55 @@ def test_to_file_lp_constraint_section(
     assert _lp_constraint_section(m, fn, slice_size) == expected
 
 
+@pytest.mark.parametrize("slice_size", [2_000_000, 1], ids=["default", "slice-1"])
+def test_to_file_lp_writes_empty_row_with_a_zero_term(
+    tmp_path: Path, backend: Model, slice_size: int
+) -> None:
+    m = backend
+    i = pd.RangeIndex(3, name="i")
+    x = m.add_variables(coords=[i], name="x")
+    coeffs = xr.DataArray([0, 1, 0], coords=[i])
+    m.add_constraints(coeffs * x >= -5, name="a")
+    m.add_constraints(LinearExpression(12, m) == 12, name="b")
+    m.add_objective(x.sum())
+
+    fn = tmp_path / "empty.lp"
+    assert _lp_constraint_section(m, fn, slice_size) == (
+        "c0:\n+0.0 x0\n>= -5.0\n"
+        "c1:\n+1.0 x1\n>= -5.0\n"
+        "c2:\n+0.0 x0\n>= -5.0\n"
+        "c3:\n+0.0 x0\n= 0.0\n"
+    )
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="highspy not installed")
+@pytest.mark.parametrize(
+    "io_api,fn",
+    [("lp", "empty.lp"), ("lp-polars", "empty.lp"), ("mps", "empty.mps")],
+)
+def test_to_file_keeps_empty_row(tmp_path: Path, io_api: str, fn: str) -> None:
+    import highspy
+
+    m = Model()
+    x = m.add_variables(lower=0, coords=[pd.RangeIndex(2, name="i")], name="x")
+    m.add_constraints(x >= 1, name="a")
+    m.add_constraints(LinearExpression(12, m) >= 1, name="b")
+    m.add_objective(x.sum())
+    m.to_file(tmp_path / fn, io_api=io_api)
+
+    h = highspy.Highs()
+    h.setOptionValue("output_flag", False)
+    h.readModel(str(tmp_path / fn))
+    assert h.getNumRow() == 3
+
+
+def test_to_file_lp_raises_for_empty_row_without_any_variable(tmp_path: Path) -> None:
+    m = Model()
+    m.add_constraints(LinearExpression(12, m) >= 1, name="con")
+    with pytest.raises(ValueError, match="no variable to write them with"):
+        m.to_file(tmp_path / "empty.lp")
+
+
 def test_to_file_lp_unsorted_constraint_labels(tmp_path: Path) -> None:
     m = Model()
     i = pd.RangeIndex(3, name="i")

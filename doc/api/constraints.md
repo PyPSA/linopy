@@ -62,10 +62,6 @@ CSR store; `to_sparse` and `to_dense` convert it. See the
     options:
       heading_level: 4
 
-::: linopy.constraints.Constraint.sanitize_zeros
-    options:
-      heading_level: 4
-
 ::: linopy.constraints.Constraint.sanitize_infinities
     options:
       heading_level: 4

@@ -578,7 +578,7 @@ class Constraint:
 
     @property
     def ncons(self) -> int:
-        """Get the number of active constraints (non-masked, with at least one valid variable)."""
+        """Get the number of active constraints: rows with a label, also those without a term."""
         return int(self.active_row_mask().sum())
 
     @property
@@ -1004,8 +1004,8 @@ class Constraint:
         return csr, self._label_values()[active]
 
     def active_row_mask(self) -> np.ndarray:
-        """Boolean mask over raveled rows: label set and at least one variable present."""
-        return (self._label_values() != -1) & self._lhs._store.has_terms()
+        """Boolean mask over raveled rows: label set, with or without a term."""
+        return self._label_values() != -1
 
     def active_labels(self) -> np.ndarray:
         """Active constraint labels in build order, without building the CSR."""
@@ -1026,11 +1026,6 @@ class Constraint:
         b = self.rhs.values.ravel()[active]
         sense = self.sign.values.ravel()[active].astype("U1")
         return csr, con_labels, b, sense
-
-    def sanitize_zeros(self) -> Constraint:
-        """Remove terms with zero or near-zero coefficients."""
-        self._replace_store(self._lhs._store.prune(1e-10))
-        return self
 
     def sanitize_missings(self) -> Constraint:
         """Mask out rows where all variables are missing (-1)."""
@@ -1264,9 +1259,22 @@ class Constraint:
         -------
         df : polars.DataFrame
         """
+        return self._to_polars(None)
+
+    def _to_polars(self, empty_var: int | None) -> pl.DataFrame:
+        """
+        Long frame of :meth:`to_polars`. With ``empty_var``, a row without a
+        term gets the single term ``0 * empty_var``, so a writer keeps it.
+        """
         labels_flat = self._label_values()
         mask = labels_flat != -1
         counts, vars_, coeffs = self._lhs._store.terms(active=mask)
+        empty = mask & (counts == 0)
+        if empty_var is not None and empty.any():
+            starts = (np.cumsum(counts) - counts)[empty]
+            vars_ = np.insert(vars_, starts, empty_var)
+            coeffs = np.insert(coeffs, starts, 0.0)
+            counts = np.where(empty, 1, counts)
         long = pl.DataFrame(
             {"labels": np.repeat(labels_flat, counts), "coeffs": coeffs, "vars": vars_}
         )
@@ -1463,8 +1471,8 @@ class Constraints(LabelContainer[Constraint]):
         """
         Get the number all constraints effectively used by the model.
 
-        This excludes constraints with missing labels or where all variables
-        are masked (vars == -1).
+        This excludes rows with missing labels (-1). A row with a label but
+        without a term counts.
         """
         return sum(con.ncons for con in self.data.values() if not con.is_indicator)
 
@@ -1495,13 +1503,6 @@ class Constraints(LabelContainer[Constraint]):
         Get the subset of constraints which are not indicator constraints.
         """
         return self[[n for n, c in self.items() if not c.is_indicator]]
-
-    def sanitize_zeros(self) -> None:
-        """
-        Filter out terms with zero and close-to-zero coefficient.
-        """
-        for con in self.data.values():
-            con.sanitize_zeros()
 
     def sanitize_missings(self) -> None:
         """

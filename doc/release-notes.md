@@ -65,8 +65,9 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - The constructor takes these fields instead of a dataset: `Constraint(lhs, sign, rhs, model, ...)`. Build from a dataset with `Constraint.from_dataset(ds, model, name)`; `skip_broadcast` is removed. A field whose dimensions or coordinates differ from the lhs raises instead of broadcasting, and `assign` and the other wrapped xarray methods reject foreign data variables. ([\#1046](https://github.com/PyPSA/linopy/issues/1046))
 - `CSRConstraint`, `ConstraintBase` and the freeze API (`add_constraints(freeze=...)`, `Constraint.freeze()`, `CSRConstraint.mutable()`, ...) are removed. A constraint in a sparse model is a `Constraint` on a `CSRStore` with the full API; replace `isinstance(c, CSRConstraint)` with `c.lhs.is_sparse`. `Constraint.to_sparse()` and `to_dense()` convert in place. ([\#1033](https://github.com/PyPSA/linopy/issues/1033), [\#1047](https://github.com/PyPSA/linopy/issues/1047))
 - A sparse constraint keeps `rhs`, `sign`, `scaling` and `dual` on its full grid like a dense one; masked rows have label `-1`. ([\#1047](https://github.com/PyPSA/linopy/issues/1047))
-- `Constraint.update` raises when a new `lhs` or `rhs` adds dimensions, and `update(variables=...)` accepts only a `Variable`. After `update(coeffs=...)` or `update(variables=...)`, `coeffs` and `vars` keep the `_term` dimension. `sanitize_zeros` removes near-zero terms, so `_term` can shrink. `set_blocks` stores the `blocks` field. ([\#1046](https://github.com/PyPSA/linopy/issues/1046), [\#1047](https://github.com/PyPSA/linopy/issues/1047))
+- `Constraint.update` raises when a new `lhs` or `rhs` adds dimensions, and `update(variables=...)` accepts only a `Variable`. After `update(coeffs=...)` or `update(variables=...)`, `coeffs` and `vars` keep the `_term` dimension. `set_blocks` stores the `blocks` field. ([\#1046](https://github.com/PyPSA/linopy/issues/1046), [\#1047](https://github.com/PyPSA/linopy/issues/1047))
 - `Constraint.active_labels`, `to_matrix` and `to_polars` raise on a constraint without labels.
+- A constraint row without a nonzero term stays in the model and reaches the solver, e.g. a sum whose terms are all absent: `x.where(mask).sum("j") >= 5` is `0 >= 5` where the mask is all `False`, so the model is infeasible where 0.x dropped the row. `ncons`, the matrices and the duals count such rows. Mask them, e.g. `add_constraints(lhs >= 5, mask=lhs.has_terms)`, or fix the data. ([\#1170](https://github.com/PyPSA/linopy/issues/1170), [\#1183](https://github.com/PyPSA/linopy/pull/1183))
 
 *Saved models*
 
@@ -87,6 +88,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
     - `print_labels`, `Model.print_infeasibilities` and `Model.compute_set_of_infeasible_constraints`: use `format_labels`, `Model.compute_infeasibilities` and `Model.format_infeasibilities`.
     - `assign_multiindex_safe` on variables, expressions and constraints: use `assign`.
     - `LinearExpressionGroupby.map(shortcut=...)`, `Variables.dataset_names`, `Constraints.dataset_names`, `LinearExpression.sanitize` and `SolverReport.barrier_iterations`.
+- `Constraint.sanitize_zeros`, `Constraints.sanitize_zeros` and `Model.solve(sanitize_zeros=...)`. linopy skips terms with a zero coefficient, and the solver handles near-zero ones. Passing the keyword warns and has no effect. To compact the terms of an expression, use `densify_terms()`. ([\#1183](https://github.com/PyPSA/linopy/pull/1183))
 
 *Dependencies*
 
@@ -159,7 +161,9 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 
 *Solvers*
 
+- A constraint row without a nonzero term, e.g. `0 * x >= 5`, reaches the solver instead of being dropped. ([\#1170](https://github.com/PyPSA/linopy/issues/1170), [\#1183](https://github.com/PyPSA/linopy/pull/1183))
 - With `add_objective(..., scaling=...)`, the solve log reports objective and dual bound in model units. ([\#1077](https://github.com/PyPSA/linopy/issues/1077))
+- GLPK: an infeasible MIP, or an infeasible LP solved without presolve, is reported as `infeasible` instead of `ok`. ([\#1183](https://github.com/PyPSA/linopy/pull/1183))
 - CPLEX: "optimal with unscaled infeasibilities" is reported as `imprecise` and its solution is imported. ([\#368](https://github.com/PyPSA/linopy/issues/368))
 - HiGHS: a solve that stops at a limit without a solution no longer returns all-zero values, and a MIP no longer returns all-zero duals. `log_fn` and solver options also apply to a re-solve of a direct-API model. ([\#1130](https://github.com/PyPSA/linopy/issues/1130))
 - The `solvers` extra excludes highspy 1.16.0. Its MPS writer drops columns that appear only in the quadratic objective, so Gurobi and COPT reject the file. ([\#1149](https://github.com/PyPSA/linopy/pull/1149))

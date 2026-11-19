@@ -162,9 +162,9 @@ def _check_dropped(
     )
     if violated.any():
         raise RestrictionError(
-            "Cannot window the matrices: folding the dangling terms makes "
-            f"constraint labels {clabels[violated].tolist()} unsatisfiable "
-            f"(folded rhs {rhs[violated].tolist()} against sign "
+            "Cannot window the matrices: constraint labels "
+            f"{clabels[violated].tolist()} have no term in the window and are "
+            f"unsatisfiable (folded rhs {rhs[violated].tolist()} against sign "
             f"{sense[violated].tolist()}). Raise `tol` or exclude the rows "
             "via `drop`."
         )
