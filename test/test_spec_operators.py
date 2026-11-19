@@ -1095,6 +1095,8 @@ def test_a_grouped_sum_onto_a_mostly_empty_grid_does_not_warn() -> None:
         x = Model(sparse=sparse).add_variables(coords=[onto["a"]], name="x")
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            summed[sparse] = grouped_sum(1 * x, {"a": rows}, grouped, onto)
+            result = grouped_sum(1 * x, {"a": rows}, grouped, onto)
+        assert isinstance(result, LinearExpression)
+        summed[sparse] = result
     assert summed[True].is_sparse
     assert_linequal(summed[True], summed[False])
