@@ -289,6 +289,16 @@ def objective_write_quadratic_terms(
     f.write(b"] / 2\n")
 
 
+def _zero_objective_term(m: Model) -> pl.DataFrame:
+    """
+    A zero-coefficient term on the first live variable.
+
+    LP readers such as GLPK reject an objective section without terms.
+    """
+    vars = m.variables.label_index.vlabels[:1]
+    return pl.DataFrame({"coeffs": np.zeros(len(vars)), "vars": vars})
+
+
 def objective_to_file(
     m: Model,
     f: BufferedWriter,
@@ -308,10 +318,15 @@ def objective_to_file(
 
     sense = m.objective.sense
     f.write(f"{sense}\n\nobj:\n\n".encode())
+    if m.objective.expression.is_constant:
+        objective_write_linear_terms(f, _zero_objective_term(m), print_variable)
+        return
     df = m.objective.to_polars()
 
     if m.is_linear:
         df = _scale_objective_dataframe(df, variable_scaling, m.objective.scaling)
+        if df.is_empty():
+            df = _zero_objective_term(m)
         objective_write_linear_terms(f, df, print_variable)
 
     elif m.is_quadratic:
