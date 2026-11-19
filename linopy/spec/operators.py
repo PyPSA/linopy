@@ -10,6 +10,7 @@ evaluates the operands and the keywords and calls in.
 from __future__ import annotations
 
 import operator
+import warnings
 from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
 from functools import reduce
@@ -96,7 +97,10 @@ def grouped_sum(
     if isinstance(picked, LinearExpression) and not picked.is_sparse:
         return _gathered(picked, grouped, onto)
     keyed = picked.assign_coords({d: (_ROW, labels) for d, labels in grouped.items()})
-    return keyed.groupby(list(grouped)).sum().reindex(onto).fillna(0)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", "Grouping a LinearExpression", UserWarning)
+        summed = keyed.groupby(list(grouped)).sum()
+    return summed.reindex(onto).fillna(0)
 
 
 def _gathered(

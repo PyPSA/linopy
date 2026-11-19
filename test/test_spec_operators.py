@@ -1082,3 +1082,19 @@ def test_a_lookup_into_an_empty_dimension_reads_nothing() -> None:
     }
     m = Model.from_spec(spec, sources)
     assert int((m.constraints["cap"].labels != -1).sum()) == 1
+
+
+def test_a_grouped_sum_onto_a_mostly_empty_grid_does_not_warn() -> None:
+    from linopy.spec.operators import grouped_sum
+
+    rows = np.arange(200)
+    onto = {"a": pd.Index(rows, name="a"), "p": pd.Index(range(101), name="p")}
+    grouped = {"a": rows, "p": rows % 101}
+    summed = {}
+    for sparse in (True, False):
+        x = Model(sparse=sparse).add_variables(coords=[onto["a"]], name="x")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            summed[sparse] = grouped_sum(1 * x, {"a": rows}, grouped, onto)
+    assert summed[True].is_sparse
+    assert_linequal(summed[True], summed[False])
