@@ -1090,11 +1090,13 @@ def test_a_grouped_sum_onto_a_mostly_empty_grid_does_not_warn() -> None:
     rows = np.arange(200)
     onto = {"a": pd.Index(rows, name="a"), "p": pd.Index(range(101), name="p")}
     grouped = {"a": rows, "p": rows % 101}
-    summed = {}
+    summed: dict[bool, LinearExpression] = {}
     for sparse in (True, False):
         x = Model(sparse=sparse).add_variables(coords=[onto["a"]], name="x")
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            summed[sparse] = grouped_sum(1 * x, {"a": rows}, grouped, onto)
+            result = grouped_sum(1 * x, {"a": rows}, grouped, onto)
+        assert isinstance(result, LinearExpression)
+        summed[sparse] = result
     assert summed[True].is_sparse
     assert_linequal(summed[True], summed[False])
