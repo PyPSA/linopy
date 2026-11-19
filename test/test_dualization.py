@@ -479,6 +479,22 @@ def test_strong_duality_simple() -> None:
 
 
 @needs_solver
+def test_dual_of_an_empty_row_that_cannot_hold_is_unbounded() -> None:
+    m = Model()
+    i = pd.RangeIndex(2, name="i")
+    x = m.add_variables(lower=0, upper=10, coords=[i], name="x")
+    m.add_constraints(xr.DataArray([0, 1], coords=[i]) * x >= 5, name="c")
+    m.add_objective(x.sum())
+    dual = m.dualize()
+
+    m.solve(solver_name=_lp_solver, io_api="lp")
+    dual.solve(solver_name=_lp_solver, io_api="lp")
+
+    assert m.termination_condition == "infeasible"
+    assert dual.termination_condition in ("unbounded", "infeasible_or_unbounded")
+
+
+@needs_solver
 def test_strong_duality_array_variable() -> None:
     """Strong duality with array variables."""
     rng = np.random.default_rng(0)

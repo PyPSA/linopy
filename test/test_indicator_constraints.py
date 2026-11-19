@@ -382,6 +382,18 @@ class TestSolve:
         assert np.isclose(m.objective.value, expected, atol=1e-6)
 
     @requires_gurobi
+    @pytest.mark.parametrize("io_api", ["lp", "direct"])
+    def test_gurobi_enforces_empty_lhs(
+        self, mbx: tuple[Model, Variable, Variable], io_api: str
+    ) -> None:
+        """An active trigger on ``0 * x >= 5`` cannot hold, so b stays 0."""
+        m, b, x = mbx
+        m.add_indicator_constraints(b, 1, 0 * x, ">=", 5, name="ic0")
+        m.add_objective(-1 * b)
+        m.solve(solver_name="gurobi", io_api=io_api)
+        assert b.solution.item() == 0
+
+    @requires_gurobi
     def test_gurobi_multiple(self) -> None:
         """Multiple indicators combine: x <= min(10, 5) = 5."""
         m = Model()

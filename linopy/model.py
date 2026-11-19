@@ -94,7 +94,7 @@ from linopy.piecewise import (
 from linopy.remote import RemoteHandler
 from linopy.restrict.matrix import DROPPED_ROW_TOL
 from linopy.scaling import scalar_scaling, validate_scaling
-from linopy.semantics import check_user_nan, enforce_no_multiindex
+from linopy.semantics import check_user_nan, enforce_no_multiindex, warn_outside_linopy
 from linopy.solver_capabilities import solver_supports
 from linopy.solvers import (
     IO_APIS,
@@ -2091,7 +2091,6 @@ class Model:
         warmstart_fn: str | Path | None = None,
         keep_files: bool = False,
         env: Any = None,
-        sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
         remote: RemoteHandler | None = None,
@@ -2154,10 +2153,6 @@ class Model:
         env : gurobi.Env, optional
             Existing environment passed to the solver (e.g. `gurobipy.Env`).
             Currently only in use for Gurobi. The default is None.
-        sanitize_zeros : bool, optional
-            Whether to set terms with zero coefficient as missing.
-            This will remove unneeded overhead in the lp file writing.
-            The default is True.
         sanitize_infinities : bool, optional
             Whether to filter out constraints that are subject to `<= inf` or `>= -inf`.
         slice_size : int, optional
@@ -2201,10 +2196,16 @@ class Model:
         call, but not by garbage collection: a model that merely goes out of
         scope leaves its solver open.
         """
-        if mock_solve:
-            return self._mock_solve(
-                sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
+        if solver_options.pop("sanitize_zeros", None) is not None:
+            warn_outside_linopy(
+                "`sanitize_zeros` is no longer supported and has no effect. linopy "
+                "skips terms with a zero coefficient; the solver handles near-zero "
+                "ones.",
+                FutureWarning,
             )
+
+        if mock_solve:
+            return self._mock_solve(sanitize_infinities=sanitize_infinities)
 
         # check io_api
         if io_api is not None and io_api not in IO_APIS:
@@ -2232,7 +2233,6 @@ class Model:
                 basis_fn=basis_fn,
                 warmstart_fn=warmstart_fn,
                 keep_files=keep_files,
-                sanitize_zeros=sanitize_zeros,
                 reformulate_sos=reformulate_sos,
                 **solver_options,
             )
@@ -2284,8 +2284,6 @@ class Model:
                 solution_fn = self.get_solution_file()
 
         with sos_reformulation_context(self, solver_name, reformulate_sos):
-            if sanitize_zeros:
-                self.constraints.sanitize_zeros()
             if sanitize_infinities:
                 self.constraints.sanitize_infinities()
 
@@ -2621,7 +2619,6 @@ class Model:
 
     def _mock_solve(
         self,
-        sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
     ) -> tuple[str, str]:
         solver_name = "mock"
@@ -2630,9 +2627,6 @@ class Model:
         self.solver = None
         # reset result
         self.reset_solution()
-
-        if sanitize_zeros:
-            self.constraints.sanitize_zeros()
 
         if sanitize_infinities:
             self.constraints.sanitize_infinities()
