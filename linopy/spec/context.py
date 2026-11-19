@@ -168,7 +168,9 @@ def widened(node: ms.Expression | ms.Condition, ctx: Context) -> Context:
     """
     *ctx* for the operand of *node*: a sum, a window, a shift, a lookup and a
     count read their operand at other coordinates along the axes they move, so
-    the rows *ctx* checks are widened along those axes to every row there.
+    the rows *ctx* checks are widened along those axes to every row there. A
+    join reads its operand off the dims it adds, so it widens along those too:
+    a row of the operand is checked if any group it lands in is checked.
     """
     if ctx.rows is None:
         return ctx
@@ -185,5 +187,5 @@ def _moved_dims(node: ms.Expression | ms.Condition) -> tuple[str, ...]:
     if isinstance(node, ms.Translate | ms.WindowSum | ms.TranslatedCondition):
         return (node.along,)
     if isinstance(node, ms.Join | ms.JoinedCondition):
-        return node.columns.dropped_dims
+        return tuple(dict.fromkeys(node.columns.dropped_dims + node.columns.added_dims))
     return ()
