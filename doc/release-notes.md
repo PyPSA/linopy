@@ -163,6 +163,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 **Documentation**
 
 - The documentation moved from Sphinx to [MkDocs](https://www.mkdocs.org/) with the Material theme and the layout of the [PyPSA documentation](https://docs.pypsa.org). The example notebooks moved from `examples/` into `doc/`, and redirects keep the old links working.
+- [Upgrading to linopy 1.0](user-guide/migrating-to-v1.md#listing-affected-lines-on-linopy-010) has a snippet that lists every line a 0.10 model must change, in one pass before the upgrade ([#1188](https://github.com/PyPSA/linopy/pull/1188)).
 
 **Internal**
 
