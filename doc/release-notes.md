@@ -88,6 +88,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
     - `print_labels`, `Model.print_infeasibilities` and `Model.compute_set_of_infeasible_constraints`: use `format_labels`, `Model.compute_infeasibilities` and `Model.format_infeasibilities`.
     - `assign_multiindex_safe` on variables, expressions and constraints: use `assign`.
     - `LinearExpressionGroupby.map(shortcut=...)`, `Variables.dataset_names`, `Constraints.dataset_names`, `LinearExpression.sanitize` and `SolverReport.barrier_iterations`.
+- `Model.solve(sanitize_zeros=...)`. linopy skips terms with a zero coefficient, and the solver handles near-zero ones. Passing the keyword warns and has no effect. To drop near-zero terms, call `m.constraints.sanitize_zeros()` before solving. ([\#1183](https://github.com/PyPSA/linopy/pull/1183))
 
 *Dependencies*
 
@@ -154,7 +155,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 
 *Solvers*
 
-- A constraint row without a nonzero term, e.g. `0 * x >= 5`, reaches the solver instead of being dropped; `solve` and `to_file` warn when it cannot hold. ([\#1170](https://github.com/PyPSA/linopy/issues/1170), [\#1183](https://github.com/PyPSA/linopy/pull/1183))
+- A constraint row without a nonzero term, e.g. `0 * x >= 5`, reaches the solver instead of being dropped. ([\#1170](https://github.com/PyPSA/linopy/issues/1170), [\#1183](https://github.com/PyPSA/linopy/pull/1183))
 - With `add_objective(..., scaling=...)`, the solve log reports objective and dual bound in model units. ([\#1077](https://github.com/PyPSA/linopy/issues/1077))
 - GLPK: an infeasible MIP, or an infeasible LP solved without presolve, is reported as `infeasible` instead of `ok`. ([\#1183](https://github.com/PyPSA/linopy/pull/1183))
 - CPLEX: "optimal with unscaled infeasibilities" is reported as `imprecise` and its solution is imported. ([\#368](https://github.com/PyPSA/linopy/issues/368))

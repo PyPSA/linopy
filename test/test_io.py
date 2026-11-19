@@ -1237,64 +1237,6 @@ def test_to_file_lp_raises_for_empty_row_without_any_variable(tmp_path: Path) ->
         m.to_file(tmp_path / "empty.lp")
 
 
-def empty_rows_model() -> Model:
-    m = Model()
-    x = m.add_variables(lower=0, coords=[pd.RangeIndex(20, name="i")], name="x")
-    m.add_constraints(LinearExpression(12, m) == 13, name="k")
-    m.add_constraints(0 * x >= 5, name="con")
-    m.add_constraints(0 * x <= 5, name="holds")
-    m.add_constraints(x >= 5, name="live")
-    m.add_objective(x.sum())
-    return m
-
-
-WRITERS: dict[str, Callable[[Model, Path], Any]] = {
-    "to_file-lp": lambda m, p: m.to_file(p / "m.lp"),
-    "to_file-mps": lambda m, p: m.to_file(p / "m.mps"),
-    "solve-mock": lambda m, p: m.solve(mock_solve=True),
-    "solve-lp": lambda m, p: m.solve("highs", io_api="lp"),
-    "solve-direct": lambda m, p: m.solve("highs", io_api="direct"),
-}
-
-
-@pytest.mark.skipif("highs" not in available_solvers, reason="highspy not installed")
-@pytest.mark.parametrize("write", WRITERS)
-def test_empty_rows_that_cannot_hold_are_named_once(tmp_path: Path, write: str) -> None:
-    with pytest.warns(UserWarning, match="cannot hold") as record:
-        WRITERS[write](empty_rows_model(), tmp_path)
-
-    hints = [str(w.message) for w in record if "cannot hold" in str(w.message)]
-    assert len(hints) == 1
-    assert hints[0].startswith("21 constraint row(s) have no nonzero term")
-    assert ": k, con[0], con[1], " in hints[0]
-    assert "con[12], ..." in hints[0]
-    assert "con[13]" not in hints[0]
-    assert "holds" not in hints[0]
-
-
-@pytest.mark.skipif("highs" not in available_solvers, reason="highspy not installed")
-@pytest.mark.parametrize("write", ["solve-mock", "solve-lp", "solve-direct"])
-def test_row_emptied_by_sanitize_zeros_is_named(tmp_path: Path, write: str) -> None:
-    m = Model()
-    x = m.add_variables(lower=0, coords=[pd.RangeIndex(2, name="i")], name="x")
-    m.add_constraints(1e-11 * x >= 5, name="tiny")
-    m.add_objective(x.sum())
-    with pytest.warns(UserWarning, match=r"2 constraint row\(s\).*: tiny\[0\], tiny"):
-        WRITERS[write](m, tmp_path)
-
-
-def test_empty_rows_that_hold_raise_no_warning(tmp_path: Path) -> None:
-    m = Model()
-    x = m.add_variables(lower=0, coords=[pd.RangeIndex(2, name="i")], name="x")
-    m.add_constraints(0 * x >= [-5, 0], name="a")
-    m.add_constraints(0 * x <= [5, 0], name="b")
-    m.add_constraints(LinearExpression(12, m) == 12, name="c")
-    m.add_objective(x.sum())
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        m.to_file(tmp_path / "m.lp")
-
-
 def test_to_file_lp_unsorted_constraint_labels(tmp_path: Path) -> None:
     m = Model()
     i = pd.RangeIndex(3, name="i")

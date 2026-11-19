@@ -299,6 +299,6 @@ class TestInfeasibility:
         m.add_constraints(xr.DataArray([0, 1], coords=[i]) * x >= rhs, name="c")
         m.add_constraints(x.sum() >= 30, name="d")
         m.add_objective(x.sum())
-        m.solve(solver_name=solver, io_api=io_api, sanitize_zeros=False)
+        m.solve(solver_name=solver, io_api=io_api)
 
         assert m.compute_infeasibilities() == [2]

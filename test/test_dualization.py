@@ -479,7 +479,6 @@ def test_strong_duality_simple() -> None:
 
 
 @needs_solver
-@pytest.mark.filterwarnings("ignore:.*cannot hold:UserWarning")
 def test_dual_of_an_empty_row_that_cannot_hold_is_unbounded() -> None:
     m = Model()
     i = pd.RangeIndex(2, name="i")

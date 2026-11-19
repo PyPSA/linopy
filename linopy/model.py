@@ -27,7 +27,7 @@ from pandas.core.series import Series
 from xarray import DataArray, Dataset
 from xarray.core.types import T_Chunks
 
-from linopy import io, solvers
+from linopy import solvers
 from linopy.alignment import (
     _as_index,
     _coords_to_dict,
@@ -39,16 +39,13 @@ from linopy.common import (
     assigned_labels,
     best_int,
     coords_reorder_set,
-    format_coord,
     maybe_replace_sign,
     maybe_replace_signs,
     reassign_coords,
     replace_by_map,
     to_path,
 )
-from linopy.config import options
 from linopy.constants import (
-    EQUAL,
     FACTOR_DIM,
     GREATER_EQUAL,
     LESS_EQUAL,
@@ -82,6 +79,7 @@ from linopy.io import (
     to_block_files,
     to_cuopt,
     to_cupdlpx,
+    to_file,
     to_gurobipy,
     to_highspy,
     to_mosek,
@@ -2093,7 +2091,6 @@ class Model:
         warmstart_fn: str | Path | None = None,
         keep_files: bool = False,
         env: Any = None,
-        sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
         remote: RemoteHandler | None = None,
@@ -2156,10 +2153,6 @@ class Model:
         env : gurobi.Env, optional
             Existing environment passed to the solver (e.g. `gurobipy.Env`).
             Currently only in use for Gurobi. The default is None.
-        sanitize_zeros : bool, optional
-            Whether to set terms with zero coefficient as missing.
-            This will remove unneeded overhead in the lp file writing.
-            The default is True.
         sanitize_infinities : bool, optional
             Whether to filter out constraints that are subject to `<= inf` or `>= -inf`.
         slice_size : int, optional
@@ -2203,10 +2196,17 @@ class Model:
         call, but not by garbage collection: a model that merely goes out of
         scope leaves its solver open.
         """
-        if mock_solve:
-            return self._mock_solve(
-                sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
+        if solver_options.pop("sanitize_zeros", None) is not None:
+            warn_outside_linopy(
+                "`sanitize_zeros` is no longer supported and has no effect. linopy "
+                "skips terms with a zero coefficient; the solver handles near-zero "
+                "ones. Call `m.constraints.sanitize_zeros()` before "
+                "solving to drop them from the model.",
+                FutureWarning,
             )
+
+        if mock_solve:
+            return self._mock_solve(sanitize_infinities=sanitize_infinities)
 
         # check io_api
         if io_api is not None and io_api not in IO_APIS:
@@ -2224,7 +2224,6 @@ class Model:
                     "`m.add_objective(...)` first (e.g. `m.add_objective(0 * x)` "
                     "for a pure feasibility problem)."
                 )
-            self._warn_empty_rows_that_cannot_hold()
             solved = remote.solve_on_remote(
                 self,
                 solver_name=solver_name,
@@ -2235,7 +2234,6 @@ class Model:
                 basis_fn=basis_fn,
                 warmstart_fn=warmstart_fn,
                 keep_files=keep_files,
-                sanitize_zeros=sanitize_zeros,
                 reformulate_sos=reformulate_sos,
                 **solver_options,
             )
@@ -2287,11 +2285,8 @@ class Model:
                 solution_fn = self.get_solution_file()
 
         with sos_reformulation_context(self, solver_name, reformulate_sos):
-            if sanitize_zeros:
-                self.constraints.sanitize_zeros()
             if sanitize_infinities:
                 self.constraints.sanitize_infinities()
-            self._warn_empty_rows_that_cannot_hold()
 
             try:
                 self.solver = None  # closes any previous solver
@@ -2625,7 +2620,6 @@ class Model:
 
     def _mock_solve(
         self,
-        sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
     ) -> tuple[str, str]:
         solver_name = "mock"
@@ -2635,12 +2629,8 @@ class Model:
         # reset result
         self.reset_solution()
 
-        if sanitize_zeros:
-            self.constraints.sanitize_zeros()
-
         if sanitize_infinities:
             self.constraints.sanitize_infinities()
-        self._warn_empty_rows_that_cannot_hold()
 
         self.objective._value = 0.0
         self.status = "ok"
@@ -2709,62 +2699,7 @@ class Model:
 
     to_netcdf = to_netcdf
 
-    def to_file(
-        self,
-        fn: Path | str | None,
-        io_api: str | None = None,
-        integer_label: str = "general",
-        slice_size: int = 2_000_000,
-        progress: bool | None = None,
-        explicit_coordinate_names: bool = False,
-    ) -> Path:
-        """
-        Write out the model to an LP or MPS file, see :func:`linopy.io.to_file`.
-
-        Warns about constraint rows without a nonzero term that cannot hold.
-        """
-        self._warn_empty_rows_that_cannot_hold()
-        return io.to_file(
-            self,
-            fn,
-            io_api=io_api,
-            integer_label=integer_label,
-            slice_size=slice_size,
-            progress=progress,
-            explicit_coordinate_names=explicit_coordinate_names,
-        )
-
-    def _warn_empty_rows_that_cannot_hold(self) -> None:
-        """Warn about rows without a nonzero term whose ``0 sign rhs`` fails."""
-        found = []
-        for con in self.constraints.data.values():
-            if con.is_indicator:
-                continue
-            labels = con._label_values()
-            rhs = con.rhs.values.ravel()
-            sign = con.sign.values.ravel()
-            excess = np.where(sign == LESS_EQUAL, -rhs, rhs)
-            excess = np.where(sign == EQUAL, np.abs(rhs), excess)
-            rows = (labels != -1) & (excess > DROPPED_ROW_TOL)
-            if rows.any():
-                rows &= con._lhs._store.terms(active=rows)[0] == 0
-                found.append(labels[rows])
-        labels = np.concatenate([np.array([], dtype=int), *found])
-        if not labels.size:
-            return
-        shown = options["display_max_rows"]
-        names = [
-            f"{name}{format_coord(coord)}"
-            for name, coord in self.constraints.get_label_position(labels[:shown])
-        ]
-        more = ", ..." if labels.size > shown else ""
-        warn_outside_linopy(
-            f"{labels.size} constraint row(s) have no nonzero term and cannot "
-            f"hold: {', '.join(names)}{more}. They reach the solver, which will "
-            "likely report the model infeasible. Mask them, or fix their "
-            "coefficients or right-hand side.",
-            UserWarning,
-        )
+    to_file = to_file
 
     to_gurobipy = to_gurobipy
 

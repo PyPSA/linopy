@@ -302,7 +302,7 @@ masking it.
 
 A present slot always yields a row, also one without a nonzero term, e.g. a sum
 over absent terms (§13) or `0 * x`. `0 * x >= 5` reaches the solver as `0 >= 5`,
-so the model is infeasible; `solve` and `to_file` name such rows in a warning.
+so the solver reports the model infeasible.
 Only explicit steps drop a present row: `sanitize_missings()`,
 `sanitize_infinities()` (run by `solve`; it drops `<= inf` and `>= -inf`
 rows) and [`restrict()`][linopy.model.Model.restrict], which drops a row that keeps no term

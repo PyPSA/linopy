@@ -487,6 +487,18 @@ def test_mock_solve(model_maximization: Model) -> None:
     assert (x_solution == 0).all()
 
 
+@pytest.mark.parametrize("value", [True, False])
+def test_solve_sanitize_zeros_warns_and_keeps_terms(value: bool) -> None:
+    m = Model()
+    x = m.add_variables(lower=0, name="x")
+    m.add_constraints(1e-11 * x >= 0, name="tiny")
+    m.add_objective(x)
+
+    with pytest.warns(FutureWarning, match="`sanitize_zeros` is no longer supported"):
+        m.solve(mock_solve=True, sanitize_zeros=value)
+    assert m.constraints["tiny"].coeffs.item() == 1e-11
+
+
 @pytest.mark.skipif("highs" not in licensed_solvers, reason="HiGHS is not installed")
 def test_mock_solve_clears_existing_solver_state(model: Model) -> None:
     status, condition = model.solve(solver_name="highs", io_api="direct")
@@ -702,7 +714,6 @@ def add_empty_row(m: Model, case: str) -> Variable:
     return x
 
 
-@pytest.mark.filterwarnings("ignore:.*cannot hold:UserWarning")
 @pytest.mark.parametrize("case", EMPTY_ROWS)
 @pytest.mark.parametrize("solver,io_api,explicit_coordinate_names", params)
 def test_empty_row_that_cannot_hold_makes_the_model_infeasible(
@@ -718,7 +729,6 @@ def test_empty_row_that_cannot_hold_makes_the_model_infeasible(
 
 
 @pytest.mark.skipif("highs" not in direct_solvers, reason="highspy not installed")
-@pytest.mark.filterwarnings("ignore:.*cannot hold:UserWarning")
 def test_empty_row_that_cannot_hold_makes_a_sparse_model_infeasible() -> None:
     m = Model(sparse=True)
     add_empty_row(m, "all-absent-sum")
