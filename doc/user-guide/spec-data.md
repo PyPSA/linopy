@@ -253,12 +253,11 @@ variables:
     `where: c` on the constraint to make that visible in the spec.
 - Inside a sum, an absent term is left out, and a sum of absent terms only
     is 0. A row the data leaves without any variable term, such as a sum over
-    variables a `where:` masked away entirely, a shift past its `edge=` value
-    or a coefficient of 0, is present: it stays and reaches the solver as
-    `constant sense constant`, like any row linopy builds. Where it cannot
-    hold, e.g. `0 >= 5`, the solver reports the problem infeasible. Mask such
-    rows with a `where:` on the constraint if they should not exist
-    ([\#993](https://github.com/PyPSA/linopy/issues/993)).
+    variables a `where:` masked away entirely, the vacated end of a `shift`
+    with `edge=0` or a coefficient of 0, is present: it stays and reaches the
+    solver as `constant sense constant`, like any row linopy builds. Where it
+    cannot hold, e.g. `0 >= 5`, the solver reports the problem infeasible.
+    Mask such rows with a `where:` on the constraint if they should not exist.
 - linopy carries a product of two variables in the objective only. A
     constraint whose spec multiplies two variables builds wherever the data
     leaves no such product on a row its `where:` keeps: its coefficient is

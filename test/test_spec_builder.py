@@ -914,7 +914,9 @@ def test_a_row_a_missing_number_empties_reaches_the_solver(
     missing: float, expression: str, condition: str
 ) -> None:
     """At f='b' the masked ``size`` reads its ``missing:`` number, so the row reads e.g. ``0 >= 0.5``."""
-    m = solved(sized(missing, expression), ENVELOPE_DATA)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        m = solved(sized(missing, expression), ENVELOPE_DATA)
     assert m.constraints["sized"].labels.values.tolist() == [0, 1]
     assert m.termination_condition == condition
 
@@ -1148,12 +1150,13 @@ def delayed(
         ),
         pytest.param(f"{DELAYED_Y} >= c * x", 0.0, "optimal", id="both-sides-hold"),
         pytest.param(f"{DELAYED_Y} - 1 >= c * x", 0.0, "infeasible", id="both-sides"),
+        pytest.param(f"{ABSENT_Y} + 1 <= x", 0.0, "optimal", id="live-other-side"),
     ],
 )
 def test_a_row_the_data_empties_reaches_the_solver(
     backend: Model, expression: str, load: float, condition: str
 ) -> None:
-    """At t=0 the row holds no variable term: it stays, and the solver judges ``0 == 5``."""
+    """At t=0 the data empties a side of every variable term: the row stays, and the solver judges it."""
     m = solved(*delayed(expression, load), sparse=backend.sparse)
     assert m.constraints["r"].labels.values.tolist() == [0, 1, 2]
     assert m.constraints.ncons == 3
@@ -1168,10 +1171,10 @@ def test_a_row_the_data_empties_reaches_the_solver(
     ],
 )
 def test_an_absent_row_the_data_would_empty_stays_absent(
-    expression: str, where: str | None
+    backend: Model, expression: str, where: str | None
 ) -> None:
     """``0 == 5`` at t=0 is masked or vacated, so it never reaches the solver."""
-    m = solved(*delayed(expression, 5.0, where))
+    m = solved(*delayed(expression, 5.0, where), sparse=backend.sparse)
     assert m.constraints["r"].labels.values.tolist() == [-1, 1, 2]
     assert m.constraints.ncons == 2
     assert m.termination_condition == "optimal"
