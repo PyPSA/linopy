@@ -138,9 +138,7 @@ class Context:
     ``subject`` names what is being built in its refusals. ``memo`` is
     shared by every context replaced from one. ``rename`` gives the model
     name of a variable or constraint the program declares. ``dim_order``
-    names the dims :meth:`frame` puts first. ``zeroes`` makes a term the
-    data scales by zero the constant it is there, so a row left with such
-    terms alone holds no variable term.
+    names the dims :meth:`frame` puts first.
     """
 
     model: Model
@@ -154,7 +152,6 @@ class Context:
     memo: Memo = field(default_factory=Memo, compare=False, repr=False)
     rename: Callable[[str], str] = field(default=str, compare=False, repr=False)
     dim_order: tuple[str, ...] = ()
-    zeroes: bool = True
 
     def frame(self, dims: tuple[str, ...]) -> tuple[str, ...]:
         """*dims* of an entry, those ``dim_order`` names first, in its order, the rest after in name order, as mathspec states them."""

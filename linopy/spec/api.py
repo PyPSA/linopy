@@ -73,10 +73,10 @@ def build_into(
         What :func:`normalize_spec` raises for a spec it cannot lower.
     SpecDataError
         The spec declares nothing, or the data does not fit it: a missing
-        or malformed source, a label no dimension holds, an assumption the
-        numbers break, or a constraint row the data empties. A parameter
-        is read and checked when a built declaration first reads it, so the
-        data of one that none reads is not checked, only its key. With
+        or malformed source, a label no dimension holds, or an assumption
+        the numbers break. A parameter is read and checked when a built
+        declaration first reads it, so the data of one that none reads is
+        not checked, only its key. With
         *store*, every parameter is read, and a relation ``model.parameters``
         cannot hold is refused before anything is stored.
     NotImplementedError

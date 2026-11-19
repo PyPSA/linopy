@@ -246,26 +246,13 @@ def _combine(node: _Binary, ctx: Context) -> Value:
         op, second = operator.sub, second.operand
     left, right = evaluate(first, ctx), evaluate(second, ctx)
     kind = type(node).__name__.lower()
-    if (
-        isinstance(node, ms.Multiply)
-        and isinstance(left, Term)
-        and isinstance(right, Term)
-    ):
-        if _is_constant(right):
-            right = cast(LinearExpression, right).const
-        elif _is_constant(left):
-            left = cast(LinearExpression, left).const
     if isinstance(left, Term) or isinstance(right, Term):
         left, right = _off_rows(left, ctx), _off_rows(right, ctx)
         if isinstance(node, ms.Add):
             a, b = constant_of(left), constant_of(right)
             refuse_made(kind, (node,), op, a, b, ctx)
         made = op(*_paired(left, right))
-        if not isinstance(node, ms.Multiply):
-            return made
-        if ctx.zeroes:
-            made = _without_zeroed_terms(made, left, right)
-        return _without_dead_terms(made)
+        return _without_dead_terms(made) if isinstance(node, ms.Multiply) else made
     if not isinstance(left, xr.DataArray) and not isinstance(right, xr.DataArray):
         return op(left, right)
     a, b = xr.DataArray(left), xr.DataArray(right)
@@ -277,27 +264,6 @@ def _combine(node: _Binary, ctx: Context) -> Value:
                 f"coordinates, so the data was attached against other labels than the model was built on."
             )
     return refuse_made(kind, (node,), op, a, b, ctx)
-
-
-def _is_constant(value: Value) -> bool:
-    """Whether *value* is a term without a variable term, which scales another term like data."""
-    return isinstance(value, LinearExpression) and value.is_constant
-
-
-def _without_zeroed_terms(made: Value, left: Value, right: Value) -> Value:
-    """
-    A linear *made*, the product of a term and data, without the terms the data zeroes.
-
-    Where the data is zero the product is the term's constant times zero:
-    a constant, and a row left with nothing but such terms holds no
-    variable term.
-    """
-    if type(made) is not LinearExpression:
-        return made
-    data = right if isinstance(left, Term) else left
-    if not bool(np.any(np.asarray(data) == 0)):
-        return made
-    return LinearExpression._from_store(made._store.prune(), made.model)
 
 
 def _without_dead_terms(made: Value) -> Value:
