@@ -2817,7 +2817,7 @@ class LinearExpression(BaseExpression):
             if isinstance(other, LinearExpression):
                 pair: list[LinearExpression] = [self, other]
                 if not (self.is_constant or other.is_constant):
-                    pair = _dense_copies(pair, "mul(quadratic product)")
+                    pair = _dense_copies(pair, None)
                 return pair[0]._multiply_by_linear_expression(pair[1])
             return self._apply_constant_op(other, operator.mul)
         except TypeError:
@@ -3031,8 +3031,7 @@ class LinearExpression(BaseExpression):
         Convert LinearExpression to QuadraticExpression.
 
         A QuadraticExpression has no sparse (CSR) backing, so a CSR-backed
-        expression converts to dense. Like any explicit conversion, this emits
-        no densify notice.
+        expression converts to dense, without a densify notice.
         """
         data = self._dense_store(None).ds
         vars = data.vars.expand_dims(FACTOR_DIM)
@@ -3851,10 +3850,10 @@ def result_store_cls(store: Store, model: Model) -> type[Store]:
     return CSRStore if isinstance(store, CSRStore) else model.store_cls
 
 
-def _dense_copies(exprs: Sequence[Any], reason: Reason) -> list[Any]:
+def _dense_copies(exprs: Sequence[Any], reason: Reason | None) -> list[Any]:
     """
     ``exprs`` with every CSR-backed LinearExpression replaced by a dense
-    copy, one notice naming ``reason`` for all.
+    copy, one notice naming ``reason`` for all, none without a ``reason``.
     """
     copies: dict[int, LinearExpression] = {}
     for e in exprs:
@@ -4004,9 +4003,7 @@ def merge(
             return LinearExpression._from_store(res, model)
         exprs = _dense_copies(exprs, res)
     elif any(map(_is_sparse, exprs)):
-        reason = "merge(operand not a LinearExpression)"
-        if not linear:
-            reason = "merge(into a QuadraticExpression)"
+        reason = "merge(operand not a LinearExpression)" if linear else None
         exprs = _dense_copies(exprs, reason)
 
     data = [e.data if isinstance(e, BaseExpression) else e for e in exprs]

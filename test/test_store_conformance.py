@@ -1,7 +1,8 @@
 """
 Conformance of the dense and the sparse (CSR) backend: every operation either
-keeps the sparse backing, converts to a quadratic expression, which has none,
-or names why it falls back to dense, and both backends agree on the result.
+keeps the sparse backing, names why it falls back to dense, or converts to a
+quadratic expression, which has no sparse backing. Both backends agree on the
+result.
 """
 
 from __future__ import annotations
@@ -30,7 +31,6 @@ KEPT = "kept"
 CONVERTED = "converted"
 ELLIPSIS: Any = ...
 DATA_READ = "data(read)"
-QUADRATIC = "mul(quadratic product)"
 RENAME = "rename(non-dimension names)"
 DROP_VARS = "drop_vars(dimension or data variable)"
 ASSIGNMENT = "assignment(const)"
@@ -354,7 +354,7 @@ CASES: dict[str, Case] = {
     "merge-factor-dim": Case(
         grid,
         lambda e: linopy.merge([e, e], dim="_factor", cls=QuadraticExpression),
-        "merge(into a QuadraticExpression)",
+        CONVERTED,
     ),
     "to-constraint-scalar": Case(grid, lambda e: e.to_constraint("<=", 1), KEPT),
     "to-constraint-array": Case(grid, lambda e: e.to_constraint(">=", OVER_A), KEPT),
@@ -455,8 +455,8 @@ CASES: dict[str, Case] = {
     "cumsum": Case(grid, lambda e: e.cumsum("a"), DATA_READ),
     "rolling": Case(grid, lambda e: e.rolling(a=2).sum(), DATA_READ),
     "diff": Case(grid, lambda e: e.diff("a"), KEPT),
-    "mul-variable": Case(grid, lambda e: e * var(e, "y"), QUADRATIC),
-    "pow": Case(single, lambda e: e**2, QUADRATIC),
+    "mul-variable": Case(grid, lambda e: e * var(e, "y"), CONVERTED),
+    "pow": Case(single, lambda e: e**2, CONVERTED),
     "to-polars": Case(
         grid, lambda e: frame(pd.DataFrame(e.to_polars().to_dict())), KEPT
     ),

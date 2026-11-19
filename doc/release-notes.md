@@ -109,7 +109,6 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 
 - More operations keep an expression sparse: arithmetic on variables (`2 * x`, `x + y`), merges of operands over a subset or superset of dimensions, `assign_coords` and `groupby` on auxiliary coordinates of the grid, vectorised `sel`, `isel`, `[]` and `where` over a new labelled dimension, `densify_terms`, `Constraint.update(rhs=...)`, `Model.assign_coords`, `add_expressions`, `Model.copy` and netcdf writing. ([\#1020](https://github.com/PyPSA/linopy/issues/1020), [\#1049](https://github.com/PyPSA/linopy/issues/1049))
 - Variable operations without a sparse path, e.g. quadratic products, `rolling` and `cumsum`, build the dense expression directly, without a `PerformanceWarning`.
-- Adding a sparse linear expression to a quadratic one, or `to_quadexpr()`, converts it to dense without a `PerformanceWarning`, as a quadratic expression has no sparse backing. ([\#1193](https://github.com/PyPSA/linopy/issues/1193))
 - Sparse merges and sums are faster: rows are sorted and deduplicated once, when a constraint is added. Like a dense expression, a sparse one may now hold the same variable more than once, and `nterm` counts the stored terms.
 - A conformance suite checks that every operation on a sparse expression stays sparse or names its densify fallback, and that both backends agree. ([\#1044](https://github.com/PyPSA/linopy/issues/1044))
 
@@ -137,6 +136,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `Model.from_spec` adds no constraint where every variable of it is masked, where it raised that both sides are constant. ([\#1154](https://github.com/PyPSA/linopy/pull/1154))
 - `Model.from_spec` leaves no row where a per-entity `shift` offset is absent; it read `x[t=0]` with `edge='wrap'` and 0 with `edge=<number>`. ([\#1185](https://github.com/PyPSA/linopy/pull/1185))
 - `Model.from_spec` on a sparse model no longer warns of a dense grid when `at` reads along its own key, a grid the build needs. ([\#1192](https://github.com/PyPSA/linopy/pull/1192))
+- On a sparse model, building a quadratic expression from a linear one, e.g. `2 * x + x * x` or `(2 * x) * x`, no longer emits a `PerformanceWarning`. ([\#1193](https://github.com/PyPSA/linopy/issues/1193))
 - `Model.from_spec` reads a `sum_back` window that holds only absent terms as 0, like `sum`, in a constraint and in a `where:`, where it was absent; a row left with no variable term is then refused, as for `sum`. ([\#1174](https://github.com/PyPSA/linopy/pull/1174))
 - `Model.from_spec` no longer lets a `where` guard what a `shift`, window, `sum`, `count` or `at()` lookup reads at another coordinate, so a non-finite value there raises instead of entering a row or a `when:`. ([\#1173](https://github.com/PyPSA/linopy/pull/1173))
 - `Model.from_spec` checks a case's value, `otherwise:` included, only where that case applies, and skips a case that applies nowhere, so a guard like `cap == inf` no longer leaves `otherwise:` refused there. ([\#1163](https://github.com/PyPSA/linopy/pull/1163))

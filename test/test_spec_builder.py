@@ -51,6 +51,7 @@ from linopy.testing import (  # noqa: E402
     assert_conequal,
     assert_linequal,
     assert_model_equal,
+    assert_quadequal,
     synthetic_sources,
 )
 
@@ -1290,6 +1291,25 @@ def test_a_product_the_data_zeroes_keeps_a_sparse_objective_sparse(
     assert isinstance(objective, linopy.LinearExpression)
     assert objective.is_sparse == backend.sparse
     assert_linequal(objective, Model.from_spec(spec, data).objective.expression)
+
+
+@pytest.mark.parametrize("product", ["k * x * y", "x * y * k", "k * (x * y)"])
+def test_a_quadratic_objective_builds_on_a_sparse_model_without_a_warning(
+    backend: Model, product: str
+) -> None:
+    """A linear term met a quadratic one, which has no sparse backing, and warned of densifying."""
+    spec = with_(
+        QUADRATIC_SPEC,
+        constraints={"cap": {"dims": ["t"], "expression": "x + y <= 5"}},
+        objective={"sense": "maximize", "expression": f"sum({product} + x, over=t)"},
+    )
+    data = {"t": T, "k": xr.DataArray([0.0, 1.0, 2.0], coords=[T])}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", linopy.PerformanceWarning)
+        m = Model.from_spec(spec, data, sparse=backend.sparse)
+    objective = m.objective.expression
+    assert isinstance(objective, linopy.QuadraticExpression)
+    assert_quadequal(objective, Model.from_spec(spec, data).objective.expression)
 
 
 def test_a_named_expression_reading_a_dual_is_not_built() -> None:
