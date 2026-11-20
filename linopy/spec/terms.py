@@ -40,7 +40,6 @@ from linopy.spec.evaluator import (
     _off_rows,
     _regions,
     _sums_nothing,
-    _zeros,
     evaluate,
     refuse_made,
 )
@@ -508,7 +507,7 @@ class Evaluator:
         data = xr.DataArray(data)
         if data.ndim:
             data = self.aligned(data)
-        const = const.where(data.notnull()) * data.fillna(1.0)
+        const = const.where(data.notnull())
         dims = _union(a.dims, b.dims, _dims(data))
         return Table(dims, (), self.full(const, dims), True)
 
@@ -705,14 +704,10 @@ class Evaluator:
         for region, rows in _regions(node, ctx):
             value = self.value(region.value, _narrowed(ctx, rows))
             parts.append(self.in_region(value, rows))
-        if len(parts) < len(node.regions):
-            parts.append(_zeros(node, ctx))
-        total = parts[0]
-        for part in parts[1:]:
+        total: Table | Data = Table(node.dims, (), None)
+        for part in parts:
             total = self.plus(total, part)
-        if isinstance(total, Table):
-            return total
-        return Table(_dims(total), (), xr.DataArray(total), _flat(total))
+        return cast(Table, total)
 
     def in_region(self, value: Table | Data, rows: xr.DataArray) -> Table | Data:
         if isinstance(value, float | int):
