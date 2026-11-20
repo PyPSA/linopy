@@ -33,6 +33,7 @@ from linopy.csr import CSRStore, Grid, _grouped, coo_to_csr
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec import operators
 from linopy.spec.context import Context, widened
+from linopy.spec.errors import SpecDataError
 from linopy.spec.evaluator import (
     _data_under,
     _moved,
@@ -399,7 +400,11 @@ class Evaluator:
         a, b = _const(left), _const(right)
         op = (lambda x, y: x - y) if sub else (lambda x, y: x + y)
         if a is not None and b is not None:
-            const = refuse_made("add", (node,), op, a, b, ctx)
+            try:
+                const = refuse_made("add", (node,), op, a, b, ctx)
+            except SpecDataError:
+                a, b = self.full(a, _dims(left)), self.full(b, _dims(right))
+                const = refuse_made("add", (node,), op, a, b, ctx)
         elif b is not None:
             const = -b if sub else b
         else:
@@ -785,6 +790,8 @@ class Evaluator:
 def linear(node: ms.Expression, ctx: Context, dims: tuple[str, ...]) -> LinearExpression:
     """*node* as a sparse linear expression framed the way the builder frames a declaration over *dims*."""
     model = ctx.model
+    if not model.sparse:
+        raise Unsupported("a dense model")
     table = Evaluator(ctx).table(node, ctx)
     order = [d for d in ctx.frame(dims) if d in table.dims or d in ctx.dim_order]
     if any(d not in order for d in table.dims):
