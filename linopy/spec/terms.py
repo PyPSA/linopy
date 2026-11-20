@@ -87,13 +87,30 @@ class Block:
         return replace(self, factors=(*self.factors, factor))
 
     def coefficients(self) -> np.ndarray:
-        c = np.ones(len(self)) if self.coeff is None else self.coeff
+        """The coefficient of each term: the factors multiplied in their order, a sign applied last."""
+        c, owned, negative = self.coeff, False, False
         for f in self.factors:
             if isinstance(f, tuple):
                 values, at = f
-                c = c * values[tuple(self.cols[i] for i in at)]
+                picked = values[tuple(self.cols[i] for i in at)]
+                if c is None:
+                    c, owned = picked, True
+                elif owned:
+                    c *= picked
+                else:
+                    c, owned = c * picked, True
+            elif abs(f) == 1.0:
+                negative ^= f < 0
+            elif c is None:
+                c, owned = np.full(len(self), f), True
+            elif owned:
+                c *= f
             else:
-                c = c * f
+                c, owned = c * f, True
+        if c is None:
+            return np.full(len(self), -1.0 if negative else 1.0)
+        if negative:
+            c = np.negative(c, out=c) if owned else -c
         return c
 
     def take(self, idx: np.ndarray) -> Block:
@@ -650,7 +667,7 @@ def linear(node: ms.Expression, ctx: Context, dims: tuple[str, ...]) -> LinearEx
         data.append(coeff)
         rows.append(row)
         cols.append(var)
-    cat = (lambda a, t: np.concatenate(a) if a else np.empty(0, dtype=t))
+    cat = lambda a, t: a[0] if len(a) == 1 else np.concatenate(a) if a else np.empty(0, dtype=t)
     csr = coo_to_csr(
         cat(data, float),
         cat(rows, np.int64),
