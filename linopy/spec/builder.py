@@ -172,6 +172,12 @@ def _constraint(ctx: Context, name: str, row: ms.Constraint) -> None:
     lhs, rhs, sense = row.lhs, row.rhs, row.sense
     if flipped(row):
         lhs, rhs, sense = rhs, lhs, _FLIPPED[sense]
+    moved = _difference(name, lhs, rhs, scoped, row.dims, rows)
+    if moved is not None:
+        ctx.model.add_constraints(
+            _framed(moved, row.dims, ctx), sense, 0, name=ctx.rename(name), mask=mask
+        )
+        return
     term, other = (_side(name, side, scoped, row.dims) for side in (lhs, rhs))
     term = cast(Term, term)
     if any(term.sizes[d] == 0 for d in term.coord_dims):
@@ -193,6 +199,39 @@ def _constraint(ctx: Context, name: str, row: ms.Constraint) -> None:
         name=ctx.rename(name),
         mask=mask,
     )
+
+
+def _difference(
+    name: str,
+    lhs: ms.Expression,
+    rhs: ms.Expression,
+    ctx: Context,
+    dims: tuple[str, ...],
+    rows: xr.DataArray,
+) -> LinearExpression | None:
+    """
+    *lhs* minus *rhs* as one term table, where *lhs* is a bare variable and both
+    sides carry one: what linopy's subtraction of the two sides gives, for
+    which :func:`_check_live` passes and neither side is constant. ``None``
+    where that is not known beforehand, for the two sides to be built apart.
+    """
+    if not (
+        terms.enabled(name)
+        and isinstance(lhs, ms.VariableReference)
+        and ms.carries_variable(rhs)
+    ):
+        return None
+    labels = ctx.model.variables[ctx.rename(lhs.name)].labels
+    vacant = labels == -1
+    if bool(vacant.all()):
+        return None
+    valued = ctx.program.variables[lhs.name].missing != "absent"
+    if valued and bool((vacant & rows).any()):
+        return None
+    try:
+        return terms.difference(lhs, rhs, ctx, dims)
+    except terms.Unsupported:
+        return None
 
 
 def _linear(name: str, side: Value, rows: xr.DataArray) -> Value:

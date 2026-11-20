@@ -787,12 +787,39 @@ class Evaluator:
         return Table(dims, (block,), const, _flat(values))
 
 
+def _require_sparse(ctx: Context) -> None:
+    if not ctx.model.sparse:
+        raise Unsupported("a dense model")
+
+
 def linear(node: ms.Expression, ctx: Context, dims: tuple[str, ...]) -> LinearExpression:
     """*node* as a sparse linear expression framed the way the builder frames a declaration over *dims*."""
-    model = ctx.model
-    if not model.sparse:
-        raise Unsupported("a dense model")
+    _require_sparse(ctx)
     table = Evaluator(ctx).table(node, ctx)
+    return materialised(table, ctx, dims, getattr(node, "name", type(node).__name__))
+
+
+def difference(
+    lhs: ms.Expression, rhs: ms.Expression, ctx: Context, dims: tuple[str, ...]
+) -> LinearExpression:
+    """*lhs* minus *rhs* as one sparse linear expression, framed on the dims of *lhs*: linopy's sum of the two expressions, the constants subtracted unchecked."""
+    _require_sparse(ctx)
+    ev = Evaluator(ctx)
+    left, right = ev.table(lhs, ctx), ev.table(rhs, ctx)
+    if any(d not in left.dims and d not in ctx.dim_order for d in right.dims):
+        raise Unsupported("a right side over a dimension the left side lacks")
+    a, b = left.const, right.const
+    const = a if b is None else -b if a is None else a - b
+    blocks = (*left.blocks, *(b.times(-1.0) for b in right.blocks))
+    table = Table(_union(left.dims, right.dims), blocks, const)
+    return materialised(table, ctx, dims, "difference")
+
+
+def materialised(
+    table: Table, ctx: Context, dims: tuple[str, ...], label: str
+) -> LinearExpression:
+    """*table* as a sparse linear expression framed the way the builder frames a declaration over *dims*."""
+    model = ctx.model
     order = [d for d in ctx.frame(dims) if d in table.dims or d in ctx.dim_order]
     if any(d not in order for d in table.dims):
         raise Unsupported("a term over a dimension the declaration lacks")
@@ -833,5 +860,5 @@ def linear(node: ms.Expression, ctx: Context, dims: tuple[str, ...]) -> LinearEx
         model,
     )
     grid = Grid({d: pd.Index(ctx.coords[d]).rename(d) for d in order})
-    FALLBACKS.append(f"materialised {getattr(node, 'name', type(node).__name__)} nnz={csr.nnz}")
+    FALLBACKS.append(f"materialised {label} nnz={csr.nnz}")
     return LinearExpression._from_store(CSRStore(csr, const, grid, model), model)

@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import operator
 import warnings
-from collections.abc import Hashable, Mapping
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
 from functools import reduce
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -28,6 +28,43 @@ from linopy.spec.errors import SpecDataError
 
 Amount = int | xr.DataArray
 _ROW = "_row"
+
+
+def binary(
+    op: Callable[[Any, Any], Any],
+    left: xr.DataArray,
+    right: xr.DataArray,
+) -> xr.DataArray:
+    """*op* of two arrays as xarray gives it, computed in numpy where both lie on the same indexes without other coordinates or attributes."""
+    if not (_bare(left) and _bare(right)) or any(
+        not _same(left.indexes[d], right.indexes[d])
+        for d in left.dims
+        if d in right.dims
+    ):
+        return op(left, right)
+    dims = (*left.dims, *(d for d in right.dims if d not in left.dims))
+    order = [right.dims.index(d) for d in dims if d in right.dims]
+    shape = [right.sizes[d] if d in right.dims else 1 for d in dims]
+    a = left.values.reshape(left.shape + (1,) * (len(dims) - left.ndim))
+    with np.errstate(all="ignore"):
+        values = op(a, right.values.transpose(order).reshape(shape))
+    name = left.name if left.name == right.name else None
+    like = (
+        left if len(dims) == left.ndim else right if len(dims) == right.ndim else None
+    )
+    if like is None:
+        indexes = {**right.indexes, **left.indexes}
+        coords = {d: indexes[d] for d in dims}
+        return xr.DataArray(values, coords=coords, dims=dims, name=name)
+    return like._replace(variable=xr.Variable(dims, values), name=name)
+
+
+def _bare(arr: xr.DataArray) -> bool:
+    return not arr.attrs and set(arr.coords) == set(arr.dims) == set(arr.indexes)
+
+
+def _same(a: pd.Index, b: pd.Index) -> bool:
+    return a is b or a.equals(b)
 
 
 def _filled(expression: Array, fill: float) -> Array:
