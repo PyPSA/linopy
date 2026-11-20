@@ -92,7 +92,11 @@ class Block:
         for f in self.factors:
             if isinstance(f, tuple):
                 values, at, divide = f
-                picked = values[tuple(self.cols[i] for i in at)]
+                if at and values.flags.c_contiguous:
+                    flat = _key([self.cols[i] for i in at], values.shape)
+                    picked = np.take(values.reshape(-1), flat)
+                else:
+                    picked = values[tuple(self.cols[i] for i in at)]
                 if divide:
                     c = np.ones(len(self)) if c is None else c
                     c, owned = np.divide(c, picked, out=c if owned else None), True
@@ -190,6 +194,15 @@ def _dims(value: Table | Data) -> tuple[str, ...]:
     if isinstance(value, Table):
         return value.dims
     return tuple(str(d) for d in getattr(value, "dims", ()))
+
+
+def _key(cols: Sequence[np.ndarray], shape: Sequence[int]) -> np.ndarray:
+    """The row-major position of each entry of *cols*, positions inside *shape*."""
+    key = cols[0]
+    for col, size in zip(cols[1:], shape[1:]):
+        key = key * size
+        key += col
+    return key
 
 
 def _matches(
@@ -357,8 +370,8 @@ class Evaluator:
             b = b.broadcast({along: card})
             shared = [d for d in dims if d in b.dims]
             shape = list(self.sizes(shared).values())
-            rkey = np.ravel_multi_index([read[d] for d in shared], shape)
-            tkey = np.ravel_multi_index(b.positions(shared), shape)
+            rkey = _key([read[d] for d in shared], shape)
+            tkey = _key(b.positions(shared), shape)
             ti, ri = _matches(tkey, rkey, math.prod(shape))
             if ti is not None:
                 b = b.take(ti)
@@ -456,11 +469,11 @@ class Evaluator:
         sizes = self.sizes(list(keys))
         shape = list(sizes.values())
         row = np.empty(math.prod(shape), dtype=np.int64)
-        row[np.ravel_multi_index([at[d] for d in keys], shape)] = np.arange(len(rows))
+        row[_key([at[d] for d in keys], shape)] = np.arange(len(rows))
         blocks = []
         for b in table.blocks:
             b = b.broadcast(sizes)
-            ri = row[np.ravel_multi_index(b.positions(list(keys)), shape)]
+            ri = row[_key(b.positions(list(keys)), shape)]
             blocks.append(b.regrouped([], {d: at[d][ri] for d in read}))
         lifted = Table(_union(table.dims, read), tuple(blocks), table.const, table.blank)
         return replace(self.times(lifted, data), pending=columns)
@@ -562,8 +575,8 @@ class Evaluator:
         n, m = len(b), len(support[0]) if support else 0
         if shared:
             shape = list(self.sizes(shared).values())
-            rkey = np.ravel_multi_index([at[d] for d in shared], shape)
-            tkey = np.ravel_multi_index(b.positions(shared), shape)
+            rkey = _key([at[d] for d in shared], shape)
+            tkey = _key(b.positions(shared), shape)
             ti, ri = _matches(tkey, rkey, math.prod(shape))
         else:
             ti, ri = np.repeat(np.arange(n), m), np.tile(np.arange(m), n)
@@ -645,12 +658,12 @@ class Evaluator:
             raise Unsupported("a relation row off the coordinates")
         jsizes = self.sizes(jdims)
         jshape = list(jsizes.values())
-        rkey = np.ravel_multi_index(jpos, jshape) if jdims else np.zeros(len(rows), int)
+        rkey = _key(jpos, jshape) if jdims else np.zeros(len(rows), int)
         size = math.prod(jshape)
         blocks = []
         for b in table.blocks:
             b = b.broadcast(jsizes)
-            tkey = np.ravel_multi_index(b.positions(jdims), jshape)
+            tkey = _key(b.positions(jdims), jshape)
             ti, ri = _matches(tkey, rkey, size)
             if ti is not None:
                 b = b.take(ti)
@@ -681,12 +694,12 @@ class Evaluator:
         rdims = list(read)
         rsizes = self.sizes(rdims)
         rshape = list(rsizes.values())
-        rkey = np.ravel_multi_index(list(read.values()), rshape)
+        rkey = _key(list(read.values()), rshape)
         size = math.prod(rshape)
         blocks = []
         for b in table.blocks:
             b = b.broadcast(rsizes)
-            ti, ri = _matches(np.ravel_multi_index(b.positions(rdims), rshape), rkey, size)
+            ti, ri = _matches(_key(b.positions(rdims), rshape), rkey, size)
             if ti is not None:
                 b = b.take(ti)
             blocks.append(b.regrouped(rdims, {d: p[ri] for d, p in keys.items()}))
@@ -794,7 +807,7 @@ def linear(node: ms.Expression, ctx: Context, dims: tuple[str, ...]) -> LinearEx
         b = b.broadcast(sizes)
         coeff = b.coefficients()
         if order:
-            row = np.ravel_multi_index(b.positions(order), shape)
+            row = _key(b.positions(order), shape)
         else:
             row = np.zeros(len(b), dtype=np.int64)
         var = b.var

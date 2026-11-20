@@ -1057,10 +1057,10 @@ def coo_to_csr(
     """
     dtype = index_dtype(len(data), shape, model)
     indices = cols.astype(dtype, copy=False)
-    step = rows[1:] - rows[:-1]
-    if len(rows) == shape[0] and (step == 1).all() and (rows[:1] == 0).all():
+    one_each = len(rows) == shape[0] and (rows[:1] == 0).all()
+    if one_each and (rows[1:] - rows[:-1] == 1).all():
         indptr = np.arange(shape[0] + 1, dtype=dtype)
-    elif (step < 0).any():
+    elif (rows[1:] < rows[:-1]).any():
         coo = scipy.sparse.coo_array((data, (rows, indices)), shape=shape)
         coo.has_canonical_format = True
         by_row = coo.tocsr()
