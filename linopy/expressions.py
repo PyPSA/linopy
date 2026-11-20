@@ -906,6 +906,32 @@ def _grid_of(ds: Dataset | DataArray, dims: tuple[str, ...]) -> Grid | None:
     return grid if set(ds.coords) == set(dims) | set(grid.aux) else None
 
 
+def _picked(store: CSRStore, kwargs: Mapping[str, Any]) -> CSRStore | None:
+    """
+    ``store`` at one position along each dim ``kwargs`` names, those dims
+    dropped, as ``isel(..., drop=True)`` gives it; None for any other
+    selection, or one along a dim an auxiliary coordinate lies on.
+    """
+    indexers = {k: v for k, v in kwargs.items() if k != "drop"}
+    grid = store.grid
+    sizes = dict(zip(grid.dims, grid.shape))
+    if kwargs.get("drop") is not True or not indexers:
+        return None
+    for dim, position in indexers.items():
+        if dim not in sizes or isinstance(position, bool):
+            return None
+        if not isinstance(position, int | np.integer):
+            return None
+        if not -sizes[dim] <= position < sizes[dim]:
+            return None
+    if any(d in indexers for d, _ in grid.aux.values()):
+        return None
+    at = tuple(indexers.get(d, slice(None)) for d in grid.dims)
+    rows = np.arange(store.n_cells).reshape(grid.shape)[at].reshape(-1)
+    kept = {d: i for d, i in grid.indexes.items() if d not in indexers}
+    return store.take(rows, Grid(kept, grid.aux))
+
+
 def _const_grid(grid: Grid, const: DataArray) -> Grid | None:
     """
     ``grid`` carrying the auxiliary coordinates of ``const``, or None if
@@ -2535,6 +2561,11 @@ class LinearExpression(BaseExpression):
         Select by position as ``Dataset.isel``. For a CSR-backed expression,
         returns a CSR-backed result when the selection stays on the grid.
         """
+        store = self._store
+        if not args and isinstance(store, CSRStore):
+            picked = _picked(store, kwargs)
+            if picked is not None:
+                return type(self)._from_store(picked, self._model)
         return self._gathered("isel", super().isel, *args, **kwargs)
 
     def __getitem__(self, selector: int | slice | tuple[Any, ...] | DataArray) -> Self:
