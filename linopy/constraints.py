@@ -1029,7 +1029,10 @@ class Constraint:
 
     def sanitize_zeros(self) -> Constraint:
         """Remove terms with zero or near-zero coefficients."""
-        self._replace_store(self._lhs._store.prune(1e-10))
+        store = self._lhs._store
+        pruned = store.prune(1e-10)
+        if pruned is not store:
+            self._replace_store(pruned)
         return self
 
     def sanitize_missings(self) -> Constraint:

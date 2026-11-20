@@ -85,6 +85,15 @@ def test_update_positional_constraint_sets_dirty(m_with_c: tuple[Model, str]) ->
     assert c._coef_dirty is True
 
 
+@pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
+def test_sanitize_zeros_without_zeros_does_not_set_dirty(sparse: bool) -> None:
+    m = Model(sparse=sparse)
+    x = m.add_variables(0, 10, coords=[range(3)], name="x")
+    m.add_constraints(2 * x >= 5, name="c")
+    m.constraints.sanitize_zeros()
+    assert m.constraints["c"]._coef_dirty is False
+
+
 def test_update_noop_does_not_set_dirty(m_with_c: tuple[Model, str]) -> None:
     """``c.update()`` with no args is a no-op and must not flip the flag."""
     m, name = m_with_c
