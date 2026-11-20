@@ -34,8 +34,9 @@ from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec import operators
 from linopy.spec.context import Context, widened
 from linopy.spec.evaluator import (
+    _data_under,
+    _moved,
     _narrowed,
-    _nothing_summed,
     _off_rows,
     _regions,
     _sums_nothing,
@@ -65,7 +66,7 @@ class Unsupported(Exception):
         self.fallback = fallback
 
 
-Factor = float | tuple[np.ndarray, tuple[int, ...]]
+Factor = float | tuple[np.ndarray, tuple[int, ...], bool]
 Data = xr.DataArray | float
 
 
@@ -91,9 +92,12 @@ class Block:
         c, owned, negative = self.coeff, False, False
         for f in self.factors:
             if isinstance(f, tuple):
-                values, at = f
+                values, at, divide = f
                 picked = values[tuple(self.cols[i] for i in at)]
-                if c is None:
+                if divide:
+                    c = np.ones(len(self)) if c is None else c
+                    c, owned = np.divide(c, picked, out=c if owned else None), True
+                elif c is None:
                     c, owned = picked, True
                 elif owned:
                     c *= picked
@@ -254,7 +258,8 @@ class Evaluator:
         if isinstance(node, ms.VariableReference):
             return self.variable(node.name)
         if _sums_nothing(node, ctx):
-            raise Unsupported("over an empty dimension")
+            _data_under(node, ctx)
+            return Table(node.dims, (), None)
         if isinstance(node, ms.Negate):
             return self.scaled(self.table(node.operand, ctx), -1.0)
         if isinstance(node, ms.Add):
@@ -267,6 +272,10 @@ class Evaluator:
             return self.looked_up(node, ctx)
         if isinstance(node, ms.Cases):
             return self.cases(node, ctx)
+        if isinstance(node, ms.Divide):
+            return self.divided(node, ctx)
+        if isinstance(node, ms.Translate):
+            return self.moved(node, ctx)
         raise Unsupported(type(node).__name__)
 
     def named(self, body: ms.Expression, ctx: Context) -> Table:
@@ -309,10 +318,61 @@ class Evaluator:
             const = labels.copy(data=np.where(live, 0.0, fill).reshape(labels.shape))
         return Table(dims, (block,), const, missing == "absent")
 
-    def scaled(self, table: Table, factor: float) -> Table:
-        const = table.const if table.flat else table.const * factor
-        blocks = tuple(b.times(factor) for b in table.blocks)
+    def scaled(self, table: Table, factor: float, divide: bool = False) -> Table:
+        const = table.const
+        if not table.flat:
+            const = const / factor if divide else const * factor
+        by: Factor = (np.asarray(factor), (), True) if divide else factor
+        blocks = tuple(b.times(by) for b in table.blocks)
         return Table(table.dims, blocks, const, table.blank)
+
+    def divided(self, node: ms.Divide, ctx: Context) -> Table:
+        if self.carries(node.divisor):
+            raise Unsupported("a division by a term")
+        table = self.table(node.numerator, ctx)
+        data = _off_rows(evaluate(node.divisor, ctx), ctx)
+        if (np.asarray(getattr(data, "values", data)) == 0).any():
+            raise Unsupported("a division by zero")
+        return self.times(table, data, divide=True)
+
+    def moved(self, node: ms.Translate, ctx: Context) -> Table:
+        """A shift: each term goes to the rows that read its row, found by shifting the positions along the axis as the eager path shifts data."""
+        table = self.table(node.operand, widened(node, ctx))
+        along = node.along
+        if along not in table.dims:
+            raise Unsupported(f"a shift along '{along}', which the operand lacks")
+        labels = ctx.coords[along]
+        card = len(labels)
+        ordinal = xr.DataArray(np.arange(card, dtype=float), coords={along: labels})
+        source = self.aligned(xr.DataArray(_moved(node, ordinal, ctx, -1.0)))
+        dims = tuple(str(d) for d in source.dims)
+        reached = source.values
+        valid = reached >= 0
+        support = dict(zip(dims, np.nonzero(valid)))
+        read = {**support, along: reached[valid].astype(np.int64)}
+        blocks = []
+        for b in table.blocks:
+            b = b.broadcast({along: card})
+            shared = [d for d in dims if d in b.dims]
+            shape = list(self.sizes(shared).values())
+            rkey = np.ravel_multi_index([read[d] for d in shared], shape)
+            tkey = np.ravel_multi_index(b.positions(shared), shape)
+            ti, ri = _matches(tkey, rkey, math.prod(shape))
+            if ti is not None:
+                b = b.take(ti)
+            new = [along, *(d for d in dims if d not in b.dims)]
+            blocks.append(b.regrouped([along], {d: support[d][ri] for d in new}))
+        fill = np.nan if node.fill is None else float(node.fill)
+        if table.const is not None:
+            full = self.full(table.const, table.dims)
+            const = self.aligned(xr.DataArray(_moved(node, full, ctx, node.fill)))
+        elif valid.all():
+            const = None
+        else:
+            vacated = np.where(np.isnan(reached), np.nan, fill)
+            const = source.copy(data=np.where(valid, 0.0, vacated))
+        blank = table.flat and not fill > 0 and not fill < 0
+        return Table(_union(table.dims, dims), tuple(blocks), const, blank)
 
     def added(self, node: ms.Add, ctx: Context) -> Table:
         first, second = node.left, node.right
@@ -385,9 +445,9 @@ class Evaluator:
                 raise Unsupported(f"data off the master coordinates on '{d}'")
         return data
 
-    def times(self, table: Table, data: Data) -> Table:
+    def times(self, table: Table, data: Data, divide: bool = False) -> Table:
         if not isinstance(data, xr.DataArray) or data.ndim == 0:
-            return self.scaled(table, float(data))
+            return self.scaled(table, float(data), divide)
         data = self.aligned(data)
         values = data.values
         if values.dtype.kind != "f":
@@ -403,7 +463,8 @@ class Evaluator:
             present = data.copy(data=~holes)
             const = (xr.DataArray(0.0) if const is None else const).where(present)
         if not table.flat:
-            const = const * data.copy(data=values)
+            filled = data.copy(data=values)
+            const = const / filled if divide else const * filled
         sizes = self.sizes(dims)
         support = None
         blocks = []
@@ -412,7 +473,7 @@ class Evaluator:
                 if support is None:
                     support = np.nonzero((values != 0) & ~holes)
                 b = self.spread(b, dims, support)
-            blocks.append(b.times((values, tuple(b.dims[d] for d in dims))))
+            blocks.append(b.times((values, tuple(b.dims[d] for d in dims), divide)))
         return Table(_union(table.dims, dims), tuple(blocks), const, table.flat)
 
     def spread(
