@@ -58,9 +58,9 @@ def build(ctx: Context, expressions: bool = True) -> None:
     Variables, special-ordered sets, constraints, the objective and, with
     *expressions*, the named expressions holding a variable term, in that
     order. A declaration without a row costs next to nothing: a variable
-    over a dimension without a coordinate is added with its bounds unread,
-    and a constraint over one, or one whose ``where`` admits no row, is
-    skipped unread, as is an assumption admitted nowhere or over such a
+    over a dimension without a coordinate, or one whose ``where`` admits no
+    row, is added masked with its bounds unread, and a constraint over one,
+    or one whose ``where`` admits no row, is skipped unread, as is an assumption admitted nowhere or over such a
     dimension. The program's assumptions are checked once the variables
     exist, so a condition may read where one is defined. Each declaration
     refuses the missing ``refused`` rows its live rows read, a named
@@ -104,9 +104,10 @@ def _variables(ctx: Context) -> None:
         bounds = [b for b in (declared.lower, declared.upper) if b is not None]
         lower: float | xr.DataArray = -np.inf
         upper: float | xr.DataArray = np.inf
-        mask = None
-        if is_empty(declared.dims, ctx):
+        mask: xr.DataArray | bool | None = None
+        if is_empty(declared.dims, ctx) or not admits_a_row(declared.where, ctx):
             ctx.memo.skipped(*bounds)
+            mask = False
         else:
             rows = evaluate_where(declared.where, ctx)
             for bound in bounds:

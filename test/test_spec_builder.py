@@ -1540,6 +1540,16 @@ def test_a_declaration_without_a_row_reads_no_parameter() -> None:
     assert list(m.constraints) == []
 
 
+def test_a_variable_its_where_admits_nowhere_is_masked_with_its_bounds_unread() -> None:
+    gated = {"dims": ["g"], "where": "on", "bounds": {"lower": "floor", "upper": "cap"}}
+    spec = DEAD_ROWS | {"variables": DEAD_ROWS["variables"] | {"z": gated}}
+    data = dead_rows_data()
+    m = Model.from_spec(spec, data)
+    assert set(data.read) & set(DEAD_ROWS["parameters"]) == {"on"}
+    assert (m.variables["z"].labels == -1).all()
+    assert m._xCounter == 4
+
+
 SUMMED_TERM = {
     "objective": {"sense": "minimize", "expression": "sum(x) + sum(y * limit)"}
 }
