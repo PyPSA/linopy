@@ -1061,7 +1061,8 @@ def coo_to_csr(
         order, indptr = _grouped(rows, shape[0])
         data, indices = data[order], indices[order]
     else:
-        indptr = np.searchsorted(rows, np.arange(shape[0] + 1))
+        indptr = np.zeros(shape[0] + 1, dtype=np.int64)
+        np.cumsum(np.bincount(rows, minlength=shape[0]), out=indptr[1:])
     csr_arrays = (data, indices, indptr.astype(dtype, copy=False))
     return scipy.sparse.csr_array(csr_arrays, shape=shape)
 
