@@ -51,6 +51,7 @@ from linopy.testing import (  # noqa: E402
     assert_conequal,
     assert_linequal,
     assert_model_equal,
+    assert_quadequal,
     synthetic_sources,
 )
 
@@ -1272,24 +1273,35 @@ def test_an_objective_is_quadratic_only_where_the_data_keeps_a_product(
     assert isinstance(m.objective.expression, linopy.QuadraticExpression) is quadratic
 
 
-@pytest.mark.parametrize("product", ["x * y * k", "k * (x * y)"])
-def test_a_product_the_data_zeroes_keeps_a_sparse_objective_sparse(
-    backend: Model, product: str
+@pytest.mark.parametrize("product", ["k * x * y", "x * y * k", "k * (x * y)"])
+@pytest.mark.parametrize(
+    ("k", "quadratic"),
+    [
+        pytest.param([0.0, 0.0, 0.0], False, id="zeroed"),
+        pytest.param([0.0, 1.0, 2.0], True, id="kept"),
+    ],
+)
+def test_a_sparse_objective_builds_without_a_densify_notice(
+    backend: Model, product: str, k: list[float], quadratic: bool
 ) -> None:
-    """A product the data zeroes stayed a quadratic, which has no sparse backing, so every term it met densified."""
+    """A linear term met a quadratic one, which has no sparse backing, and warned of densifying."""
     spec = with_(
         QUADRATIC_SPEC,
         constraints={"cap": {"dims": ["t"], "expression": "x + y <= 5"}},
         objective={"sense": "maximize", "expression": f"sum({product} + x, over=t)"},
     )
-    data = {"t": T, "k": xr.DataArray([0.0, 0.0, 0.0], coords=[T])}
+    data = {"t": T, "k": xr.DataArray(k, coords=[T])}
     with warnings.catch_warnings():
         warnings.simplefilter("error", linopy.PerformanceWarning)
         m = Model.from_spec(spec, data, sparse=backend.sparse)
     objective = m.objective.expression
-    assert isinstance(objective, linopy.LinearExpression)
-    assert objective.is_sparse == backend.sparse
-    assert_linequal(objective, Model.from_spec(spec, data).objective.expression)
+    want = Model.from_spec(spec, data).objective.expression
+    assert isinstance(objective, linopy.QuadraticExpression) is quadratic
+    if quadratic:
+        assert_quadequal(objective, want)
+    else:
+        assert objective.is_sparse == backend.sparse
+        assert_linequal(objective, want)
 
 
 def test_a_named_expression_reading_a_dual_is_not_built() -> None:

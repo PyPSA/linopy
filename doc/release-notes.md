@@ -129,6 +129,8 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `add_constraints` rejects dimensions named after reserved fields (`sign`, `rhs`, ...), like `add_variables`.
 - Multiplying a constant or one-term expression by a multi-term expression no longer raises a `TypeError`. ([\#1055](https://github.com/PyPSA/linopy/issues/1055))
 - `QuadraticExpression.groupby(...).map` returns a `QuadraticExpression`. ([\#1064](https://github.com/PyPSA/linopy/issues/1064))
+- On a sparse model, building or grouping a quadratic expression, e.g. `2 * x + x * x`, `(2 * x) * x` or `(x * x).groupby(g).sum()`, no longer emits a `PerformanceWarning`. ([\#1195](https://github.com/PyPSA/linopy/pull/1195))
+- `LinearExpression.add` and `.sub` with `join=` accept a quadratic expression, where they raised a `ValueError`. ([\#1195](https://github.com/PyPSA/linopy/pull/1195))
 - `Variable.fix` accepts NaN or non-binary fix values at masked positions of a binary variable. `Variables.fix` validates all variables before fixing any.
 - `Model.from_spec` no longer raises on an `at()` lookup into an empty dimension. ([\#1141](https://github.com/PyPSA/linopy/pull/1141))
 - `Model.from_spec` builds a linear objective when the data sets all quadratic coefficients to zero. ([\#1141](https://github.com/PyPSA/linopy/pull/1141))
