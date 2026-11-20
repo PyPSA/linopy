@@ -1134,9 +1134,11 @@ def test_a_sparse_grouped_sum_matches_the_dense_one(
     for sparse in (True, False):
         x = Model(sparse=sparse).add_variables(coords=axes, name="x")
         operand = (2 * x + 1).where(present)
-        summed[sparse] = grouped_sum(
+        result = grouped_sum(
             operand, {"g": np.array(list("abcad"))}, grouped, {k: onto[k] for k in keys}
         )
+        assert isinstance(result, LinearExpression)
+        summed[sparse] = result
     assert summed[True].is_sparse
     assert summed[True].coord_dims == summed[False].coord_dims
     assert_linequal(summed[True], summed[False])
