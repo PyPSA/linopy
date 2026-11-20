@@ -734,11 +734,21 @@ class Model:
             stacklevel=4,
         )
 
-    def _allocate_labels(self, start: int, end: int) -> np.ndarray:
-        """Return the label range ``[start, end)``, widening the dtype on overflow."""
+    def _allocate_labels(
+        self, start: int, end: int, mask: np.ndarray | None = None
+    ) -> np.ndarray:
+        """
+        Return the label range ``[start, end)``, ``-1`` where ``mask`` is
+        False, widening the dtype on overflow.
+        """
         if end > np.iinfo(self._dtypes["labels"]).max:
             self._widen_label_dtype()
-        return np.arange(start, end, dtype=self._dtypes["labels"])
+        dtype = self._dtypes["labels"]
+        if mask is None:
+            return np.arange(start, end, dtype=dtype)
+        if not mask.any():
+            return np.full(mask.shape, -1, dtype=dtype)
+        return np.where(mask, np.arange(start, end, dtype=dtype).reshape(mask.shape), -1)
 
     @property
     def dataset_attrs(self) -> list[str]:
@@ -1092,12 +1102,9 @@ class Model:
 
         start = self._xCounter
         end = start + data.labels.size
-        labels = self._allocate_labels(start, end).reshape(data.labels.shape)
+        labels = self._allocate_labels(start, end, on_grid).reshape(data.labels.shape)
         self._xCounter += data.labels.size
-
-        data.labels.values = (
-            labels if on_grid is None else np.where(on_grid, labels, -1)
-        )
+        data.labels.values = labels
 
         data = data.assign_attrs(
             label_range=(start, end),
