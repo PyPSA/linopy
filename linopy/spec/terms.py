@@ -137,6 +137,12 @@ class Table:
     dims: tuple[str, ...]
     blocks: tuple[Block, ...]
     const: xr.DataArray | None
+    blank: bool = False
+
+    @property
+    def flat(self) -> bool:
+        """Whether the constant is zero wherever it is present: nothing to scale, sum or gather."""
+        return self.const is None or self.blank
 
 
 def _union(*dims: Sequence[str]) -> tuple[str, ...]:
@@ -147,6 +153,16 @@ def _const(value: Table | Data) -> xr.DataArray | None:
     if isinstance(value, Table):
         return value.const
     return xr.DataArray(value)
+
+
+def _flat(value: Table | Data) -> bool:
+    """Whether the constant of *value* is zero wherever it is present."""
+    if isinstance(value, Table):
+        return value.flat
+    values = np.asarray(getattr(value, "values", value))
+    if values.dtype.kind != "f":
+        return not values.any()
+    return not (values[~np.isnan(values)] != 0).any()
 
 
 def _dims(value: Table | Data) -> tuple[str, ...]:
@@ -274,12 +290,12 @@ class Evaluator:
         if not everywhere and missing != 0:
             fill = np.nan if missing == "absent" else float(missing)
             const = labels.copy(data=np.where(live, 0.0, fill).reshape(labels.shape))
-        return Table(dims, (block,), const)
+        return Table(dims, (block,), const, missing == "absent")
 
     def scaled(self, table: Table, factor: float) -> Table:
-        const = None if table.const is None else table.const * factor
+        const = table.const if table.flat else table.const * factor
         blocks = tuple(b.times(factor) for b in table.blocks)
-        return Table(table.dims, blocks, const)
+        return Table(table.dims, blocks, const, table.blank)
 
     def added(self, node: ms.Add, ctx: Context) -> Table:
         first, second = node.left, node.right
@@ -299,7 +315,8 @@ class Evaluator:
         blocks = list(left.blocks) if isinstance(left, Table) else []
         if isinstance(right, Table):
             blocks += [b.times(-1.0) if sub else b for b in right.blocks]
-        return Table(_union(_dims(left), _dims(right)), tuple(blocks), const)
+        blank = _flat(left) and _flat(right)
+        return Table(_union(_dims(left), _dims(right)), tuple(blocks), const, blank)
 
     def multiplied(self, node: ms.Multiply, ctx: Context) -> Table:
         if self.carries(node.left) and self.carries(node.right):
@@ -339,7 +356,7 @@ class Evaluator:
             data = self.aligned(data)
         const = const.where(data.notnull()) * data.fillna(1.0)
         dims = _union(a.dims, b.dims, _dims(data))
-        return Table(dims, (), self.full(const, dims))
+        return Table(dims, (), self.full(const, dims), True)
 
     def aligned(self, data: xr.DataArray) -> xr.DataArray:
         stray = [c for c in data.coords if c not in data.dims]
@@ -363,14 +380,13 @@ class Evaluator:
         holes = np.isnan(values)
         if holes.any():
             values = np.where(holes, 1.0, values)
-        filled = data.copy(data=values)
         dims = tuple(str(d) for d in data.dims)
         const = table.const
         if holes.any():
             present = data.copy(data=~holes)
             const = (xr.DataArray(0.0) if const is None else const).where(present)
-        if const is not None:
-            const = const * filled
+        if not table.flat:
+            const = const * data.copy(data=values)
         sizes = self.sizes(dims)
         support = None
         blocks = []
@@ -380,7 +396,7 @@ class Evaluator:
                     support = np.nonzero((values != 0) & ~holes)
                 b = self.spread(b, dims, support)
             blocks.append(b.times((values, tuple(b.dims[d] for d in dims))))
-        return Table(_union(table.dims, dims), tuple(blocks), const)
+        return Table(_union(table.dims, dims), tuple(blocks), const, table.flat)
 
     def spread(
         self, b: Block, dims: tuple[str, ...], support: tuple[np.ndarray, ...]
@@ -446,12 +462,12 @@ class Evaluator:
                 blocks.append(replace(b, dims={d: i for d, i in b.dims.items() if d != dim}))
             else:
                 blocks.append(b.times(float(size)))
-        const = table.const
-        if const is not None:
-            const = const.fillna(0)
+        const = None
+        if not table.flat:
+            const = table.const.fillna(0)
             const = const.sum(dim) if dim in const.dims else const * size
         dims = tuple(d for d in table.dims if d != dim)
-        return Table(dims, tuple(blocks), const)
+        return Table(dims, tuple(blocks), const, const is not None and _flat(const))
 
     def through(self, table: Table, columns: ms.JoinColumns) -> Table:
         ctx = self.ctx
@@ -481,12 +497,12 @@ class Evaluator:
             if ti is not None:
                 b = b.take(ti)
             blocks.append(b.regrouped(jdims, {d: p[ri] for d, p in gpos.items()}))
-        const = table.const
-        if const is not None:
-            const = self.full(const.fillna(0), table.dims)
+        const = None
+        if not table.flat:
+            const = self.full(table.const.fillna(0), table.dims)
             const = operators.grouped_sum(const, joined, grouped, onto)
         dims = _union([d for d in table.dims if d not in joined], grouped)
-        return Table(dims, tuple(blocks), const)
+        return Table(dims, tuple(blocks), const, const is not None and _flat(const))
 
     def looked_up(self, node: ms.Join, ctx: Context) -> Table:
         table = self.table(node.operand, widened(node, ctx))
@@ -523,7 +539,7 @@ class Evaluator:
         elif not bool(present.all()):
             const = xr.DataArray(0.0).where(present)
         dims = _union([d for d in table.dims if d not in read], key_dims)
-        return Table(dims, tuple(blocks), const)
+        return Table(dims, tuple(blocks), const, table.flat)
 
     def cases(self, node: ms.Cases, ctx: Context) -> Table:
         parts: list[Table | Data] = []
@@ -537,7 +553,7 @@ class Evaluator:
             total = self.plus(total, part)
         if isinstance(total, Table):
             return total
-        return Table(_dims(total), (), xr.DataArray(total))
+        return Table(_dims(total), (), xr.DataArray(total), _flat(total))
 
     def in_region(self, value: Table | Data, rows: xr.DataArray) -> Table | Data:
         if isinstance(value, float | int):
@@ -555,7 +571,7 @@ class Evaluator:
             keep = mask[b.positions(dims)]
             blocks.append(b if keep.all() else b.take(keep))
         const = None if value.const is None else value.const.where(rows, 0)
-        return Table(_union(value.dims, dims), tuple(blocks), const)
+        return Table(_union(value.dims, dims), tuple(blocks), const, value.blank)
 
     def plus(self, left: Table | Data, right: Table | Data) -> Table | Data:
         if not isinstance(left, Table) and not isinstance(right, Table):
@@ -566,7 +582,8 @@ class Evaluator:
         else:
             const = a if b is None else b
         blocks = [*getattr(left, "blocks", ()), *getattr(right, "blocks", ())]
-        return Table(_union(_dims(left), _dims(right)), tuple(blocks), const)
+        blank = _flat(left) and _flat(right)
+        return Table(_union(_dims(left), _dims(right)), tuple(blocks), const, blank)
 
     def converted(self, value: object) -> Table:
         if isinstance(value, float | int | xr.DataArray):
@@ -595,7 +612,7 @@ class Evaluator:
         const = None
         if not (values == 0).all():
             const = xr.DataArray(values, coords={d: grid.indexes[d] for d in dims}, dims=dims)
-        return Table(dims, (block,), const)
+        return Table(dims, (block,), const, _flat(values))
 
 
 def linear(node: ms.Expression, ctx: Context, dims: tuple[str, ...]) -> LinearExpression:
@@ -611,8 +628,12 @@ def linear(node: ms.Expression, ctx: Context, dims: tuple[str, ...]) -> LinearEx
     if table.const is None:
         const = np.zeros(n_cells)
     else:
-        full = table.const.broadcast_like(xr.Dataset(coords={d: ctx.coords[d] for d in order}))
-        const = np.asarray(full.transpose(*order).values, dtype=float).reshape(-1)
+        own = [d for d in order if d in table.const.dims]
+        values = np.asarray(table.const.transpose(*own).values, dtype=float)
+        values = values.reshape([sizes[d] if d in own else 1 for d in order])
+        const = np.empty(shape)
+        const[...] = values
+        const = const.reshape(-1)
     absent = np.isnan(const)
     data, rows, cols = [], [], []
     for b in table.blocks:
