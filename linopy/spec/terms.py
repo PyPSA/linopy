@@ -159,6 +159,7 @@ class Table:
     blocks: tuple[Block, ...]
     const: xr.DataArray | None
     blank: bool = False
+    pending: ms.JoinColumns | None = None
 
     @property
     def flat(self) -> bool:
@@ -241,9 +242,11 @@ class Evaluator:
             return evaluate(node, ctx)
         return self.table(node, ctx)
 
-    def table(self, node: ms.Expression, ctx: Context) -> Table:
+    def table(self, node: ms.Expression, ctx: Context, lifted: bool = False) -> Table:
         try:
             made = self._own(node, ctx)
+            if not lifted:
+                made = self.settled(made)
         except Unsupported as e:
             FALLBACKS.append(f"{type(node).__name__} {getattr(node, 'name', '')}: {e}")
             if not e.fallback:
@@ -401,9 +404,83 @@ class Evaluator:
         dead = self.dead(node, ctx)
         if dead is not None:
             return dead
+        term, other = node.left, node.right
+        if not self.carries(term):
+            term, other = other, term
+        if isinstance(other, ms.Join) and self.defers(other, ctx):
+            return self.joined(self.table(term, ctx), other, ctx)
         left, right = self.value(node.left, ctx), self.value(node.right, ctx)
         table, data = (left, right) if isinstance(left, Table) else (right, left)
         return self.times(table, _off_rows(data, ctx))
+
+    def defers(self, join: ms.Join, ctx: Context) -> bool:
+        """Whether a lookup of data can be read per term: not kept already, through a relation with a row at every key, along value columns only."""
+        columns = join.columns
+        relation = ctx.relations[columns.name]
+        return (
+            join not in ctx.memo.values
+            and len(relation.rows) > 0
+            and not any(r in relation.declared.key for r in columns.joined)
+            and not set(join.operand.dims) & set(relation.key_dims)
+            and bool(relation.defined.all())
+        )
+
+    def joined(self, table: Table, join: ms.Join, ctx: Context) -> Table:
+        """*table* times the lookup *join* of data, the dense grid over the key built only where the gather cannot stand in."""
+        data = evaluate(join.operand, widened(join, ctx))
+        ctx.memo.used(join)
+        made = self.gathered(table, data, join.columns)
+        if made is not None:
+            return made
+        return self.times(table, _off_rows(looked_up(data, join.columns, ctx), ctx))
+
+    def gathered(
+        self, table: Table, data: Data, columns: ms.JoinColumns
+    ) -> Table | None:
+        """*table* times *data* read through a relation: each term gathers the row its key reads, where the data is finite and present throughout."""
+        ctx = self.ctx
+        relation = ctx.relations[columns.name]
+        keys = dict(zip(relation.key_dims, relation.declared.key))
+        read = {columns.dim(r): r for r in columns.joined}
+        if not isinstance(data, xr.DataArray) or data.dtype.kind != "f":
+            return None
+        if any(d not in table.dims for d in keys) or any(d in table.dims for d in read):
+            return None
+        if table.const is not None and set(table.const.dims) & set(keys):
+            return None
+        if np.isinf(data.values).any():
+            return None
+        rows = relation.rows
+        at = {d: ctx.coords[d].get_indexer(rows[r].to_numpy()) for d, r in (keys | read).items()}
+        if any((p < 0).any() for p in at.values()):
+            return None
+        sizes = self.sizes(list(keys))
+        shape = list(sizes.values())
+        row = np.empty(math.prod(shape), dtype=np.int64)
+        row[np.ravel_multi_index([at[d] for d in keys], shape)] = np.arange(len(rows))
+        blocks = []
+        for b in table.blocks:
+            b = b.broadcast(sizes)
+            ri = row[np.ravel_multi_index(b.positions(list(keys)), shape)]
+            blocks.append(b.regrouped([], {d: at[d][ri] for d in read}))
+        lifted = Table(_union(table.dims, read), tuple(blocks), table.const, table.blank)
+        return replace(self.times(lifted, data), pending=columns)
+
+    def settled(self, table: Table) -> Table:
+        """*table* off the dims a pending lookup reads along: its constant read through the relation, each term at the key it was gathered for."""
+        columns = table.pending
+        if columns is None:
+            return table
+        read = [columns.dim(r) for r in columns.joined]
+        const = table.const
+        if const is not None:
+            const = self.aligned(looked_up(self.full(const, read), columns, self.ctx))
+        dims = tuple(d for d in table.dims if d not in read)
+        blocks = [
+            replace(b, dims={d: i for d, i in b.dims.items() if d not in read})
+            for b in table.blocks
+        ]
+        return Table(dims, tuple(blocks), const, table.blank)
 
     def dead(self, node: ms.Multiply, ctx: Context) -> Table | None:
         """A product of two terms times data zero wherever present: the constant the eager path's dead-term rule leaves."""
@@ -523,15 +600,18 @@ class Evaluator:
             inner = widened(join, inner)
             table = self.through(self.table(join.operand, inner), join.columns)
         else:
-            table = self.table(operand, inner)
+            table = self.table(operand, inner, lifted=True)
         for axis in node.over:
             if axis.column is None:
                 table = self.sum_over(table, axis.dimension)
-        return table
+        return self.settled(table)
 
     def sum_over(self, table: Table, dim: str) -> Table:
         if dim not in table.dims:
             raise Unsupported(f"a sum over '{dim}', which the operand lacks")
+        pending = table.pending
+        if pending is not None and dim in (*pending.joined_dims, *pending.grouped_dims):
+            table, pending = self.settled(table), None
         table = self.absorbed(table)
         size = len(self.ctx.coords[dim])
         blocks = []
@@ -545,7 +625,8 @@ class Evaluator:
             const = table.const.fillna(0)
             const = const.sum(dim) if dim in const.dims else const * size
         dims = tuple(d for d in table.dims if d != dim)
-        return Table(dims, tuple(blocks), const, const is not None and _flat(const))
+        blank = const is not None and _flat(const)
+        return Table(dims, tuple(blocks), const, blank, pending)
 
     def through(self, table: Table, columns: ms.JoinColumns) -> Table:
         ctx = self.ctx
