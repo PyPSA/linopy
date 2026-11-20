@@ -2153,6 +2153,8 @@ SELECTIONS: dict[str, Callable[[LinearExpression], LinearExpression]] = {
     "where-dim": lambda e: e.where(alternating(e)),
     "where-grid": lambda e: e.where(grid_operand(e) > 1.5),
     "where-other": lambda e: e.where(alternating(e), 3.0),
+    "where-int": lambda e: e.where(alternating(e).astype(int)),
+    "where-int-other": lambda e: e.where(alternating(e).astype(int), 3.0),
     "where-drop": lambda e: e.where(alternating(e), drop=True),
     "where-drop-mismatch": lambda e: e.where(
         alternating(e).isel({dim0(e): slice(1, None)}), drop=True

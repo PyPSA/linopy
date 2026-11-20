@@ -75,6 +75,8 @@ OPERATORS: dict[str, tuple[str, list[str], list[float]]] = {
     "sum-by": ("sum(x, over=t, by=season_of[s])", ["s"], [3, 12]),
     "at": ("x * at(z, by=season_of[s])", ["t"], [10, 20, 80, 160]),
     "cases": ("x_state", ["t"], [100, 1, 2, 4]),
+    "product-chain": ("x * at(z, by=season_of[s]) * 2", ["t"], [20, 40, 160, 320]),
+    "sum-of-a-sparse-weight": ("sum(x * 2 * w, over=t)", ["s"], [2, 32]),
 }
 
 
@@ -87,6 +89,7 @@ def operator_spec() -> dict[str, Any]:
             "z": {"dims": ["s"]},
             "lag": {"dims": ["s"], "dtype": "int"},
             "width": {"dims": ["s"], "dtype": "int"},
+            "w": {"dims": ["t", "s"], "missing": "absent"},
         },
         "variables": {"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 100}}},
         "constraints": {"fix": {"dims": ["t"], "expression": "x == v"}},
@@ -121,6 +124,7 @@ OPERATOR_DATA: dict[str, Any] = {
     "z": pd.DataFrame({"s": S, "z": [10.0, 20.0]}),
     "lag": pd.DataFrame({"s": S, "lag": [1, 2]}),
     "width": pd.DataFrame({"s": S, "width": [1, 2]}),
+    "w": pd.DataFrame({"t": [0, 3], "s": ["a", "b"], "w": [1.0, 2.0]}),
 }
 
 
@@ -1100,3 +1104,108 @@ def test_a_grouped_sum_onto_a_mostly_empty_grid_does_not_warn() -> None:
         summed[sparse] = result
     assert summed[True].is_sparse
     assert_linequal(summed[True], summed[False])
+
+
+@pytest.mark.parametrize("keys", [("bus",), ("bus", "z")])
+@pytest.mark.parametrize("dims", [("g", "t"), ("t", "g"), ("t", "g", "c")])
+def test_a_sparse_grouped_sum_matches_the_dense_one(
+    dims: tuple[str, ...], keys: tuple[str, ...]
+) -> None:
+    from linopy.spec.operators import grouped_sum
+
+    coords = {
+        "t": pd.RangeIndex(3, name="t"),
+        "g": pd.Index(list("abcd"), name="g"),
+        "c": pd.Index(["x", "y"], name="c"),
+    }
+    axes = [coords[d] for d in dims]
+    cells = np.arange(np.prod([len(a) for a in axes])).reshape([len(a) for a in axes])
+    present = xr.DataArray(cells % 3 > 0, coords=axes)
+    rows = {
+        "bus": np.array(["b1", "b2", "b1", "b1", "b2"]),
+        "z": np.array([1, 2, 1, 1, 2]),
+    }
+    onto = {
+        "bus": pd.Index(["b0", "b1", "b2"], name="bus"),
+        "z": pd.Index([1, 2, 3], name="z"),
+    }
+    grouped = {k: rows[k] for k in keys}
+    summed = {}
+    for sparse in (True, False):
+        x = Model(sparse=sparse).add_variables(coords=axes, name="x")
+        operand = (2 * x + 1).where(present)
+        result = grouped_sum(
+            operand, {"g": np.array(list("abcad"))}, grouped, {k: onto[k] for k in keys}
+        )
+        assert isinstance(result, LinearExpression)
+        summed[sparse] = result
+    assert summed[True].is_sparse
+    assert summed[True].coord_dims == summed[False].coord_dims
+    assert_linequal(summed[True], summed[False])
+
+
+@pytest.mark.parametrize(
+    ("over", "dims", "want"),
+    [
+        ("t", ["s"], [8.0, 0.0, 48.0]),
+        ("s", ["t"], [0.0, 4.0, 0.0, 52.0]),
+        ("[t, s]", [], [56.0]),
+    ],
+)
+def test_a_sum_of_a_term_times_a_mostly_absent_weight_reads_present_cells(
+    backend: Model, over: str, dims: list[str], want: list[float]
+) -> None:
+    spec = {
+        "dimensions": {"t": {"dtype": "int"}, "s": {"dtype": "str"}},
+        "parameters": {
+            "v": {"dims": ["t"]},
+            "w": {"dims": ["t", "s"], "missing": "absent"},
+        },
+        "variables": {"x": {"dims": ["t"], "bounds": {"lower": 0, "upper": 10}}},
+        "constraints": {"fix": {"dims": ["t"], "expression": "x == v"}},
+        "objective": {"sense": "minimize", "expression": "sum(x)"},
+        "expressions": {"total": f"sum(x * w * 2, over={over})"},
+    }
+    s = pd.Index(["a", "b", "c"], name="s")
+    data = {
+        "t": TT,
+        "s": s,
+        "v": pd.DataFrame({"t": TT, "v": V}),
+        "w": pd.DataFrame(
+            {"t": [1, 3, 3], "s": ["a", "a", "c"], "w": [1.0, 0.25, 3.0]}
+        ),
+    }
+    m = Model.from_spec(spec, data, sparse=backend.sparse)
+    total = m.expressions["total"]
+    assert isinstance(total, LinearExpression)
+    assert int((total.vars != -1).sum()) == 3
+    m.solve(solver_name="highs", output_flag=False)
+    coords = {d: {"t": TT, "s": s}[d] for d in dims}
+    xr.testing.assert_allclose(
+        total.solution.drop_vars(total.solution.coords),
+        xr.DataArray(
+            np.array(want).reshape([len(c) for c in coords.values()]), dims=dims
+        ),
+    )
+
+
+@pytest.mark.parametrize(("where", "terms"), [("t > 2", 3), ("t > 9", 0)])
+def test_a_sum_of_a_mostly_absent_term_times_numbers_reads_present_cells(
+    backend: Model, where: str, terms: int
+) -> None:
+    spec = {
+        "dimensions": {"t": {"dtype": "int"}, "s": {"dtype": "str"}},
+        "variables": {
+            "x": {"dims": ["t", "s"], "where": where, "bounds": {"lower": 0}}
+        },
+        "objective": {"sense": "minimize", "expression": "sum(x)"},
+        "expressions": {"total": "sum(x * 2 * 3, over=s)"},
+    }
+    data = {"t": TT, "s": pd.Index(["a", "b", "c"], name="s")}
+    m = Model.from_spec(spec, data, sparse=backend.sparse)
+    total = m.expressions["total"]
+    assert isinstance(total, LinearExpression)
+    assert list(total.coord_dims) == ["t"]
+    live = total.vars != -1
+    assert int(live.sum()) == terms
+    assert float(total.coeffs.where(live).sum()) == 6.0 * terms

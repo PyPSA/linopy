@@ -488,7 +488,9 @@ class CSRStore(Store):
             else:
                 source = source[order]
         else:
-            bounds = np.searchsorted(rows, np.arange(grid.size + 1))
+            bounds = indptr_from_counts(
+                np.bincount(rows, minlength=grid.size), np.int64
+            )
         dtype = index_dtype(source.nnz, shape, self.model)
         indptr = source.indptr[bounds].astype(dtype, copy=False)
         indices = source.indices.astype(dtype, copy=False)
@@ -1085,6 +1087,10 @@ def _interleaved(
     csrs: list[scipy.sparse.csr_array], shape: tuple[int, int], model: Model
 ) -> scipy.sparse.csr_array:
     """Concatenate the terms of each row across ``csrs``, in order."""
+    csrs = [c for c in csrs if c.nnz] or csrs[:1]
+    if len(csrs) == 1:
+        (c,) = csrs
+        return scipy.sparse.csr_array((c.data, c.indices, c.indptr), shape=shape)
     counts = [np.diff(c.indptr) for c in csrs]
     n_rows = shape[0]
     nnz = sum(c.nnz for c in csrs)

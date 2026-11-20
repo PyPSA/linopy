@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import operator
 import warnings
-from collections.abc import Hashable, Mapping
+from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
 from typing import cast
@@ -21,10 +21,12 @@ import pandas as pd
 import xarray as xr
 
 from linopy.constants import TERM_DIM
+from linopy.csr import CSRStore, Grid
 from linopy.expressions import LinearExpression, merge
 from linopy.model import Model
 from linopy.spec.context import Array, as_expression
 from linopy.spec.errors import SpecDataError
+from linopy.variables import Variable
 
 Amount = int | xr.DataArray
 _ROW = "_row"
@@ -91,16 +93,62 @@ def grouped_sum(
         d: xr.DataArray(expression.indexes[d].get_indexer(labels), coords=[rows])
         for d, labels in joined.items()
     }
+    if isinstance(expression, LinearExpression) and expression.is_sparse:
+        return _gathered_rows(expression, positions, grouped, onto)
     picked = expression.isel(positions)
     if isinstance(picked, xr.DataArray):
         return _scattered(picked, grouped, onto)
-    if isinstance(picked, LinearExpression) and not picked.is_sparse:
+    if isinstance(picked, LinearExpression):
         return _gathered(picked, grouped, onto)
     keyed = picked.assign_coords({d: (_ROW, labels) for d, labels in grouped.items()})
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", "Grouping a LinearExpression", UserWarning)
         summed = keyed.groupby(list(grouped)).sum()
     return summed.reindex(onto).fillna(0)
+
+
+def contracted(
+    term: Variable | LinearExpression,
+    data: xr.DataArray | float,
+    live: xr.DataArray,
+    over: Sequence[str],
+) -> LinearExpression:
+    """
+    The sum over *over* of *term* times *data*, read only at the cells *live* holds.
+
+    *live* is where both are present: an absent cell adds nothing to a sum,
+    so the term is neither broadcast over the dimensions *data* adds nor
+    masked where it is absent, and a sparse product costs what it holds.
+    """
+    dims = [str(d) for d in live.dims]
+    kept = [d for d in dims if d not in over]
+    cells = dict(zip(dims, np.nonzero(live.to_numpy())))
+    rows = pd.RangeIndex(len(cells[dims[0]]), name=_ROW)
+    if not len(rows):
+        extra = {d: live.indexes[d] for d in kept if d not in term.indexes}
+        return cast(LinearExpression, _zeros(term, tuple(over), extra))
+    at = {d: xr.DataArray(cells[d], coords=[rows]) for d in term.indexes}
+    picked = cast(LinearExpression, as_expression(term.isel(at)))
+    picked = picked._from_store(picked._store.to_dense(), picked.model)
+    if isinstance(data, xr.DataArray):
+        owned = [str(d) for d in data.dims]
+        weights = data.to_numpy()[tuple(cells[d] for d in owned)]
+        picked = picked * xr.DataArray(weights, coords=[rows])
+    else:
+        picked = picked * data
+    if not kept:
+        return on_store(picked.sum(_ROW))
+    grouped = {d: live.indexes[d].to_numpy()[cells[d]] for d in kept}
+    onto = {d: live.indexes[d] for d in kept}
+    return on_store(_gathered(picked, grouped, onto))
+
+
+def on_store(term: LinearExpression) -> LinearExpression:
+    """*term* on its model's store: sparse (CSR) where the model is."""
+    if not term.model.sparse or term.is_sparse:
+        return term
+    store = term._store.to_sparse()
+    return term if isinstance(store, str) else term._from_store(store, term.model)
 
 
 def _gathered(
@@ -138,6 +186,36 @@ def _gathered(
     variables["const"] = (framed, const)
     coords = {d: onto[d] if d in grouped else data.indexes[d] for d in framed}
     return LinearExpression(xr.Dataset(variables, coords=coords), picked.model)
+
+
+def _gathered_rows(
+    expression: LinearExpression,
+    positions: Mapping[str, xr.DataArray],
+    grouped: Mapping[str, np.ndarray],
+    onto: Mapping[str, pd.Index],
+) -> LinearExpression:
+    """The rows of a sparse (CSR) *expression* read at *positions* and summed into their groups, in one gather of its stored rows."""
+    store = cast(CSRStore, expression._store)
+    cells = store.grid.dataarray(np.arange(store.n_cells)).isel(positions)
+    dims = [str(d) for d in cells.dims]
+    k = dims.index(_ROW)
+    others = [*dims[:k], *dims[k + 1 :]]
+    framed = [*dims[:k], *grouped, *dims[k + 1 :]]
+    indexes = {d: onto[d] if d in grouped else store.grid.indexes[d] for d in framed}
+    grid = Grid(indexes, store.grid.select(others).aux)
+    shape = [len(onto[d]) for d in grouped]
+    at = np.ravel_multi_index(
+        [onto[d].get_indexer(labels) for d, labels in grouped.items()], shape
+    )
+    strides = {**grid.strides, _ROW: grid.strides[list(grouped)[-1]]}
+    steps = [
+        (at if d == _ROW else np.arange(cells.sizes[d])) * strides[d] for d in dims
+    ]
+    target = reduce(np.add.outer, steps).reshape(-1)
+    source = cells.to_numpy().reshape(-1)
+    taken = store.take(source, Grid({_ROW: pd.RangeIndex(len(source), name=_ROW)}))
+    summed = taken.aggregate(grid, target).fillna(0.0)
+    return LinearExpression._from_store(summed, expression.model)
 
 
 def _scattered(
@@ -187,11 +265,7 @@ def constant_term(model: Model, constant: xr.DataArray) -> LinearExpression:
     data = constant.to_dataset(name="const").assign(
         coeffs=(dims, slots), vars=(dims, labels)
     )
-    term = LinearExpression(data, model)
-    if not model.sparse:
-        return term
-    store = term._store.to_sparse()
-    return term if isinstance(store, str) else term._from_store(store, model)
+    return on_store(LinearExpression(data, model))
 
 
 def _coord_dims(array: Array) -> list[str]:
