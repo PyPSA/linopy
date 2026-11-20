@@ -13,7 +13,9 @@ order :meth:`~linopy.spec.context.Context.frame` gives its dims: the dims
 from __future__ import annotations
 
 import operator
+import time
 import warnings
+from collections.abc import Callable
 from dataclasses import replace
 from typing import cast
 
@@ -23,6 +25,7 @@ from mathspec import program as ms
 
 from linopy.constants import FACTOR_DIM, TERM_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression
+from linopy.spec import terms
 from linopy.spec.context import Context, Term, Value, as_expression, is_empty
 from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.evaluator import (
@@ -39,6 +42,13 @@ from linopy.variables import Variable
 
 _FLIPPED: dict[str, ms.ConstraintSense] = {"==": "==", "<=": ">=", ">=": "<="}
 _SENSE = {"minimize": "min", "maximize": "max"}
+TIMINGS: dict[str, float] = {}
+
+
+def _timed(key: str, run: Callable[[], None]) -> None:
+    start = time.perf_counter()
+    run()
+    TIMINGS[key] = TIMINGS.get(key, 0.0) + time.perf_counter() - start
 
 
 def build(ctx: Context, expressions: bool = True) -> None:
@@ -56,13 +66,14 @@ def build(ctx: Context, expressions: bool = True) -> None:
     refuses the missing ``refused`` rows its live rows read, a named
     expression's whether it is built or left to :func:`linopy.spec.evaluate`.
     """
-    _variables(ctx)
-    _check_assumptions(ctx)
-    _sos(ctx)
+    TIMINGS.clear()
+    _timed("variables", lambda: _variables(ctx))
+    _timed("assumptions", lambda: _check_assumptions(ctx))
+    _timed("sos", lambda: _sos(ctx))
     _constraints(ctx)
-    _objective(ctx)
+    _timed("objective", lambda: _objective(ctx))
     if expressions:
-        _expressions(ctx)
+        _timed("expressions", lambda: _expressions(ctx))
 
 
 def _check_assumptions(ctx: Context) -> None:
@@ -137,39 +148,50 @@ def _sos(ctx: Context) -> None:
 
 def _constraints(ctx: Context) -> None:
     for name, row in ctx.program.constraints.items():
-        if is_empty(row.dims, ctx) or not admits_a_row(row.where, ctx):
-            ctx.memo.skipped(row.lhs, row.rhs)
-            continue
-        rows = evaluate_where(row.where, ctx)
-        mask = as_linopy_mask(rows)
-        scoped = replace(ctx, rows=rows, subject=f"constraint '{name}'")
-        refuse_holes(scoped.subject, [row.lhs, row.rhs], ctx, rows)
-        lhs, rhs, sense = row.lhs, row.rhs, row.sense
-        if flipped(row):
-            lhs, rhs, sense = rhs, lhs, _FLIPPED[sense]
-        term, other = (
-            _linear(name, evaluate(side, scoped), rows) for side in (lhs, rhs)
+        _timed(f"constraint:{name}", lambda: _constraint(ctx, name, row))
+
+
+def _side(name: str, side: ms.Expression, ctx: Context, dims: tuple[str, ...]) -> Value:
+    if terms.enabled(name) and ms.carries_variable(side):
+        try:
+            return terms.linear(side, ctx, dims)
+        except terms.Unsupported:
+            pass
+    return _linear(name, evaluate(side, ctx), cast(xr.DataArray, ctx.rows))
+
+
+def _constraint(ctx: Context, name: str, row: ms.Constraint) -> None:
+    if is_empty(row.dims, ctx) or not admits_a_row(row.where, ctx):
+        ctx.memo.skipped(row.lhs, row.rhs)
+        return
+    rows = evaluate_where(row.where, ctx)
+    mask = as_linopy_mask(rows)
+    scoped = replace(ctx, rows=rows, subject=f"constraint '{name}'")
+    refuse_holes(scoped.subject, [row.lhs, row.rhs], ctx, rows)
+    lhs, rhs, sense = row.lhs, row.rhs, row.sense
+    if flipped(row):
+        lhs, rhs, sense = rhs, lhs, _FLIPPED[sense]
+    term, other = (_side(name, side, scoped, row.dims) for side in (lhs, rhs))
+    term = cast(Term, term)
+    if any(term.sizes[d] == 0 for d in term.coord_dims):
+        return
+    _check_live(name, row, term, other, rows, ctx)
+    sides = [term, other] if isinstance(other, Term) else [term]
+    if all(as_expression(side).is_constant for side in sides):
+        return
+    if isinstance(other, xr.DataArray):
+        const = constant_of(term)
+        refuse_made(
+            "comparison", (row.lhs, row.rhs), operator.sub, const, other, scoped
         )
-        term = cast(Term, term)
-        if any(term.sizes[d] == 0 for d in term.coord_dims):
-            continue
-        _check_live(name, row, term, other, rows, ctx)
-        sides = [term, other] if isinstance(other, Term) else [term]
-        if all(as_expression(side).is_constant for side in sides):
-            continue
-        if isinstance(other, xr.DataArray):
-            const = constant_of(term)
-            refuse_made(
-                "comparison", (row.lhs, row.rhs), operator.sub, const, other, scoped
-            )
-            term, other = carried(term, other)
-        ctx.model.add_constraints(
-            _framed(term, row.dims, ctx),
-            sense,
-            other,
-            name=ctx.rename(name),
-            mask=mask,
-        )
+        term, other = carried(term, other)
+    ctx.model.add_constraints(
+        _framed(term, row.dims, ctx),
+        sense,
+        other,
+        name=ctx.rename(name),
+        mask=mask,
+    )
 
 
 def _linear(name: str, side: Value, rows: xr.DataArray) -> Value:
@@ -263,7 +285,14 @@ def _objective(ctx: Context) -> None:
     if declared is None:
         return
     refuse_holes("the objective", [declared.expression], ctx)
-    expr = evaluate(declared.expression, ctx)
+    expr: Value | None = None
+    if terms.enabled("objective"):
+        try:
+            expr = terms.linear(declared.expression, ctx, ())
+        except terms.Unsupported:
+            expr = None
+    if expr is None:
+        expr = evaluate(declared.expression, ctx)
     if not isinstance(expr, Term):
         raise SpecDataError(
             "the objective carries no variable term once the data is attached, so there is nothing to optimize"
