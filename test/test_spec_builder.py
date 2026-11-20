@@ -572,6 +572,30 @@ def test_a_row_the_data_emptied_of_variables_is_refused() -> None:
         Model.from_spec(sized(0, "size <= relmax"), ENVELOPE_DATA)
 
 
+def test_a_row_of_zero_weights_keeps_its_terms_on_the_term_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The term path spread ``b`` onto the nonzero weights only, so row z lost its zero terms and was refused as emptied."""
+    u = pd.Index(["a", "b"], name="u")
+    g = pd.Index(["x", "z"], name="g")
+    spec = {
+        "dimensions": {"u": {"dtype": "str"}, "g": {"dtype": "str"}},
+        "variables": {"b": {"dims": ["u"], "bounds": {"lower": 0}}},
+        "parameters": {"w": {"dims": ["g", "u"]}},
+        "constraints": {
+            "cap": {"dims": ["g"], "expression": "sum(b * w, over=u) <= 4"}
+        },
+    }
+    data = {"u": u, "g": g, "w": xr.DataArray([[1.0, 2.0], [0.0, 0.0]], coords=[g, u])}
+    built = {}
+    for flag in ("0", "1"):
+        monkeypatch.setenv("LINOPY_SPEC_TERMS", flag)
+        monkeypatch.setenv("LINOPY_SPEC_TERMS_SCOPE", "*")
+        built[flag] = Model.from_spec(spec, data, sparse=True)
+    assert (built["1"].constraints["cap"].labels != -1).all()
+    assert_model_equal(built["0"], built["1"])
+
+
 def quotient(expression: str, where: str | None = None) -> dict[str, Any]:
     """A row over ``t`` reading the data ``a`` and ``b``, which :data:`ZERO_AT_0` holds at 0 on ``t=0``."""
     row: dict[str, Any] = {"dims": ["t"], "expression": expression}

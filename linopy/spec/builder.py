@@ -152,13 +152,34 @@ def _constraints(ctx: Context) -> None:
         _timed(f"constraint:{name}", lambda: _constraint(ctx, name, row))
 
 
-def _side(name: str, side: ms.Expression, ctx: Context, dims: tuple[str, ...]) -> Value:
+def _side(
+    name: str,
+    side: ms.Expression,
+    ctx: Context,
+    dims: tuple[str, ...],
+    checked: bool = False,
+) -> tuple[Value, bool]:
+    """
+    One side of a constraint, from the term path where it covers *side*, and
+    whether *checked* found a term on every row, which :func:`_check_live`
+    then passes.
+
+    The term path drops the zero terms the eager path keeps, so where
+    *checked* and a row holds no term, the eager path builds the side for
+    :func:`_check_live` to judge the row as it does there.
+    """
+    rows = cast(xr.DataArray, ctx.rows)
     if terms.enabled(name) and ms.carries_variable(side):
         try:
-            return terms.linear(side, ctx, dims)
+            made = terms.linear(side, ctx, dims)
+            if not checked:
+                return made, False
+            if not bool(_emptied(made, rows).any()):
+                return made, True
+            terms.FALLBACKS.append(f"constraint {name}: a row without terms")
         except terms.Unsupported:
             pass
-    return _linear(name, evaluate(side, ctx), cast(xr.DataArray, ctx.rows))
+    return _linear(name, evaluate(side, ctx), rows), False
 
 
 def _constraint(ctx: Context, name: str, row: ms.Constraint) -> None:
@@ -178,11 +199,13 @@ def _constraint(ctx: Context, name: str, row: ms.Constraint) -> None:
             _framed(moved, row.dims, ctx), sense, 0, name=ctx.rename(name), mask=mask
         )
         return
-    term, other = (_side(name, side, scoped, row.dims) for side in (lhs, rhs))
+    term, live = _side(name, lhs, scoped, row.dims, checked=True)
+    other, _ = _side(name, rhs, scoped, row.dims)
     term = cast(Term, term)
     if any(term.sizes[d] == 0 for d in term.coord_dims):
         return
-    _check_live(name, row, term, other, rows, ctx)
+    if not live:
+        _check_live(name, row, term, other, rows, ctx)
     sides = [term, other] if isinstance(other, Term) else [term]
     if all(as_expression(side).is_constant for side in sides):
         return
@@ -280,9 +303,7 @@ def _check_live(
     """
     if isinstance(term, Variable):
         return
-    store = cast(LinearExpression, term)._store
-    alive = store.dataarray(store.has_terms() | np.isnan(store.const), "alive")
-    dead = rows & ~alive
+    dead = _emptied(cast(LinearExpression, term), rows)
     if not bool(dead.any()):
         return
     said = (
@@ -312,6 +333,13 @@ def _check_live(
         f"  Mask them out with a where on the constraint, if the row should not exist there.\n"
         f"{supply}"
     )
+
+
+def _emptied(term: LinearExpression, rows: xr.DataArray) -> xr.DataArray:
+    """The rows *rows* keeps where *term* is present and holds no variable term."""
+    store = term._store
+    alive = store.dataarray(store.has_terms() | np.isnan(store.const), "alive")
+    return rows & ~alive
 
 
 def _binds(other: Value, const: xr.DataArray, dead: xr.DataArray) -> bool:
