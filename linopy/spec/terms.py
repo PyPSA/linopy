@@ -22,6 +22,7 @@ import math
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -186,7 +187,6 @@ class Evaluator:
     def __init__(self, ctx: Context) -> None:
         self.ctx = ctx
         self.carry: dict[int, bool] = {}
-        self.vars: dict[str, Table] = {}
 
     def sizes(self, dims: Sequence[str]) -> dict[str, int]:
         return {d: len(self.ctx.coords[d]) for d in dims}
@@ -217,8 +217,7 @@ class Evaluator:
 
     def _own(self, node: ms.Expression, ctx: Context) -> Table:
         if isinstance(node, ms.ExpressionReference):
-            ctx.memo.uses.pop(node.body, None)
-            return self.table(node.body, ctx)
+            return self.named(node.body, ctx)
         if isinstance(node, ms.VariableReference):
             return self.variable(node.name)
         if _sums_nothing(node, ctx):
@@ -237,9 +236,27 @@ class Evaluator:
             return self.cases(node, ctx)
         raise Unsupported(type(node).__name__)
 
+    def named(self, body: ms.Expression, ctx: Context) -> Table:
+        """The table of a named expression's *body*, kept for the build unless a refusal was masked making it, as the eager path keeps its term."""
+        memo = ctx.memo
+        key = ("terms.table", body)
+        if key in memo.values:
+            if body not in memo.inner:
+                memo.inner[body] = tuple(ms.walk(body))
+            for inner in memo.inner[body]:
+                memo.used(inner)
+            return cast(Table, memo.values[key])
+        masked = memo.masked
+        memo.uses.pop(body, None)
+        made = self.table(body, ctx)
+        if memo.masked == masked:
+            memo.values[key] = made
+        return made
+
     def variable(self, name: str) -> Table:
-        if name in self.vars:
-            return self.vars[name]
+        return self.ctx.memo.kept(("terms.variable", name), lambda: self._variable(name))
+
+    def _variable(self, name: str) -> Table:
         ctx = self.ctx
         labels = ctx.model.variables[ctx.rename(name)].labels
         dims = tuple(str(d) for d in labels.dims)
@@ -257,9 +274,7 @@ class Evaluator:
         if not everywhere and missing != 0:
             fill = np.nan if missing == "absent" else float(missing)
             const = labels.copy(data=np.where(live, 0.0, fill).reshape(labels.shape))
-        table = Table(dims, (block,), const)
-        self.vars[name] = table
-        return table
+        return Table(dims, (block,), const)
 
     def scaled(self, table: Table, factor: float) -> Table:
         const = None if table.const is None else table.const * factor
