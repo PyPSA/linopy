@@ -164,6 +164,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - With `add_objective(..., scaling=...)`, the solve log reports objective and dual bound in model units. ([\#1077](https://github.com/PyPSA/linopy/issues/1077))
 - GLPK: an infeasible MIP, or an infeasible LP solved without presolve, is reported as `infeasible` instead of `ok`. ([\#1183](https://github.com/PyPSA/linopy/pull/1183))
 - CPLEX: "optimal with unscaled infeasibilities" is reported as `imprecise` and its solution is imported. ([\#368](https://github.com/PyPSA/linopy/issues/368))
+- Gurobi: a solve that stops at a limit without an incumbent solution no longer raises `GurobiError` when reading variable values. ([\#1134](https://github.com/PyPSA/linopy/issues/1134))
 - HiGHS: a solve that stops at a limit without a solution no longer returns all-zero values, and a MIP no longer returns all-zero duals. `log_fn` and solver options also apply to a re-solve of a direct-API model. ([\#1130](https://github.com/PyPSA/linopy/issues/1130))
 - The `solvers` extra excludes highspy 1.16.0. Its MPS writer drops columns that appear only in the quadratic objective, so Gurobi and COPT reject the file. ([\#1149](https://github.com/PyPSA/linopy/pull/1149))
 - Mosek: `log_fn` no longer disables the console log. ([\#948](https://github.com/PyPSA/linopy/issues/948))
