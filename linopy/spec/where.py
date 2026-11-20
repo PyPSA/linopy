@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterator
 from typing import assert_never, cast
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 from mathspec import program as ms
 
@@ -47,7 +48,7 @@ def admits_a_row(mask: ms.Mask | None, ctx: Context) -> bool:
         held = _node(node, ctx)
         if not held.values.any():
             return False
-        kept = held if kept is None else kept & held
+        kept = held if kept is None else logical(operator.and_, kept, held)
         if not kept.values.any():
             return False
     return True
@@ -104,7 +105,7 @@ def _condition(node: ms.Condition, ctx: Context) -> xr.DataArray:
         return ctx.model.variables[ctx.rename(node.name)].mask
     if isinstance(node, ms.ParameterComparison):
         values = ctx.parameter(node.name).values
-        return _compared(values, node.op, node.value) & values.notnull()
+        return logical(operator.and_, _compared(values, node.op, node.value), values.notnull())
     if isinstance(node, ms.ExpressionComparison):
         return _both(node.op, _side(node.left, ctx), _side(node.right, ctx))
     if isinstance(node, ms.CountComparison):
@@ -126,7 +127,7 @@ def _condition(node: ms.Condition, ctx: Context) -> xr.DataArray:
         return _position(node, ctx)
     if isinstance(node, ms.RelationComparison):
         arr = ctx.relations[node.name].column(node.column)
-        return _compared(arr, node.op, node.value) & arr.notnull()
+        return logical(operator.and_, _compared(arr, node.op, node.value), arr.notnull())
     if isinstance(node, ms.RelationPairComparison):
         left = ctx.relations[node.name].column(node.column)
         return _both(node.op, left, ctx.relations[node.other].column(node.other_column))
@@ -135,10 +136,42 @@ def _condition(node: ms.Condition, ctx: Context) -> xr.DataArray:
     if isinstance(node, ms.Not):
         return ~_node(node.operand, ctx)
     if isinstance(node, ms.And):
-        return _node(node.left, ctx) & _node(node.right, ctx)
+        return logical(operator.and_, _node(node.left, ctx), _node(node.right, ctx))
     if isinstance(node, ms.Or):
-        return _node(node.left, ctx) | _node(node.right, ctx)
+        return logical(operator.or_, _node(node.left, ctx), _node(node.right, ctx))
     assert_never(node)
+
+
+def logical(
+    op: Callable[[np.ndarray, np.ndarray], np.ndarray],
+    left: xr.DataArray,
+    right: xr.DataArray,
+) -> xr.DataArray:
+    """*op* of two masks as xarray gives it, computed in numpy where both lie on the same indexes without other coordinates."""
+    if not (_bare(left) and _bare(right)) or any(
+        not _same(left.indexes[d], right.indexes[d]) for d in left.dims if d in right.dims
+    ):
+        return op(left, right)
+    dims = (*left.dims, *(d for d in right.dims if d not in left.dims))
+    order = [right.dims.index(d) for d in dims if d in right.dims]
+    shape = [right.sizes[d] if d in right.dims else 1 for d in dims]
+    a = left.values.reshape(left.shape + (1,) * (len(dims) - left.ndim))
+    values = op(a, right.values.transpose(order).reshape(shape))
+    name = left.name if left.name == right.name else None
+    like = left if len(dims) == left.ndim else right if len(dims) == right.ndim else None
+    if like is None:
+        indexes = {**right.indexes, **left.indexes}
+        coords = {d: indexes[d] for d in dims}
+        return xr.DataArray(values, coords=coords, dims=dims, name=name)
+    return like._replace(variable=xr.Variable(dims, values), name=name)
+
+
+def _bare(arr: xr.DataArray) -> bool:
+    return not arr.attrs and set(arr.coords) == set(arr.dims) == set(arr.indexes)
+
+
+def _same(a: pd.Index, b: pd.Index) -> bool:
+    return a is b or a.equals(b)
 
 
 def looked_up(arr: Array, columns: ms.JoinColumns, ctx: Context) -> Array:
@@ -181,7 +214,7 @@ def _defined(name: str, ctx: Context) -> xr.DataArray:
     if dtype == "bool":
         return _bool(filled)
     if dtype == "float":
-        return present & np.isfinite(filled)
+        return logical(operator.and_, present, np.isfinite(filled))
     return present
 
 
