@@ -1187,3 +1187,25 @@ def test_a_sum_of_a_term_times_a_mostly_absent_weight_reads_present_cells(
             np.array(want).reshape([len(c) for c in coords.values()]), dims=dims
         ),
     )
+
+
+@pytest.mark.parametrize(("where", "terms"), [("t > 2", 3), ("t > 9", 0)])
+def test_a_sum_of_a_mostly_absent_term_times_numbers_reads_present_cells(
+    backend: Model, where: str, terms: int
+) -> None:
+    spec = {
+        "dimensions": {"t": {"dtype": "int"}, "s": {"dtype": "str"}},
+        "variables": {
+            "x": {"dims": ["t", "s"], "where": where, "bounds": {"lower": 0}}
+        },
+        "objective": {"sense": "minimize", "expression": "sum(x)"},
+        "expressions": {"total": "sum(x * 2 * 3, over=s)"},
+    }
+    data = {"t": TT, "s": pd.Index(["a", "b", "c"], name="s")}
+    m = Model.from_spec(spec, data, sparse=backend.sparse)
+    total = m.expressions["total"]
+    assert isinstance(total, LinearExpression)
+    assert list(total.coord_dims) == ["t"]
+    live = total.vars != -1
+    assert int(live.sum()) == terms
+    assert float(total.coeffs.where(live).sum()) == 6.0 * terms
