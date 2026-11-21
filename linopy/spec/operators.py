@@ -35,16 +35,20 @@ def binary(
     left: xr.DataArray,
     right: xr.DataArray,
 ) -> xr.DataArray:
-    """*op* of two arrays as xarray gives it, computed in numpy where both lie on the same indexes without other coordinates or attributes."""
+    """
+    *op* of two arrays as xarray gives it, computed in numpy where both lie on
+    the same indexes and hold no other coordinate or attribute: aligning costs
+    more than the operation on the arrays a build combines.
+    """
     if not (_bare(left) and _bare(right)) or any(
-        not _same(left.indexes[d], right.indexes[d])
+        not left.indexes[d].equals(right.indexes[d])
         for d in left.dims
         if d in right.dims
     ):
         return op(left, right)
     dims = (*left.dims, *(d for d in right.dims if d not in left.dims))
     order = [right.dims.index(d) for d in dims if d in right.dims]
-    shape = [right.sizes[d] if d in right.dims else 1 for d in dims]
+    shape = [right.sizes.get(d, 1) for d in dims]
     a = left.values.reshape(left.shape + (1,) * (len(dims) - left.ndim))
     with np.errstate(all="ignore"):
         values = op(a, right.values.transpose(order).reshape(shape))
@@ -61,10 +65,6 @@ def binary(
 
 def _bare(arr: xr.DataArray) -> bool:
     return not arr.attrs and set(arr.coords) == set(arr.dims) == set(arr.indexes)
-
-
-def _same(a: pd.Index, b: pd.Index) -> bool:
-    return a is b or a.equals(b)
 
 
 def _filled(expression: Array, fill: float) -> Array:
