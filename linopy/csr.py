@@ -201,6 +201,36 @@ class Grid:
         }
         return Grid({d: self.indexes[d] for d in dims}, aux)
 
+    def isel(
+        self, indexers: Mapping[Any, int | slice], drop: bool = False
+    ) -> tuple[Grid, np.ndarray]:
+        """
+        The grid at the positions ``indexers`` picks, as ``Dataset.isel``
+        gives it, and the flat cell of this grid each of its cells comes from.
+        """
+        at = tuple(indexers.get(d, slice(None)) for d in self.dims)
+        rows = np.arange(self.size).reshape(self.shape)[at].reshape(-1)
+        picked = {d: i for d, i in indexers.items() if not isinstance(i, slice)}
+        indexes = {
+            d: index[position]
+            for (d, index), position in zip(self.indexes.items(), at)
+            if d not in picked
+        }
+        aux: AuxCoords = {}
+        if not drop:
+            aux = {
+                d: ((), np.asarray(self.indexes[d].to_numpy()[i]))
+                for d, i in picked.items()
+            }
+        for name, (d, values) in self.aux.items():
+            if not isinstance(d, str) or d not in indexers:
+                aux[name] = (d, values)
+            elif d not in picked:
+                aux[name] = (d, values[indexers[d]])
+            elif not drop:
+                aux[name] = ((), np.asarray(values[indexers[d]]))
+        return Grid(indexes, aux), rows
+
     def with_indexes(self, indexers: Mapping[Any, Any]) -> Grid:
         """
         Replace the labels of the named dimensions; the rest, and the
@@ -489,7 +519,9 @@ class CSRStore(Store):
             else:
                 source = source[order]
         else:
-            bounds = np.searchsorted(rows, np.arange(grid.size + 1))
+            bounds = indptr_from_counts(
+                np.bincount(rows, minlength=grid.size), np.int64
+            )
         dtype = index_dtype(source.nnz, shape, self.model)
         indptr = source.indptr[bounds].astype(dtype, copy=False)
         indices = source.indices.astype(dtype, copy=False)
@@ -594,6 +626,11 @@ class CSRStore(Store):
         return self.csr @ np.nan_to_num(sol) + self.const
 
     def canonical(self) -> CSRStore:
+        """
+        See :meth:`Store.canonical`; returns this store if it is canonical.
+        A store remembers being canonical, and so does one :meth:`with_grid`
+        or :meth:`prune` derives from it; any other store checks again.
+        """
         if self._canonical:
             return self
         csr = canonical(self.csr)
@@ -660,7 +697,7 @@ class CSRStore(Store):
     def prune(self, tol: float = 0.0) -> CSRStore:
         """
         Drop the coefficients of at most ``tol`` in magnitude; cell activeness
-        stays with ``const``. Returns this store when none is that small.
+        stays with ``const``. Returns this store if none is that small.
         """
         keep = ~(np.abs(self.csr.data) <= tol)
         if keep.all():
@@ -763,8 +800,8 @@ class CSRStore(Store):
         Gather rows into the cells of ``grid``, cell ``i`` taking row
         ``rows[i]`` with its terms, explicit zeros included, and its constant;
         ``-1`` leaves the cell absent without terms. Auxiliary coordinates
-        are ``grid``'s. Returns this store when every row stays in place on
-        an equal grid.
+        are ``grid``'s. Where every row stays in place, only the grid
+        changes, and an equal grid returns this store.
         """
         n = self.n_cells
         if rows.shape == (n,) and np.array_equal(rows, np.arange(n)):
@@ -1064,18 +1101,11 @@ def coo_to_csr(
     """
     dtype = index_dtype(len(data), shape, model)
     indices = cols.astype(dtype, copy=False)
-    one_each = len(rows) == shape[0] and (rows[:1] == 0).all()
-    if one_each and (rows[1:] - rows[:-1] == 1).all():
-        indptr = np.arange(shape[0] + 1, dtype=dtype)
-    elif (rows[1:] < rows[:-1]).any():
-        coo = scipy.sparse.coo_array((data, (rows, indices)), shape=shape)
-        coo.has_canonical_format = True
-        by_row = coo.tocsr()
-        data, indices, indptr = by_row.data, by_row.indices, by_row.indptr
-        indices = indices.astype(dtype, copy=False)
+    if (rows[1:] < rows[:-1]).any():
+        order, indptr = _grouped(rows, shape[0])
+        data, indices = data[order], indices[order]
     else:
-        indptr = np.zeros(shape[0] + 1, dtype=dtype)
-        np.cumsum(np.bincount(rows, minlength=shape[0]), out=indptr[1:])
+        indptr = indptr_from_counts(np.bincount(rows, minlength=shape[0]), dtype)
     csr_arrays = (data, indices, indptr.astype(dtype, copy=False))
     return scipy.sparse.csr_array(csr_arrays, shape=shape)
 
