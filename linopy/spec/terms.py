@@ -12,10 +12,10 @@ store once, when its declaration is added to the model.
 
 :class:`Unsupported` names what a table does not hold, and the declaration
 holding it is built by :func:`linopy.spec.evaluator.evaluate` instead: a
-dense model, a window sum or a power of a term, a product of two terms the
-data leaves standing, a division by a term or by zero, infinite data beside
-a term, a lookup of a term through an empty relation, and a variable, data
-or a relation row off the master coordinates.
+window sum or a power of a term, a product of two terms the data leaves
+standing, a division by a term or by zero, infinite data beside a term, a
+lookup of a term through an empty relation, and a variable, data or a
+relation row off the master coordinates.
 
 The switch is the environment variable ``LINOPY_SPEC_TERMS=1``; the
 declarations it covers are named in ``LINOPY_SPEC_TERMS_SCOPE``.
@@ -53,7 +53,6 @@ from linopy.spec.where import looked_up
 
 DEFAULT_SCOPE = "Bus_nodal_balance,objective"
 DENSE_KEYS = 50_000_000
-FALLBACKS: list[str] = []
 
 
 def enabled(name: str) -> bool:
@@ -268,11 +267,9 @@ def _pairs(
 
 
 class Evaluator:
-    """The term tables of the nodes of one declaration of a sparse model."""
+    """The term tables of the nodes of one declaration."""
 
     def __init__(self, ctx: Context) -> None:
-        if not ctx.model.sparse:
-            raise Unsupported("a dense model")
         self.ctx = ctx
         self.carry: dict[int, bool] = {}
 
