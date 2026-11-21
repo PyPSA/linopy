@@ -270,6 +270,7 @@ class CSRStore(Store):
     _positional_cache: _PositionalCache | None = field(
         default=None, init=False, repr=False, compare=False
     )
+    _canonical: bool = field(default=False, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         csr = self.csr
@@ -593,7 +594,12 @@ class CSRStore(Store):
         return self.csr @ np.nan_to_num(sol) + self.const
 
     def canonical(self) -> CSRStore:
-        return replace(self, csr=canonical(self.csr))
+        if self._canonical:
+            return self
+        csr = canonical(self.csr)
+        store = self if csr is self.csr else replace(self, csr=csr)
+        object.__setattr__(store, "_canonical", True)
+        return store
 
     def nnz(self, active_rows: np.ndarray) -> int:
         return int(np.diff(self.csr.indptr)[active_rows].sum())
@@ -639,7 +645,9 @@ class CSRStore(Store):
         return positional
 
     def with_grid(self, grid: Grid) -> CSRStore:
-        return replace(self, grid=grid)
+        store = replace(self, grid=grid)
+        object.__setattr__(store, "_canonical", self._canonical)
+        return store
 
     def live_terms(self) -> np.ndarray:
         """
@@ -652,12 +660,15 @@ class CSRStore(Store):
     def prune(self, tol: float = 0.0) -> CSRStore:
         """
         Drop the coefficients of at most ``tol`` in magnitude; cell activeness
-        stays with ``const``.
+        stays with ``const``. Returns this store when none is that small.
         """
-        csr = self.csr.copy()
-        csr.data[np.abs(csr.data) <= tol] = 0
-        csr.eliminate_zeros()
-        return replace(self, csr=csr)
+        keep = ~(np.abs(self.csr.data) <= tol)
+        if keep.all():
+            return self
+        arrays = keep_entries(self.csr.data, self.csr.indices, self.csr.indptr, keep)
+        store = replace(self, csr=scipy.sparse.csr_array(arrays, shape=self.csr.shape))
+        object.__setattr__(store, "_canonical", self._canonical)
+        return store
 
     def scale(
         self,
@@ -756,12 +767,8 @@ class CSRStore(Store):
         an equal grid.
         """
         n = self.n_cells
-        if (
-            rows.shape == (n,)
-            and grid == self.grid
-            and np.array_equal(rows, np.arange(n))
-        ):
-            return self
+        if rows.shape == (n,) and np.array_equal(rows, np.arange(n)):
+            return self if grid == self.grid else self.with_grid(grid)
         present = rows >= 0
         const = np.where(present, self.const[rows], np.nan)
         csr = self.csr[np.where(present, rows, 0)]
@@ -835,7 +842,7 @@ class CSRStore(Store):
 
     def rename(self, names: Mapping[str, str]) -> CSRStore:
         """Relabel grid dims; the CSR row layout is unchanged."""
-        return replace(self, grid=self.grid.rename(names))
+        return self.with_grid(self.grid.rename(names))
 
     def same_grid(self, other: CSRStore) -> bool:
         """Whether both live on the same cells, auxiliary coordinates aside."""
@@ -1057,11 +1064,18 @@ def coo_to_csr(
     """
     dtype = index_dtype(len(data), shape, model)
     indices = cols.astype(dtype, copy=False)
-    if (rows[1:] < rows[:-1]).any():
-        order, indptr = _grouped(rows, shape[0])
-        data, indices = data[order], indices[order]
+    one_each = len(rows) == shape[0] and (rows[:1] == 0).all()
+    if one_each and (rows[1:] - rows[:-1] == 1).all():
+        indptr = np.arange(shape[0] + 1, dtype=dtype)
+    elif (rows[1:] < rows[:-1]).any():
+        coo = scipy.sparse.coo_array((data, (rows, indices)), shape=shape)
+        coo.has_canonical_format = True
+        by_row = coo.tocsr()
+        data, indices, indptr = by_row.data, by_row.indices, by_row.indptr
+        indices = indices.astype(dtype, copy=False)
     else:
-        indptr = np.searchsorted(rows, np.arange(shape[0] + 1))
+        indptr = np.zeros(shape[0] + 1, dtype=dtype)
+        np.cumsum(np.bincount(rows, minlength=shape[0]), out=indptr[1:])
     csr_arrays = (data, indices, indptr.astype(dtype, copy=False))
     return scipy.sparse.csr_array(csr_arrays, shape=shape)
 

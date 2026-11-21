@@ -157,6 +157,11 @@ CASES: dict[str, Case] = {
     "sel": Case(grid, lambda e: e.sel(a=[0, 2]), KEPT),
     "isel": Case(grid, lambda e: e.isel(a=slice(0, 2)), KEPT),
     "isel-scalar": Case(grid, lambda e: e.isel(b=0), KEPT),
+    "isel-scalar-drop": Case(grid, lambda e: e.isel(b=-1, drop=True), KEPT),
+    "isel-scalar-drop-tagged": Case(grid, lambda e: e.isel(a=1, drop=True), KEPT),
+    "isel-size-one-drop": Case(
+        grid, lambda e: e.isel(b=[0]).isel(b=0, a=2, drop=True), KEPT
+    ),
     "getitem": Case(grid, lambda e: e[0:2], KEPT),
     "roll": Case(grid, lambda e: e.roll(a=1), KEPT),
     "roll-coords": Case(grid, lambda e: e.roll(a=1, roll_coords=True), KEPT),

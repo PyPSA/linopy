@@ -13,7 +13,9 @@ order :meth:`~linopy.spec.context.Context.frame` gives its dims: the dims
 from __future__ import annotations
 
 import operator
+import time
 import warnings
+from collections.abc import Callable
 from dataclasses import replace
 from typing import cast
 
@@ -23,6 +25,7 @@ from mathspec import program as ms
 
 from linopy.constants import FACTOR_DIM, TERM_DIM
 from linopy.expressions import LinearExpression, QuadraticExpression
+from linopy.spec import terms
 from linopy.spec.context import Context, Term, Value, as_expression, is_empty
 from linopy.spec.errors import SpecDataError, first_coordinates
 from linopy.spec.evaluator import (
@@ -39,6 +42,13 @@ from linopy.variables import Variable
 
 _FLIPPED: dict[str, ms.ConstraintSense] = {"==": "==", "<=": ">=", ">=": "<="}
 _SENSE = {"minimize": "min", "maximize": "max"}
+TIMINGS: dict[str, float] = {}
+
+
+def _timed(key: str, run: Callable[[], None]) -> None:
+    start = time.perf_counter()
+    run()
+    TIMINGS[key] = TIMINGS.get(key, 0.0) + time.perf_counter() - start
 
 
 def build(ctx: Context, expressions: bool = True) -> None:
@@ -48,21 +58,22 @@ def build(ctx: Context, expressions: bool = True) -> None:
     Variables, special-ordered sets, constraints, the objective and, with
     *expressions*, the named expressions holding a variable term, in that
     order. A declaration without a row costs next to nothing: a variable
-    over a dimension without a coordinate is added with its bounds unread,
-    and a constraint over one, or one whose ``where`` admits no row, is
-    skipped unread, as is an assumption admitted nowhere or over such a
+    over a dimension without a coordinate, or one whose ``where`` admits no
+    row, is added masked with its bounds unread, and a constraint over one,
+    or one whose ``where`` admits no row, is skipped unread, as is an assumption admitted nowhere or over such a
     dimension. The program's assumptions are checked once the variables
     exist, so a condition may read where one is defined. Each declaration
     refuses the missing ``refused`` rows its live rows read, a named
     expression's whether it is built or left to :func:`linopy.spec.evaluate`.
     """
-    _variables(ctx)
-    _check_assumptions(ctx)
-    _sos(ctx)
+    TIMINGS.clear()
+    _timed("variables", lambda: _variables(ctx))
+    _timed("assumptions", lambda: _check_assumptions(ctx))
+    _timed("sos", lambda: _sos(ctx))
     _constraints(ctx)
-    _objective(ctx)
+    _timed("objective", lambda: _objective(ctx))
     if expressions:
-        _expressions(ctx)
+        _timed("expressions", lambda: _expressions(ctx))
 
 
 def _check_assumptions(ctx: Context) -> None:
@@ -93,9 +104,10 @@ def _variables(ctx: Context) -> None:
         bounds = [b for b in (declared.lower, declared.upper) if b is not None]
         lower: float | xr.DataArray = -np.inf
         upper: float | xr.DataArray = np.inf
-        mask = None
-        if is_empty(declared.dims, ctx):
+        mask: xr.DataArray | bool | None = None
+        if is_empty(declared.dims, ctx) or not admits_a_row(declared.where, ctx):
             ctx.memo.skipped(*bounds)
+            mask = False
         else:
             rows = evaluate_where(declared.where, ctx)
             for bound in bounds:
@@ -137,39 +149,112 @@ def _sos(ctx: Context) -> None:
 
 def _constraints(ctx: Context) -> None:
     for name, row in ctx.program.constraints.items():
-        if is_empty(row.dims, ctx) or not admits_a_row(row.where, ctx):
-            ctx.memo.skipped(row.lhs, row.rhs)
-            continue
-        rows = evaluate_where(row.where, ctx)
-        mask = as_linopy_mask(rows)
-        scoped = replace(ctx, rows=rows, subject=f"constraint '{name}'")
-        refuse_holes(scoped.subject, [row.lhs, row.rhs], ctx, rows)
-        lhs, rhs, sense = row.lhs, row.rhs, row.sense
-        if flipped(row):
-            lhs, rhs, sense = rhs, lhs, _FLIPPED[sense]
-        term, other = (
-            _linear(name, evaluate(side, scoped), rows) for side in (lhs, rhs)
-        )
-        term = cast(Term, term)
-        if any(term.sizes[d] == 0 for d in term.coord_dims):
-            continue
-        _check_live(name, row, term, other, rows, ctx)
-        sides = [term, other] if isinstance(other, Term) else [term]
-        if all(as_expression(side).is_constant for side in sides):
-            continue
-        if isinstance(other, xr.DataArray):
-            const = constant_of(term)
-            refuse_made(
-                "comparison", (row.lhs, row.rhs), operator.sub, const, other, scoped
-            )
-            term, other = carried(term, other)
+        _timed(f"constraint:{name}", lambda: _constraint(ctx, name, row))
+
+
+def _side(
+    name: str,
+    side: ms.Expression,
+    ctx: Context,
+    dims: tuple[str, ...],
+    checked: bool = False,
+) -> tuple[Value, bool]:
+    """
+    One side of a constraint, from the term path where it covers *side*, and
+    whether *checked* found a term on every row, which :func:`_check_live`
+    then passes.
+
+    The term path drops the zero terms the eager path keeps, so where
+    *checked* and a row holds no term, the eager path builds the side for
+    :func:`_check_live` to judge the row as it does there.
+    """
+    rows = cast(xr.DataArray, ctx.rows)
+    if terms.enabled(name) and ms.carries_variable(side):
+        try:
+            made = terms.linear(side, ctx, dims)
+            if not checked:
+                return made, False
+            if not bool(_emptied(made, rows).any()):
+                return made, True
+            terms.FALLBACKS.append(f"constraint {name}: a row without terms")
+        except terms.Unsupported:
+            pass
+    return _linear(name, evaluate(side, ctx), rows), False
+
+
+def _constraint(ctx: Context, name: str, row: ms.Constraint) -> None:
+    if is_empty(row.dims, ctx) or not admits_a_row(row.where, ctx):
+        ctx.memo.skipped(row.lhs, row.rhs)
+        return
+    rows = evaluate_where(row.where, ctx)
+    mask = as_linopy_mask(rows)
+    scoped = replace(ctx, rows=rows, subject=f"constraint '{name}'")
+    refuse_holes(scoped.subject, [row.lhs, row.rhs], ctx, rows)
+    lhs, rhs, sense = row.lhs, row.rhs, row.sense
+    if flipped(row):
+        lhs, rhs, sense = rhs, lhs, _FLIPPED[sense]
+    moved = _difference(name, lhs, rhs, scoped, row.dims, rows)
+    if moved is not None:
         ctx.model.add_constraints(
-            _framed(term, row.dims, ctx),
-            sense,
-            other,
-            name=ctx.rename(name),
-            mask=mask,
+            _framed(moved, row.dims, ctx), sense, 0, name=ctx.rename(name), mask=mask
         )
+        return
+    term, live = _side(name, lhs, scoped, row.dims, checked=True)
+    other, _ = _side(name, rhs, scoped, row.dims)
+    term = cast(Term, term)
+    if any(term.sizes[d] == 0 for d in term.coord_dims):
+        return
+    if not live:
+        _check_live(name, row, term, other, rows, ctx)
+    sides = [term, other] if isinstance(other, Term) else [term]
+    if all(as_expression(side).is_constant for side in sides):
+        return
+    if isinstance(other, xr.DataArray):
+        const = constant_of(term)
+        refuse_made(
+            "comparison", (row.lhs, row.rhs), operator.sub, const, other, scoped
+        )
+        term, other = carried(term, other)
+    ctx.model.add_constraints(
+        _framed(term, row.dims, ctx),
+        sense,
+        other,
+        name=ctx.rename(name),
+        mask=mask,
+    )
+
+
+def _difference(
+    name: str,
+    lhs: ms.Expression,
+    rhs: ms.Expression,
+    ctx: Context,
+    dims: tuple[str, ...],
+    rows: xr.DataArray,
+) -> LinearExpression | None:
+    """
+    *lhs* minus *rhs* as one term table, where *lhs* is a bare variable and both
+    sides carry one: what linopy's subtraction of the two sides gives, for
+    which :func:`_check_live` passes and neither side is constant. ``None``
+    where that is not known beforehand, for the two sides to be built apart.
+    """
+    if not (
+        terms.enabled(name)
+        and isinstance(lhs, ms.VariableReference)
+        and ms.carries_variable(rhs)
+    ):
+        return None
+    labels = ctx.model.variables[ctx.rename(lhs.name)].labels
+    vacant = labels == -1
+    if bool(vacant.all()):
+        return None
+    valued = ctx.program.variables[lhs.name].missing != "absent"
+    if valued and bool((vacant & rows).any()):
+        return None
+    try:
+        return terms.difference(lhs, rhs, ctx, dims)
+    except terms.Unsupported:
+        return None
 
 
 def _linear(name: str, side: Value, rows: xr.DataArray) -> Value:
@@ -218,9 +303,7 @@ def _check_live(
     """
     if isinstance(term, Variable):
         return
-    store = cast(LinearExpression, term)._store
-    alive = store.dataarray(store.has_terms() | np.isnan(store.const), "alive")
-    dead = rows & ~alive
+    dead = _emptied(cast(LinearExpression, term), rows)
     if not bool(dead.any()):
         return
     said = (
@@ -252,6 +335,13 @@ def _check_live(
     )
 
 
+def _emptied(term: LinearExpression, rows: xr.DataArray) -> xr.DataArray:
+    """The rows *rows* keeps where *term* is present and holds no variable term."""
+    store = term._store
+    alive = store.dataarray(store.has_terms() | np.isnan(store.const), "alive")
+    return rows & ~alive
+
+
 def _binds(other: Value, const: xr.DataArray, dead: xr.DataArray) -> bool:
     """Whether the side without the variable term differs from the constant *const* left on a row *dead* names."""
     differs = xr.DataArray(other) != const
@@ -263,7 +353,14 @@ def _objective(ctx: Context) -> None:
     if declared is None:
         return
     refuse_holes("the objective", [declared.expression], ctx)
-    expr = evaluate(declared.expression, ctx)
+    expr: Value | None = None
+    if terms.enabled("objective"):
+        try:
+            expr = terms.linear(declared.expression, ctx, ())
+        except terms.Unsupported:
+            expr = None
+    if expr is None:
+        expr = evaluate(declared.expression, ctx)
     if not isinstance(expr, Term):
         raise SpecDataError(
             "the objective carries no variable term once the data is attached, so there is nothing to optimize"

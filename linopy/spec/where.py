@@ -47,7 +47,7 @@ def admits_a_row(mask: ms.Mask | None, ctx: Context) -> bool:
         held = _node(node, ctx)
         if not held.values.any():
             return False
-        kept = held if kept is None else kept & held
+        kept = held if kept is None else operators.binary(operator.and_, kept, held)
         if not kept.values.any():
             return False
     return True
@@ -104,7 +104,9 @@ def _condition(node: ms.Condition, ctx: Context) -> xr.DataArray:
         return ctx.model.variables[ctx.rename(node.name)].mask
     if isinstance(node, ms.ParameterComparison):
         values = ctx.parameter(node.name).values
-        return _compared(values, node.op, node.value) & values.notnull()
+        return operators.binary(
+            operator.and_, _compared(values, node.op, node.value), values.notnull()
+        )
     if isinstance(node, ms.ExpressionComparison):
         return _both(node.op, _side(node.left, ctx), _side(node.right, ctx))
     if isinstance(node, ms.CountComparison):
@@ -126,7 +128,9 @@ def _condition(node: ms.Condition, ctx: Context) -> xr.DataArray:
         return _position(node, ctx)
     if isinstance(node, ms.RelationComparison):
         arr = ctx.relations[node.name].column(node.column)
-        return _compared(arr, node.op, node.value) & arr.notnull()
+        return operators.binary(
+            operator.and_, _compared(arr, node.op, node.value), arr.notnull()
+        )
     if isinstance(node, ms.RelationPairComparison):
         left = ctx.relations[node.name].column(node.column)
         return _both(node.op, left, ctx.relations[node.other].column(node.other_column))
@@ -135,9 +139,13 @@ def _condition(node: ms.Condition, ctx: Context) -> xr.DataArray:
     if isinstance(node, ms.Not):
         return ~_node(node.operand, ctx)
     if isinstance(node, ms.And):
-        return _node(node.left, ctx) & _node(node.right, ctx)
+        return operators.binary(
+            operator.and_, _node(node.left, ctx), _node(node.right, ctx)
+        )
     if isinstance(node, ms.Or):
-        return _node(node.left, ctx) | _node(node.right, ctx)
+        return operators.binary(
+            operator.or_, _node(node.left, ctx), _node(node.right, ctx)
+        )
     assert_never(node)
 
 
@@ -181,7 +189,7 @@ def _defined(name: str, ctx: Context) -> xr.DataArray:
     if dtype == "bool":
         return _bool(filled)
     if dtype == "float":
-        return present & np.isfinite(filled)
+        return operators.binary(operator.and_, present, np.isfinite(filled))
     return present
 
 

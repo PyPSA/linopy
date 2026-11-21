@@ -329,7 +329,7 @@ def refuse_made(
     ctx: Context,
 ) -> xr.DataArray:
     """*op* of *left* and *right*, refused wherever it is not finite though both are present, the parameters *nodes* read named."""
-    made = cast(xr.DataArray, op(left, right))
+    made = cast(xr.DataArray, operators.binary(op, left, right))
     if made.dtype.kind not in "fc" or bool(np.isfinite(made.values).all()):
         return made
     nan_made = made.isnull() & left.notnull() & right.notnull()
