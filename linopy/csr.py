@@ -201,6 +201,36 @@ class Grid:
         }
         return Grid({d: self.indexes[d] for d in dims}, aux)
 
+    def isel(
+        self, indexers: Mapping[Any, int | slice], drop: bool = False
+    ) -> tuple[Grid, np.ndarray]:
+        """
+        The grid at the positions ``indexers`` picks, as ``Dataset.isel``
+        gives it, and the flat cell of this grid each of its cells comes from.
+        """
+        at = tuple(indexers.get(d, slice(None)) for d in self.dims)
+        rows = np.arange(self.size).reshape(self.shape)[at].reshape(-1)
+        picked = {d: i for d, i in indexers.items() if not isinstance(i, slice)}
+        indexes = {
+            d: index[position]
+            for (d, index), position in zip(self.indexes.items(), at)
+            if d not in picked
+        }
+        aux: AuxCoords = {}
+        if not drop:
+            aux = {
+                d: ((), np.asarray(self.indexes[d].to_numpy()[i]))
+                for d, i in picked.items()
+            }
+        for name, (d, values) in self.aux.items():
+            if not isinstance(d, str) or d not in indexers:
+                aux[name] = (d, values)
+            elif d not in picked:
+                aux[name] = (d, values[indexers[d]])
+            elif not drop:
+                aux[name] = ((), np.asarray(values[indexers[d]]))
+        return Grid(indexes, aux), rows
+
     def with_indexes(self, indexers: Mapping[Any, Any]) -> Grid:
         """
         Replace the labels of the named dimensions; the rest, and the

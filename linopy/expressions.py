@@ -155,6 +155,8 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
+    from xarray.core.types import ErrorOptionsWithWarn
+
     from linopy.constraints import (
         AnonymousScalarConstraint,
         Constraint,
@@ -907,30 +909,14 @@ def _grid_of(ds: Dataset | DataArray, dims: tuple[str, ...]) -> Grid | None:
     return grid if set(ds.coords) == set(dims) | set(grid.aux) else None
 
 
-def _picked(store: CSRStore, kwargs: Mapping[str, Any]) -> CSRStore | None:
-    """
-    ``store`` at one position along each dim ``kwargs`` names, those dims
-    dropped, as ``isel(..., drop=True)`` gives it; None for any other
-    selection, or one along a dim an auxiliary coordinate lies on.
-    """
-    indexers = {k: v for k, v in kwargs.items() if k != "drop"}
-    grid = store.grid
-    sizes = dict(zip(grid.dims, grid.shape))
-    if kwargs.get("drop") is not True or not indexers:
-        return None
-    for dim, position in indexers.items():
-        if dim not in sizes or isinstance(position, bool):
-            return None
-        if not isinstance(position, int | np.integer):
-            return None
-        if not -sizes[dim] <= position < sizes[dim]:
-            return None
-    if any(d in indexers for d, _ in grid.aux.values()):
-        return None
-    at = tuple(indexers.get(d, slice(None)) for d in grid.dims)
-    rows = np.arange(store.n_cells).reshape(grid.shape)[at].reshape(-1)
-    kept = {d: i for d, i in grid.indexes.items() if d not in indexers}
-    return store.take(rows, Grid(kept, grid.aux))
+def _on_grid_positions(grid: Grid, indexers: Mapping[Any, Any]) -> bool:
+    """Whether ``indexers`` picks dims of ``grid`` by integer or slice only."""
+    return all(
+        d in grid.indexes
+        and isinstance(i, slice | int | np.integer)
+        and not isinstance(i, bool)
+        for d, i in indexers.items()
+    )
 
 
 def _const_grid(grid: Grid, const: DataArray) -> Grid | None:
@@ -2566,17 +2552,23 @@ class LinearExpression(BaseExpression):
         obj._attrs = dict(self.attrs)
         return obj
 
-    def isel(self, *args: Any, **kwargs: Any) -> Self:
+    def isel(
+        self,
+        indexers: Mapping[Any, Any] | None = None,
+        drop: bool = False,
+        missing_dims: ErrorOptionsWithWarn = "raise",
+        **indexers_kwargs: Any,
+    ) -> Self:
         """
         Select by position as ``Dataset.isel``. For a CSR-backed expression,
         returns a CSR-backed result when the selection stays on the grid.
         """
-        store = self._store
-        if not args and isinstance(store, CSRStore):
-            picked = _picked(store, kwargs)
-            if picked is not None:
-                return type(self)._from_store(picked, self._model)
-        return self._gathered("isel", super().isel, *args, **kwargs)
+        picks = indexers or indexers_kwargs
+        sole = not (indexers and indexers_kwargs)
+        if self.is_sparse and sole and _on_grid_positions(self._store.grid, picks):
+            return type(self)._from_store(self._store.isel(picks, drop), self._model)
+        args = (indexers, drop, missing_dims)
+        return self._gathered("isel", super().isel, *args, **indexers_kwargs)
 
     def __getitem__(self, selector: int | slice | tuple[Any, ...] | DataArray) -> Self:
         return self._gathered("__getitem__", super().__getitem__, selector)
