@@ -162,12 +162,11 @@ def _constraints(ctx: Context) -> None:
                 mask=mask,
             )
             continue
-        term = _linear(name, _built(lhs, scoped, row.dims, rows), rows)
+        term, dead = _left(name, lhs, scoped, row.dims, rows)
         other = _linear(name, _built(rhs, scoped, row.dims), rows)
-        term = cast(Term, term)
         if any(term.sizes[d] == 0 for d in term.coord_dims):
             continue
-        _check_live(name, row, term, other, rows, ctx)
+        _check_live(name, row, term, other, dead, ctx)
         sides = [term, other] if isinstance(other, Term) else [term]
         if all(as_expression(side).is_constant for side in sides):
             continue
@@ -202,28 +201,38 @@ def _from_terms(
         return None
 
 
-def _built(
+def _built(node: ms.Expression, ctx: Context, dims: tuple[str, ...]) -> Value:
+    """*node* from the term path where it carries a variable, else from :func:`evaluate`."""
+    made = None
+    if ms.carries_variable(node):
+        made = _from_terms(lambda: terms.linear(node, ctx, dims), ctx)
+    return evaluate(node, ctx) if made is None else made
+
+
+def _left(
+    name: str,
     node: ms.Expression,
     ctx: Context,
     dims: tuple[str, ...],
-    kept: xr.DataArray | None = None,
-) -> Value:
+    rows: xr.DataArray,
+) -> tuple[Term, xr.DataArray | None]:
     """
-    *node* from the term path where it carries a variable, else from :func:`evaluate`.
+    The left side of constraint *name* and the rows :func:`_emptied` finds of
+    it, ``None`` for a bare variable, which holds a term wherever it exists.
 
     The term path drops the zero terms the eager path keeps, so where that
-    leaves a row *kept* names without a term, the eager path builds *node*
+    leaves a row *rows* keeps without a term, the eager path builds the side
     for :func:`_check_live` to judge the row as it does there.
     """
-
-    def make() -> LinearExpression:
-        made = terms.linear(node, ctx, dims)
-        if kept is not None and bool(_emptied(made, kept).any()):
-            raise terms.Unsupported("a row without terms")
-        return made
-
-    made = _from_terms(make, ctx) if ms.carries_variable(node) else None
-    return evaluate(node, ctx) if made is None else made
+    made = _from_terms(lambda: terms.linear(node, ctx, dims), ctx)
+    if made is not None:
+        dead = _emptied(made, rows)
+        if not bool(dead.any()):
+            return made, dead
+    term = cast(Term, _linear(name, evaluate(node, ctx), rows))
+    if isinstance(term, Variable):
+        return term, None
+    return term, _emptied(cast(LinearExpression, term), rows)
 
 
 def _difference(
@@ -282,11 +291,11 @@ def _check_live(
     declared: ms.Constraint,
     term: Term,
     other: Value,
-    rows: xr.DataArray,
+    dead: xr.DataArray | None,
     ctx: Context,
 ) -> None:
     """
-    Refuse a row the data emptied of every variable term.
+    Refuse a row the data emptied of every variable term, one *dead* names.
 
     Such a row reads as ``0 sense rhs``: linopy carries no column there, the
     row leaves the problem and the constraint silently stops binding. Where
@@ -297,10 +306,7 @@ def _check_live(
     variable or a vacated translation, takes the row with it. A bare variable
     term is never emptied: a row of it exists exactly where the variable does.
     """
-    if isinstance(term, Variable):
-        return
-    dead = _emptied(cast(LinearExpression, term), rows)
-    if not bool(dead.any()):
+    if dead is None or not bool(dead.any()):
         return
     said = (
         f"constraint '{name}': {int(dead.sum())} row(s) hold no variable term once the data "
