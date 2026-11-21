@@ -13,9 +13,7 @@ order :meth:`~linopy.spec.context.Context.frame` gives its dims: the dims
 from __future__ import annotations
 
 import operator
-import time
 import warnings
-from collections.abc import Callable
 from dataclasses import replace
 from typing import cast
 
@@ -42,13 +40,6 @@ from linopy.variables import Variable
 
 _FLIPPED: dict[str, ms.ConstraintSense] = {"==": "==", "<=": ">=", ">=": "<="}
 _SENSE = {"minimize": "min", "maximize": "max"}
-TIMINGS: dict[str, float] = {}
-
-
-def _timed(key: str, run: Callable[[], None]) -> None:
-    start = time.perf_counter()
-    run()
-    TIMINGS[key] = TIMINGS.get(key, 0.0) + time.perf_counter() - start
 
 
 def build(ctx: Context, expressions: bool = True) -> None:
@@ -66,14 +57,13 @@ def build(ctx: Context, expressions: bool = True) -> None:
     refuses the missing ``refused`` rows its live rows read, a named
     expression's whether it is built or left to :func:`linopy.spec.evaluate`.
     """
-    TIMINGS.clear()
-    _timed("variables", lambda: _variables(ctx))
-    _timed("assumptions", lambda: _check_assumptions(ctx))
-    _timed("sos", lambda: _sos(ctx))
+    _variables(ctx)
+    _check_assumptions(ctx)
+    _sos(ctx)
     _constraints(ctx)
-    _timed("objective", lambda: _objective(ctx))
+    _objective(ctx)
     if expressions:
-        _timed("expressions", lambda: _expressions(ctx))
+        _expressions(ctx)
 
 
 def _check_assumptions(ctx: Context) -> None:
@@ -149,7 +139,7 @@ def _sos(ctx: Context) -> None:
 
 def _constraints(ctx: Context) -> None:
     for name, row in ctx.program.constraints.items():
-        _timed(f"constraint:{name}", lambda: _constraint(ctx, name, row))
+        _constraint(ctx, name, row)
 
 
 def _side(
