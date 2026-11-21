@@ -800,8 +800,8 @@ class CSRStore(Store):
         Gather rows into the cells of ``grid``, cell ``i`` taking row
         ``rows[i]`` with its terms, explicit zeros included, and its constant;
         ``-1`` leaves the cell absent without terms. Auxiliary coordinates
-        are ``grid``'s. Returns this store when every row stays in place on
-        an equal grid.
+        are ``grid``'s. Where every row stays in place, only the grid
+        changes, and an equal grid returns this store.
         """
         n = self.n_cells
         if rows.shape == (n,) and np.array_equal(rows, np.arange(n)):
