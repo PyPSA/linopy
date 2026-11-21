@@ -264,7 +264,10 @@ class Store(ABC):
 
     @abstractmethod
     def prune(self, tol: float = 0.0) -> Self:
-        """Drop the terms with a coefficient of at most ``tol`` in magnitude."""
+        """
+        Drop the terms with a coefficient of at most ``tol`` in magnitude;
+        this store itself if there is none.
+        """
 
     @abstractmethod
     def canonical(self) -> Self:
