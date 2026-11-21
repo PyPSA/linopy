@@ -181,7 +181,7 @@ class Table:
 
 def _constant(data: Data) -> Table:
     """*data* as a table without terms."""
-    const = xr.DataArray(data)
+    const = data if isinstance(data, xr.DataArray) else xr.DataArray(data)
     return Table(_names(const.dims), (), const, _is_zero(const.values))
 
 
@@ -400,7 +400,7 @@ class Evaluator:
             and not self.carries(other)
         ):
             return None
-        data = self.aligned(xr.DataArray(_data(other, ctx)))
+        data = self.aligned(_data(other, ctx))
         if not _is_zero(data.values):
             raise Unsupported("a live product of two terms")
         a = self.table(product.left, ctx)
@@ -424,7 +424,7 @@ class Evaluator:
 
     def times(self, table: Table, data: Data, divide: bool = False) -> Table:
         """*table* times *data*, or with *divide* over it: a factor on each term, spread onto the dims it lacks; a hole in *data* is an absence."""
-        data = self.aligned(xr.DataArray(data))
+        data = self.aligned(data)
         values = np.asarray(data.values, dtype=float, order="C")
         if np.isinf(values).any():
             raise Unsupported("infinite data beside a term")
@@ -595,7 +595,7 @@ class Evaluator:
         along = node.along
         labels = ctx.coords[along]
         ordinal = xr.DataArray(np.arange(len(labels), dtype=float), {along: labels})
-        source = self.aligned(xr.DataArray(_moved(node, ordinal, ctx, -1.0)))
+        source = self.aligned(cast(Data, _moved(node, ordinal, ctx, -1.0)))
         dims = _names(source.dims)
         reached = source.values
         valid = reached >= 0
@@ -610,7 +610,7 @@ class Evaluator:
         fill = np.nan if node.fill is None else float(node.fill)
         if table.const is not None:
             full = self.full(table.const, table.dims)
-            const = self.aligned(xr.DataArray(_moved(node, full, ctx, node.fill)))
+            const = self.aligned(cast(Data, _moved(node, full, ctx, node.fill)))
         elif valid.all():
             const = None
         else:
@@ -676,8 +676,10 @@ class Evaluator:
             raise Unsupported("a relation row off the coordinates")
         return at
 
-    def aligned(self, data: xr.DataArray) -> xr.DataArray:
-        """*data* without stray coordinates, which has to lie on the master coordinates."""
+    def aligned(self, data: Data) -> xr.DataArray:
+        """*data* as an array without stray coordinates, which has to lie on the master coordinates."""
+        if not isinstance(data, xr.DataArray):
+            return xr.DataArray(data)
         stray = [c for c in data.coords if c not in data.dims]
         if stray:
             data = data.drop_vars(stray)
