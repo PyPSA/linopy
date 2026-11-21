@@ -10,16 +10,15 @@ of a dimension, a grouped sum gathers the group of each term through its
 relation, and a product with data appends a factor. A table becomes a CSR
 store once, when its declaration is added to the model.
 
-A node the prototype does not handle is evaluated by
-:func:`linopy.spec.evaluator.evaluate` and its result converted to a table.
+:class:`Unsupported` names what a table does not hold, and the declaration
+holding it is built by :func:`linopy.spec.evaluator.evaluate` instead: a
+dense model, a window sum or a power of a term, a product of two terms the
+data leaves standing, a division by a term or by zero, infinite data beside
+a term, a lookup of a term through an empty relation, and a variable, data
+or a relation row off the master coordinates.
+
 The switch is the environment variable ``LINOPY_SPEC_TERMS=1``; the
 declarations it covers are named in ``LINOPY_SPEC_TERMS_SCOPE``.
-
-:class:`Unsupported` names what a table does not hold, and its declaration
-is then built by :func:`linopy.spec.evaluator.evaluate`: a dense model, a
-window sum or a power of a term, a product of two terms the data leaves
-standing, a division by a term or by zero, infinite data beside a term, and
-a variable, data or a relation row off the master coordinates.
 """
 
 from __future__ import annotations
@@ -235,31 +234,37 @@ def _key(cols: Sequence[np.ndarray], shape: Sequence[int], n: int) -> np.ndarray
     return key
 
 
-def _matches(
-    tkey: np.ndarray, rkey: np.ndarray, size: int
+def _pairs(
+    term_keys: np.ndarray, row_keys: np.ndarray, size: int
 ) -> tuple[np.ndarray | None, np.ndarray]:
-    """For each term key the relation rows with that key: term and row indices, terms None where each matches once."""
+    """
+    Every pair of a term and a row with the same key, the keys inside ``range(size)``.
+
+    The index of the term and of the row of each pair, the pairs of a term
+    together and in the order of its rows. The term index is None where
+    every term has one row, so the pairs are the terms.
+    """
     if size <= DENSE_KEYS:
-        counts = np.bincount(rkey, minlength=size)
+        counts = np.bincount(row_keys, minlength=size)
         if counts.max(initial=0) <= 1:
-            at = np.full(size, -1, dtype=np.int64)
-            at[rkey] = np.arange(len(rkey))
-            ri = at[tkey]
-            hit = ri >= 0
-            if hit.all():
-                return None, ri
-            ti = np.flatnonzero(hit)
-            return ti, ri[ti]
-        order, bounds = _grouped(rkey, size)
-        lo, cnt = bounds[tkey], counts[tkey]
+            row_at = np.full(size, -1, dtype=np.int64)
+            row_at[row_keys] = np.arange(len(row_keys))
+            row = row_at[term_keys]
+            found = row >= 0
+            if found.all():
+                return None, row
+            term = np.flatnonzero(found)
+            return term, row[term]
+        order, start = _grouped(row_keys, size)
+        first, count = start[term_keys], counts[term_keys]
     else:
-        order = np.argsort(rkey, kind="stable")
-        skey = rkey[order]
-        lo = np.searchsorted(skey, tkey, "left")
-        cnt = np.searchsorted(skey, tkey, "right") - lo
-    ti = np.repeat(np.arange(len(tkey)), cnt)
-    off = np.arange(len(ti)) - np.repeat(np.cumsum(cnt) - cnt, cnt)
-    return ti, order[np.repeat(lo, cnt) + off]
+        order = np.argsort(row_keys, kind="stable")
+        ordered = row_keys[order]
+        first = np.searchsorted(ordered, term_keys, "left")
+        count = np.searchsorted(ordered, term_keys, "right") - first
+    term = np.repeat(np.arange(len(term_keys)), count)
+    nth = np.arange(len(term)) - np.repeat(np.cumsum(count) - count, count)
+    return term, order[np.repeat(first, count) + nth]
 
 
 class Evaluator:
@@ -527,8 +532,6 @@ class Evaluator:
         return self.settled(table)
 
     def sum_over(self, table: Table, dim: str) -> Table:
-        if dim not in table.dims:
-            raise Unsupported(f"a sum over '{dim}', which the operand lacks")
         pending = table.pending
         if pending is not None and dim in (*pending.joined_dims, *pending.grouped_dims):
             table, pending = self.settled(table), None
@@ -553,10 +556,6 @@ class Evaluator:
         rows = ctx.relations[columns.name].rows
         joined = {columns.dim(r): rows[r].to_numpy() for r in columns.joined}
         grouped = {columns.dim(r): rows[r].to_numpy() for r in columns.grouped}
-        if any(d not in table.dims for d in joined):
-            raise Unsupported("a grouped sum along a dimension the operand lacks")
-        if any(d in table.dims and d not in joined for d in grouped):
-            raise Unsupported("a grouped sum onto a dimension the operand keeps")
         table = self.absorbed(table)
         on, add = self.positions(joined), self.positions(grouped)
         blocks = tuple(self.matched(b, on, add, drop=on) for b in table.blocks)
@@ -581,10 +580,6 @@ class Evaluator:
         on = self.positions({columns.dim(r): rows[r] for r in columns.joined})
         keys = zip(relation.key_dims, relation.declared.key)
         add = self.positions({d: rows[r] for d, r in keys})
-        if any(d in table.dims and d not in on for d in add):
-            raise Unsupported("a lookup onto a dimension the operand keeps")
-        if any(d not in table.dims for d in on):
-            raise Unsupported("a lookup along a dimension the operand lacks")
         blocks = tuple(self.matched(b, on, add, drop=on) for b in table.blocks)
         const = table.const
         if const is not None:
@@ -598,8 +593,6 @@ class Evaluator:
         """A shift: each term goes to the rows that read its row, found by shifting the positions along the axis as the eager path shifts data."""
         table = self.table(node.operand, widened(node, ctx))
         along = node.along
-        if along not in table.dims:
-            raise Unsupported(f"a shift along '{along}', which the operand lacks")
         labels = ctx.coords[along]
         ordinal = xr.DataArray(np.arange(len(labels), dtype=float), {along: labels})
         source = self.aligned(xr.DataArray(_moved(node, ordinal, ctx, -1.0)))
@@ -648,11 +641,11 @@ class Evaluator:
         sizes = self.sizes(on)
         b = b.broadcast(sizes)
         n_rows = len(next(iter((on | add).values())))
-        rkey = _key(list(on.values()), list(sizes.values()), n_rows)
-        ti, ri = _matches(b.key(sizes), rkey, math.prod(sizes.values()))
-        if ti is not None:
-            b = b.take(ti)
-        return b.without(drop).with_cols({d: at[ri] for d, at in add.items()})
+        row_keys = _key(list(on.values()), list(sizes.values()), n_rows)
+        term, row = _pairs(b.key(sizes), row_keys, math.prod(sizes.values()))
+        if term is not None:
+            b = b.take(term)
+        return b.without(drop).with_cols({d: at[row] for d, at in add.items()})
 
     def where(self, blocks: Iterable[Block], keep: xr.DataArray) -> tuple[Block, ...]:
         """*blocks* with the terms on the cells *keep* holds."""
