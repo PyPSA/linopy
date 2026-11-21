@@ -12,15 +12,16 @@ store once, when its declaration is added to the model.
 
 A node the prototype does not handle is evaluated by
 :func:`linopy.spec.evaluator.evaluate` and its result converted to a table.
-The switch is the environment variable ``LINOPY_SPEC_TERMS=1``; the
-declarations it covers are named in ``LINOPY_SPEC_TERMS_SCOPE``.
+The builder takes every declaration of a sparse model from this path and
+falls back to the eager evaluator where it raises :class:`Unsupported`;
+:func:`eager_only` turns the path off.
 """
 
 from __future__ import annotations
 
 import math
-import os
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from typing import cast
 
@@ -48,16 +49,25 @@ from linopy.spec.where import looked_up
 from linopy.store import as_sparse
 from linopy.variables import Variable
 
-DEFAULT_SCOPE = "Bus_nodal_balance,objective"
 DENSE_KEYS = 50_000_000
 FALLBACKS: list[str] = []
+_EAGER_ONLY = False
 
 
-def enabled(name: str) -> bool:
-    if os.environ.get("LINOPY_SPEC_TERMS") != "1":
-        return False
-    scope = os.environ.get("LINOPY_SPEC_TERMS_SCOPE", DEFAULT_SCOPE)
-    return scope == "*" or name in scope.split(",")
+@contextmanager
+def eager_only() -> Iterator[None]:
+    """Build every declaration with the eager evaluator inside the block: for tests and debugging."""
+    global _EAGER_ONLY
+    before, _EAGER_ONLY = _EAGER_ONLY, True
+    try:
+        yield
+    finally:
+        _EAGER_ONLY = before
+
+
+def active(ctx: Context) -> bool:
+    """Whether the builder tries this path for the declarations of *ctx*: a sparse model outside :func:`eager_only`."""
+    return ctx.model.sparse and not _EAGER_ONLY
 
 
 class Unsupported(Exception):
