@@ -394,7 +394,7 @@ CASES: dict[str, Case] = {
     "to-constraint-rhs-unlabelled-off-grid": Case(
         grid,
         lambda e: e.to_constraint("<=", xr.DataArray([1.0, 2.0], dims="c")),
-        "to_constraint(rhs over dimensions outside the grid)",
+        KEPT,
     ),
     "groupby-series": Case(grid, lambda e: e.groupby(SERIES).sum(), KEPT),
     "groupby-dataframe": Case(grid, lambda e: e.groupby(FRAME).sum(), KEPT),

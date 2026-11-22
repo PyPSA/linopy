@@ -886,12 +886,6 @@ def _log_extra_rhs_dims(rhs: DataArray, dims: Iterable[Hashable]) -> None:
         )
 
 
-def _over_new_dims(const: DataArray, dims: Iterable[str]) -> bool:
-    """Whether ``const`` adds labelled dims to ``dims``, which the sparse arithmetic spreads the cells over."""
-    new = set(const.dims) - set(dims)
-    return bool(new) and not new & set(HELPER_DIMS) and new <= set(const.indexes)
-
-
 def _grid_of(ds: Dataset | DataArray, dims: tuple[str, ...]) -> Grid | None:
     """
     The grid of ``ds`` over ``dims``, or None if ``ds`` leaves it: other or
@@ -2693,30 +2687,17 @@ class LinearExpression(BaseExpression):
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
     ) -> Constraint:
         store = self._store
-        if isinstance(store, DenseStore) and join is None:
+        if isinstance(store, CSRStore) and not isinstance(sign, str):
+            dense = self._fallback("to_constraint(non-scalar sign)")
+            return dense.to_constraint(sign, rhs, join)
+        if join is None:
             operand = store.on_cells(rhs)
             if operand is not None:
                 lhs, moved = store.moved(operand)
                 return constraints.Constraint(
                     type(self)._from_store(lhs, self.model), sign, moved, self.model
                 )
-        if not isinstance(store, CSRStore):
-            return super().to_constraint(sign, rhs, join)
-        if not isinstance(sign, str):
-            dense = self._fallback("to_constraint(non-scalar sign)")
-            return dense.to_constraint(sign, rhs, join)
-        rhs = as_constant(rhs)
-        if join is not None or not isinstance(rhs, CONSTANT_TYPES):
-            return self.sub(rhs, join=join).to_constraint(sign, 0)
-        if isinstance(rhs, DataArray) and _over_new_dims(rhs, store.dims):
-            _log_extra_rhs_dims(rhs, store.dims)
-            return self.sub(rhs).to_constraint(sign, 0)
-        rhs_da = constraints.rhs_on_grid(store, rhs)
-        if isinstance(rhs_da, str):
-            return self._fallback(rhs_da).to_constraint(sign, rhs, join)
-        return constraints.Constraint(
-            self.reset_const(), sign, rhs_da - self.const, self.model
-        )
+        return super().to_constraint(sign, rhs, join)
 
     @overload
     def __add__(

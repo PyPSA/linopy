@@ -263,6 +263,14 @@ class Store(ABC):
         """Drop the terms of absent cells."""
 
     @abstractmethod
+    def on_cells(self, value: Any) -> float | np.ndarray | None:
+        """:func:`on_cells` on this store's grid."""
+
+    @abstractmethod
+    def moved(self, rhs: float | np.ndarray) -> tuple[Self, DataArray]:
+        """``rhs``, laid out by :meth:`on_cells`, moved onto this side: the store with a zero constant, and the constant the other side keeps."""
+
+    @abstractmethod
     def prune(self, tol: float = 0.0) -> Self:
         """Drop the terms with a coefficient of at most ``tol`` in magnitude."""
 
@@ -778,7 +786,6 @@ class DenseStore(Store):
         return coords_within(value, self.ds)
 
     def on_cells(self, value: Any) -> float | np.ndarray | None:
-        """:func:`on_cells` on this store's grid."""
         return on_cells(value, self.ds.variables["const"].dims, self.ds)
 
     def combined(
@@ -800,7 +807,6 @@ class DenseStore(Store):
         return self._derived(absorb_absence(self._own(**fields)))
 
     def moved(self, rhs: float | np.ndarray) -> tuple[DenseStore, DataArray]:
-        """``rhs``, laid out by :meth:`on_cells`, moved onto this side: the store with a zero constant, and the constant the other side keeps."""
         store = self.absorbed()
         const = store.ds.variables["const"]
         with np.errstate(all="ignore"):

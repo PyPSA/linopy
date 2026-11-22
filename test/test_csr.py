@@ -1558,10 +1558,6 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
         lambda e, c: e @ loc_operand(c.gbus.index),
         r"matmul\(operand sharing no dimension",
     ),
-    "rhs": (
-        lambda e, c: e <= xr.DataArray([1.0, 2.0], dims="pt"),
-        r"to_constraint\(rhs over dimensions outside the grid\)",
-    ),
     "set-blocks": (set_blocks, "`set_blocks`"),
     "update-coeffs": (
         lambda e, c: c.m.add_constraints(e >= 1).update(coeffs=2.0),

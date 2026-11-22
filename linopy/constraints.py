@@ -36,7 +36,7 @@ from xarray.core.indexes import Indexes
 from xarray.core.utils import Frozen
 
 from linopy import expressions, variables
-from linopy.alignment import as_dataarray, broadcast_to_coords
+from linopy.alignment import broadcast_to_coords
 from linopy.common import (
     ConstraintLabelIndex,
     LocIndexer,
@@ -75,7 +75,7 @@ from linopy.constants import (
 from linopy.containers import LabelContainer
 from linopy.csr import CSRStore, _densify_notice
 from linopy.scaling import scalar_scaling, validate_scaling
-from linopy.semantics import assign_flat_coords, check_user_nan
+from linopy.semantics import assign_flat_coords
 from linopy.store import NETCDF_STORE_ATTRS, DenseStore, Reason, Store, as_sparse
 from linopy.types import (
     ConstantLike,
@@ -150,34 +150,6 @@ def _sparse_if(store: Store, sparse: bool, reason: Reason | None = None) -> Stor
 def model_store(store: Store, model: Model) -> Store:
     """``store`` on the store class of ``model`` where it converts, without a notice."""
     return _sparse_if(store, model.store_cls is CSRStore)
-
-
-def rhs_on_grid(store: CSRStore, rhs: Any) -> DataArray | Reason:
-    """
-    The constant ``rhs`` as a DataArray on the grid of ``store``, with dense
-    parity: NaN in the rhs raises (§5) and a reordered or differing index on
-    a shared dim raises (§8). An rhs with helper dims or dims outside the
-    grid returns the reason to fall back to the dense path. An expression
-    rhs is moved to the lhs before, see :meth:`LinearExpression.to_constraint`.
-    """
-    da = as_dataarray(rhs)
-    grid = store.grid
-    if set(da.dims) & set(HELPER_DIMS) or not set(da.dims) <= set(grid.dims):
-        return "to_constraint(rhs over dimensions outside the grid)"
-    if bool(da.isnull().any()):
-        check_user_nan()
-    for d in da.dims:
-        if not da.get_index(d).equals(grid.indexes[str(d)]):
-            raise ValueError(
-                f"Coordinate mismatch on shared dimension {d!r} between "
-                "the rhs and the grouped result. Align the rhs with "
-                ".sel(...) / .reindex(...) before combining (§8)."
-            )
-    missing = {d: i for d, i in grid.indexes.items() if d not in da.dims}
-    if missing:
-        da = da.expand_dims(missing)
-    values = da.transpose(*grid.dims).to_numpy().reshape(-1)
-    return grid.dataarray(values.astype(float), name="rhs")
 
 
 class Slack(NamedTuple):

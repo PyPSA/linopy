@@ -167,9 +167,9 @@ def test_constraint_rhs_lower_dim(rhs_factory: Any) -> None:
     assert c.shape == (10, 10)
 
 
-def test_constraint_rhs_unlabeled_lower_dim_ambiguous_raises() -> None:
+def test_constraint_rhs_unlabeled_lower_dim_ambiguous_raises(backend: Model) -> None:
     """Both dims are size 10, so a length-10 rhs cannot be paired by size."""
-    m = Model()
+    m = backend
     naxis = np.arange(10, dtype=float)
     maxis = np.arange(10).astype(str)
     x = m.add_variables(coords=[naxis, maxis])

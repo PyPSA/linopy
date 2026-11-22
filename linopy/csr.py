@@ -66,6 +66,7 @@ from linopy.store import (
     Reason,
     Store,
     merged_grid,
+    on_cells,
 )
 
 if TYPE_CHECKING:
@@ -720,6 +721,18 @@ class CSRStore(Store):
             factor = factor.broadcast_like(const).transpose(*dims)
             store = store._scaled_terms(factor.to_numpy().reshape(-1), op)
         return store.assign_const(const.to_numpy().reshape(-1)).with_grid(grid)
+
+    def on_cells(self, value: Any) -> float | np.ndarray | None:
+        return on_cells(value, self.grid.dims, self.grid.to_dataset())
+
+    def moved(self, rhs: float | np.ndarray) -> tuple[CSRStore, DataArray]:
+        store = self.absorbed()
+        const = store.const.reshape(self.grid.shape)
+        with np.errstate(all="ignore"):
+            moved = rhs - const
+        check_arithmetic_nan(moved, operator.sub, rhs, const)
+        zero = np.broadcast_to(0.0, store.n_cells)
+        return store.assign_const(zero), self.grid.dataarray(moved)
 
     def absorbed(self, report: bool = False) -> CSRStore:
         """
