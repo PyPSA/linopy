@@ -2982,7 +2982,7 @@ class LinearExpression(BaseExpression):
                 "reindexing"
             )
         store = self._store
-        reason = _reindex_reason(indexers, store.dims, fill_value, method, copy)
+        reason = _reindex_reason(indexers, self.indexes, fill_value, method, copy)
         if not isinstance(store, CSRStore) or reason is not None:
             dense = self._fallback(reason)
             kwargs: dict[str, Any] = dict(method=method, tolerance=tolerance, copy=copy)
@@ -3857,7 +3857,7 @@ def _dense_copies(exprs: Sequence[Any], reason: Reason | None) -> list[Any]:
 
 def _reindex_reason(
     indexers: Mapping[Any, Any],
-    dims: tuple[str, ...],
+    indexes: Indexes,
     fill_value: Any,
     method: str | None,
     copy: bool,
@@ -3869,8 +3869,12 @@ def _reindex_reason(
         return "reindex(copy=False)"
     if fill_value is not FILL_VALUE:
         return "reindex(fill_value=...)"
-    if not set(indexers) <= set(dims):
+    if not set(indexers) <= set(indexes):
         return "reindex(indexers off the grid)"
+    for d, labels in indexers.items():
+        source, target = indexes[d], pd.Index(labels)
+        if not (source.equals(target) or (source.is_unique and target.is_unique)):
+            return "reindex(non-unique index)"
     return None
 
 

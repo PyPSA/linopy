@@ -2336,6 +2336,20 @@ def test_masked_constant_linear_expression_to_polars_drops_absent_rows(
     assert df["const"].to_list() == expected
 
 
+def test_reindex_from_non_unique_index_raises(backend: Model) -> None:
+    x = backend.add_variables(coords=[pd.Index(["a", "a", "b"], name="d")], name="x")
+    with pytest.raises(ValueError, match="duplicate values"):
+        (2 * x).reindex(d=["a", "b"])
+
+
+def test_reindex_onto_non_unique_index(backend: Model) -> None:
+    x = backend.add_variables(coords=[pd.Index(["a", "b"], name="d")], name="x")
+    res = (2 * x).reindex(d=["a", "a", "b"])
+    assert res.indexes["d"].tolist() == ["a", "a", "b"]
+    assert res.vars.values.ravel().tolist() == [0, 0, 1]
+    assert res.coeffs.values.ravel().tolist() == [2.0, 2.0, 2.0]
+
+
 def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     expr1 = (10 * x + y).sum("dim_0")
     expr2 = z.sum("dim_0")
