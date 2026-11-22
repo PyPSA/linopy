@@ -26,6 +26,7 @@ from spec_helpers import (  # noqa: E402
     RAGGED_X,
     RAGGED_Y,
     TT,
+    eager,
     needs_examples,
     with_,
     yaml_dict,
@@ -77,22 +78,21 @@ def assert_built_alike(spec: Any, data: dict[str, Any]) -> None:
     reads it: the term path spreads a term onto the nonzero entries of a factor
     only, so it holds no term of coefficient zero where the eager path does.
     """
-    with terms.eager_only():
-        eager = Model.from_spec(spec, data, sparse=True)
-    built = Model.from_spec(spec, data, sparse=True)
-    assert list(built.variables) == list(eager.variables)
-    for name in eager.variables:
-        assert_varequal(built.variables[name], eager.variables[name])
-    assert list(built.constraints) == list(eager.constraints)
-    for name in eager.constraints:
-        con = eager.constraints[name]
+    reference = eager(spec, data)
+    built = Model.from_spec(spec, data)
+    assert list(built.variables) == list(reference.variables)
+    for name in reference.variables:
+        assert_varequal(built.variables[name], reference.variables[name])
+    assert list(built.constraints) == list(reference.constraints)
+    for name in reference.constraints:
+        con = reference.constraints[name]
         assert_conequal(built.constraints[name], con, strict=False)
         xr.testing.assert_equal(built.constraints[name].labels, con.labels)
-    assert list(built.expressions) == list(eager.expressions)
-    for name, expression in eager.expressions.items():
+    assert list(built.expressions) == list(reference.expressions)
+    for name, expression in reference.expressions.items():
         assert_alike(built.expressions[name], expression)
-    assert_alike(built.objective.expression, eager.objective.expression)
-    assert built.objective.sense == eager.objective.sense
+    assert_alike(built.objective.expression, reference.objective.expression)
+    assert built.objective.sense == reference.objective.sense
 
 
 @pytest.fixture

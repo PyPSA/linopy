@@ -57,8 +57,8 @@ def build(ctx: Context, expressions: bool = True) -> None:
     assumptions are checked once the variables exist, so a condition may read
     where one is defined. Each declaration refuses the missing ``refused``
     rows its live rows read, a named expression's whether it is built or left
-    to :func:`linopy.spec.evaluate`. A sparse model takes each declaration
-    from :mod:`linopy.spec.terms` where that path covers it.
+    to :func:`linopy.spec.evaluate`. Each declaration is taken from
+    :mod:`linopy.spec.terms` where that path covers it.
     """
     _variables(ctx)
     _check_assumptions(ctx)
@@ -193,7 +193,7 @@ def _from_terms(
     instead: outside :func:`terms.active`, or where *make* raises
     :class:`terms.Unsupported`.
     """
-    if not terms.active(ctx):
+    if not terms.active():
         return None
     try:
         return make()

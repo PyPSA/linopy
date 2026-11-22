@@ -36,6 +36,7 @@ from spec_helpers import (  # noqa: E402
     RAGGED_Y,
     UNITS,
     curve,
+    eager,
     needs_examples,
     solved,
     with_,
@@ -613,7 +614,7 @@ SHIFTED_TERM = "shift(a, along=t, offset=1, edge=0)"
         pytest.param(
             "x + sum(a, over=t) - sum(a, over=t) >= 1",
             INF_AT_0,
-            "t=0",
+            "the only row",
             id="sums-beside-a-term",
         ),
         pytest.param(
@@ -1282,7 +1283,7 @@ def test_an_objective_is_quadratic_only_where_the_data_keeps_a_product(
     ],
 )
 def test_a_sparse_objective_builds_without_a_densify_notice(
-    backend: Model, product: str, k: list[float], quadratic: bool
+    product: str, k: list[float], quadratic: bool
 ) -> None:
     """A linear term met a quadratic one, which has no sparse backing, and warned of densifying."""
     spec = with_(
@@ -1293,14 +1294,14 @@ def test_a_sparse_objective_builds_without_a_densify_notice(
     data = {"t": T, "k": xr.DataArray(k, coords=[T])}
     with warnings.catch_warnings():
         warnings.simplefilter("error", linopy.PerformanceWarning)
-        m = Model.from_spec(spec, data, sparse=backend.sparse)
+        m = Model.from_spec(spec, data)
     objective = m.objective.expression
-    want = Model.from_spec(spec, data).objective.expression
+    want = eager(spec, data).objective.expression
     assert isinstance(objective, linopy.QuadraticExpression) is quadratic
     if quadratic:
         assert_quadequal(objective, want)
     else:
-        assert objective.is_sparse == backend.sparse
+        assert objective.is_sparse
         assert_linequal(objective, want)
 
 
