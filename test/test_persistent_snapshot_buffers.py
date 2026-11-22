@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import pickle
 import weakref
+from collections.abc import Callable
 
 import numpy as np
 import pytest
 
-from linopy import Model
+from linopy import LinearExpression, Model, Variable
 from linopy.persistent import ModelDiff, ModelSnapshot, RebuildReason
 from linopy.persistent.snapshot import _extract_con_buffers
 
@@ -69,15 +70,23 @@ def test_shape_mismatch_triggers_sparsity_rebuild(baseline_model: Model) -> None
     }
 
 
-def test_zero_coefficient_term_needs_no_rebuild(baseline_model: Model) -> None:
+@pytest.mark.parametrize(
+    "zero",
+    [lambda y: 0 * y.sum(), lambda y: y.sum() - y.sum()],
+    ids=["explicit", "cancelled"],
+)
+def test_zero_coefficient_term_needs_no_rebuild(
+    baseline_model: Model, zero: Callable[[Variable], LinearExpression]
+) -> None:
     """
-    An explicit zero coefficient is pruned from the matrix, so adding one
-    leaves the sparsity pattern unchanged and needs no rebuild.
+    A zero coefficient, explicit or summed from terms that cancel, is pruned
+    from the matrix, so adding one leaves the sparsity pattern unchanged and
+    needs no rebuild.
     """
     snap = ModelSnapshot.capture(baseline_model)
     x = baseline_model.variables["x"]
     y = baseline_model.variables["y"]
-    baseline_model.constraints["c1"].update(lhs=2 * x + 0 * y.sum())
+    baseline_model.constraints["c1"].update(lhs=2 * x + zero(y))
     diff = ModelDiff.from_snapshot(snap, baseline_model)
     assert not isinstance(diff, RebuildReason)
 

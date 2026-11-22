@@ -292,7 +292,8 @@ class Store(ABC):
         """
         The live terms of the cells selected by the boolean ``active_rows``
         as CSR rows over the dense variable positions of ``label_index``,
-        raising for labels of removed variables with the constraint ``name``.
+        one per variable and none with a zero coefficient, raising for
+        labels of removed variables with the constraint ``name``.
         """
 
     @abstractmethod
@@ -918,6 +919,7 @@ class DenseStore(Store):
             data, labels, indptr, len(indptr) - 1, label_index, name
         )
         csr.sum_duplicates()
+        csr.eliminate_zeros()
         return csr
 
     def with_grid(self, grid: Grid) -> DenseStore:
