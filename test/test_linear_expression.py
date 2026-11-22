@@ -2320,6 +2320,22 @@ def test_constant_linear_expression_to_polars_2D(backend: Model) -> None:
     assert all(const_pol["vars"].is_null())
 
 
+@pytest.mark.parametrize(
+    ("mask", "expected"),
+    [([True, False, True], [1.0, 3.0]), ([False, False, False], [])],
+    ids=["partly-masked", "fully-masked"],
+)
+def test_masked_constant_linear_expression_to_polars_drops_absent_rows(
+    backend: Model, mask: list[bool], expected: list[float]
+) -> None:
+    t = pd.Index([0, 1, 2], name="t")
+    const = pd.Series([1.0, 2.0, 3.0], index=t)
+    expr = LinearExpression.from_constant(model=backend, constant=const)
+    df = expr.where(xr.DataArray(mask, coords=[t])).to_polars()
+    assert df.columns == ["vars", "coeffs", "const"]
+    assert df["const"].to_list() == expected
+
+
 def test_merge(x: Variable, y: Variable, z: Variable) -> None:
     expr1 = (10 * x + y).sum("dim_0")
     expr2 = z.sum("dim_0")

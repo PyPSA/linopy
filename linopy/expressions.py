@@ -876,6 +876,17 @@ class LinearExpressionRolling:
         return LinearExpression(ds, self.model)
 
 
+def _constant_polars(const: DataArray, columns: list[str]) -> pl.DataFrame:
+    """
+    The present cells of a constant expression in the long format of
+    ``to_polars``: one row per non-NaN ``const``, the term ``columns`` null.
+    """
+    values = const.values.reshape(-1)
+    df = pl.DataFrame({"const": values[~np.isnan(values)]})
+    nulls = [pl.lit(None).alias(c) for c in columns if c != "const"]
+    return df.with_columns(nulls).select(columns)
+
+
 def _log_extra_rhs_dims(rhs: DataArray, dims: Iterable[Hashable]) -> None:
     """Log the dims a constant rhs adds to the expression's, each a copy of its rows."""
     if extra_dims := set(rhs.dims) - set(dims):
@@ -3045,10 +3056,7 @@ class LinearExpression(BaseExpression):
         df : polars.DataFrame
         """
         if self.is_constant:
-            df = pl.DataFrame({"const": self.const.values.reshape(-1)}).with_columns(
-                pl.lit(None).alias("coeffs"), pl.lit(None).alias("vars")
-            )
-            return df.select(["vars", "coeffs", "const"])
+            return _constant_polars(self.const, ["vars", "coeffs", "const"])
         if self.is_sparse:
             df = pl.DataFrame(self._store_terms())
         else:
@@ -3754,14 +3762,7 @@ class QuadraticExpression(BaseExpression):
         df : polars.DataFrame
         """
         if self.is_constant:
-            df = pl.DataFrame(
-                {"const": self.data["const"].values.reshape(-1)}
-            ).with_columns(
-                pl.lit(None).alias("coeffs"),
-                pl.lit(None).alias("vars1"),
-                pl.lit(None).alias("vars2"),
-            )
-            return df.select(["vars1", "vars2", "coeffs", "const"])
+            return _constant_polars(self.const, ["vars1", "vars2", "coeffs", "const"])
 
         vars = self.data.vars.assign_coords(
             {FACTOR_DIM: ["vars1", "vars2"]}

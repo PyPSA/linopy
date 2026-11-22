@@ -336,6 +336,13 @@ def test_quadratic_expression_constant_to_polars(backend: Model) -> None:
     assert all(arr.to_numpy() == df["const"].to_numpy())
 
 
+def test_masked_quadratic_expression_to_polars_is_empty(backend: Model) -> None:
+    t = pd.Index([0, 1, 2], name="t")
+    x = backend.add_variables(coords=[t], name="x")
+    expr = (x * x).where(DataArray([False] * 3, coords=[t]))
+    assert expr.to_polars().is_empty()
+
+
 def test_quadratic_expression_to_matrix(model: Model, x: Variable, y: Variable) -> None:
     expr: QuadraticExpression = x * y + x + 5  # type: ignore
 
