@@ -356,7 +356,7 @@ class CSRStore(Store):
         scatter_codes: dict[str, np.ndarray] = {}
         indexes: dict[str, pd.Index] = {}
         aux: AuxCoords = {}
-        if len(keys) == 1:
+        if isinstance(grouper, pd.Series):
             codes, uniques = pd.factorize(frame.iloc[:, 0], sort=True)
             scatter_codes[group_dim] = codes
             indexes[group_dim] = pd.Index(uniques, name=group_dim)

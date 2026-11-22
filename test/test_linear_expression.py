@@ -1661,13 +1661,19 @@ def test_linear_expression_groupby_multikey_is_sorted(v: Variable) -> None:
     assert keys == [(1, "x"), (1, "y"), (2, "y"), (3, "x")]
 
 
-def test_linear_expression_groupby_with_dataframe_on_aux_coords(u: Variable) -> None:
+def test_linear_expression_groupby_with_dataframe_on_aux_coords(
+    backend: Model,
+) -> None:
+    index = pd.RangeIndex(4, name="dim_3")
+    u = backend.add_variables(coords=[index], name="u").assign_coords(
+        level1=("dim_3", [1, 1, 2, 2]), level2=("dim_3", ["a", "b", "a", "b"])
+    )
     expr = 1 * u
-    n = len(u.data["dim_3"])
-    groups = pd.DataFrame({"a": [1] * n}, index=u.indexes["dim_3"])
+    n = len(index)
+    groups = pd.DataFrame({"a": [1] * n}, index=index)
     grouped = expr.groupby(groups).sum()
     assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
-    assert set(grouped.data.a.values) == {1}
+    assert set(grouped.coords["a"].values) == {1}
     assert grouped.nterm == n
 
 
