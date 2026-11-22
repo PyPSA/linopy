@@ -290,9 +290,9 @@ class Store(ABC):
         self, label_index: VariableLabelIndex, active_rows: np.ndarray, name: str
     ) -> scipy.sparse.csr_array:
         """
-        The cells selected by the boolean ``active_rows`` as CSR rows over the
-        dense variable positions of ``label_index``, raising for labels of
-        removed variables with the constraint ``name``.
+        The live terms of the cells selected by the boolean ``active_rows``
+        as CSR rows over the dense variable positions of ``label_index``,
+        raising for labels of removed variables with the constraint ``name``.
         """
 
     @abstractmethod

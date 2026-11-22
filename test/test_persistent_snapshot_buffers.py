@@ -47,8 +47,8 @@ def test_active_labels_match_label_index(baseline_model: Model) -> None:
 
 
 @pytest.fixture
-def baseline_model() -> Model:
-    m = Model()
+def baseline_model(backend: Model) -> Model:
+    m = backend
     x = m.add_variables(0, 10, coords=[range(3)], name="x")
     y = m.add_variables(0, 5, coords=[range(2)], name="y")
     m.add_constraints(2 * x >= 4, name="c1")

@@ -604,8 +604,9 @@ class CSRStore(Store):
     ) -> scipy.sparse.csr_array:
         """
         The stored rows at ``active_rows`` with label columns replaced by
-        dense positions, ``data`` and ``indptr`` the stored arrays where all
-        rows are active. The result arrays are cached by weak reference,
+        dense positions and explicit zeros dropped, ``data`` and ``indptr``
+        the stored arrays where all rows are active and no coefficient is
+        zero. The result arrays are cached by weak reference,
         keyed on ``label_index.label_to_pos``, which is rebuilt whenever
         variables are added or removed, and on ``active_rows``: while a
         caller such as a ``ModelSnapshot`` holds them, repeated calls return
@@ -627,6 +628,9 @@ class CSRStore(Store):
             ):
                 return _positional_csr(data, cols, indptr, len(indptr) - 1, n_cols)
         rows = self.csr if active_rows.all() else self.csr[active_rows]
+        if not rows.data.all():
+            rows = rows.copy()
+            rows.eliminate_zeros()
         positional = _csr_from_label_columns(
             rows.data, rows.indices, rows.indptr, rows.shape[0], label_index, name
         )
