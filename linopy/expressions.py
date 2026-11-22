@@ -1846,7 +1846,7 @@ class BaseExpression(ABC):
         return constraints.Constraint(
             all_to_lhs.reset_const(),
             sign,
-            const.copy(deep=False, data=-const.values),
+            const.copy(deep=False, data=0.0 - const.values),
             self.model,
         )
 

@@ -13,9 +13,12 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from xarray.core.types import JoinOptions
 
 from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, Model
 from linopy.testing import assert_conequal
+
+T = pd.Index([0, 1, 2], name="t")
 
 # Test model functions
 
@@ -177,6 +180,23 @@ def test_constraint_rhs_unlabeled_lower_dim_ambiguous_raises(backend: Model) -> 
 
     with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
         m.add_constraints(x - y >= naxis)
+
+
+@pytest.mark.parametrize("join", [None, "outer"])
+@pytest.mark.parametrize(
+    "rhs",
+    [
+        pytest.param(0.0, id="scalar"),
+        pytest.param(xr.DataArray([0.0, 0.0, 0.0], coords=[T]), id="dataarray"),
+        pytest.param(pd.Series([0.0, 0.0, 0.0], index=T), id="series"),
+    ],
+)
+def test_constraint_zero_rhs_is_unsigned(
+    backend: Model, rhs: Any, join: JoinOptions | None
+) -> None:
+    x = backend.add_variables(coords=[T])
+    c = (2 * x).to_constraint(LESS_EQUAL, rhs, join=join)
+    assert not np.signbit(c.rhs.values).any()
 
 
 @pytest.mark.parametrize(
