@@ -3043,13 +3043,13 @@ class LinearExpression(BaseExpression):
         -------
         df : polars.DataFrame
         """
+        if self.is_constant:
+            df = pl.DataFrame({"const": self.const.values.reshape(-1)}).with_columns(
+                pl.lit(None).alias("coeffs"), pl.lit(None).alias("vars")
+            )
+            return df.select(["vars", "coeffs", "const"])
         if self.is_sparse:
             df = pl.DataFrame(self._store_terms())
-        elif self.is_constant:
-            df = pl.DataFrame(
-                {"const": self.data["const"].values.reshape(-1)}
-            ).with_columns(pl.lit(None).alias("coeffs"), pl.lit(None).alias("vars"))
-            return df.select(["vars", "coeffs", "const"])
         else:
             df = filter_nulls_polars(to_polars(self.data))
         df = maybe_group_terms_polars(df)

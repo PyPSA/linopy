@@ -2299,7 +2299,8 @@ def test_linear_expression_from_dataset_selects_on_full_coordinates(
     assert_linequal(expr.sel(full), expr)
 
 
-def test_constant_linear_expression_to_polars_2D(m: Model) -> None:
+def test_constant_linear_expression_to_polars_2D(backend: Model) -> None:
+    m = backend
     index_a = pd.Index([0, 1], name="a")
     index_b = pd.Index([0, 1, 2], name="b")
     arr = np.array([[10, 20, 30], [40, 50, 60]])
