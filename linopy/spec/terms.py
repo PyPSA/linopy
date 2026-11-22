@@ -1,5 +1,5 @@
 """
-Term tables: the evaluator of sparse linear declarations.
+Term tables: the evaluator of linear declarations.
 
 A node carrying a variable evaluates to a :class:`Table` instead of a linopy
 expression. A table holds blocks of terms in long format, one entry per term:
@@ -14,10 +14,9 @@ store once, when its declaration is added to the model.
 power of a term, a product of two terms the data leaves standing, a division
 by a term or by zero, infinite data beside a term, a lookup of a term through
 an empty relation, and a variable, data or a relation row off the master
-coordinates. The builder takes every declaration of a sparse model from this
-path and builds one that raises it with
-:func:`linopy.spec.evaluator.evaluate` instead; :func:`eager_only` turns the
-path off.
+coordinates. The builder takes every declaration from this path and builds
+one that raises it with :func:`linopy.spec.evaluator.evaluate` instead;
+:func:`eager_only` turns the path off.
 """
 
 from __future__ import annotations
@@ -65,9 +64,9 @@ def eager_only() -> Iterator[None]:
         _EAGER_ONLY = before
 
 
-def active(ctx: Context) -> bool:
-    """Whether the builder tries this path for the declarations of *ctx*: a sparse model outside :func:`eager_only`."""
-    return ctx.model.sparse and not _EAGER_ONLY
+def active() -> bool:
+    """Whether the builder tries this path: outside :func:`eager_only`."""
+    return not _EAGER_ONLY
 
 
 class Unsupported(Exception):

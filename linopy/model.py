@@ -549,7 +549,8 @@ class Model:
             ``(snapshot, store)``. Pass the same *dim_order* to
             :func:`linopy.spec.evaluate`.
         **model_kwargs
-            Passed to :class:`Model`, such as ``sparse=True``.
+            Passed to :class:`Model`, such as ``solver_dir``. The model is
+            always sparse, ``Model(sparse=True)``.
 
         Returns
         -------
@@ -559,6 +560,8 @@ class Model:
         ------
         ValueError
             If *spec* is a one-line ``str`` ending in ``.yaml`` or ``.yml``.
+        ValueError
+            If *model_kwargs* holds ``sparse=False``.
         linopy.spec.SpecDataError
             If the data does not fit the spec.
         KeyError
@@ -578,7 +581,11 @@ class Model:
         """
         from linopy.spec.api import build_into
 
-        model = cls(**model_kwargs)
+        if not model_kwargs.pop("sparse", True):
+            raise ValueError(
+                "Model.from_spec builds a sparse model only: drop sparse=False."
+            )
+        model = cls(sparse=True, **model_kwargs)
         build_into(model, spec, sources, store, expressions, rename, dim_order)
         return model
 

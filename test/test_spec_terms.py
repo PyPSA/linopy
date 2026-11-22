@@ -6,6 +6,7 @@ not cover a declaration.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from spec_helpers import (  # noqa: E402
     RAGGED_X,
     RAGGED_Y,
     TT,
+    eager,
     needs_examples,
     with_,
     yaml_dict,
@@ -51,7 +53,7 @@ from test_spec_operators import (  # noqa: E402
 )
 
 from linopy import LinearExpression, Model, QuadraticExpression  # noqa: E402
-from linopy.spec import terms  # noqa: E402
+from linopy.spec import SpecDataError, terms  # noqa: E402
 from linopy.testing import (  # noqa: E402
     assert_conequal,
     assert_equivalent,
@@ -77,22 +79,21 @@ def assert_built_alike(spec: Any, data: dict[str, Any]) -> None:
     reads it: the term path spreads a term onto the nonzero entries of a factor
     only, so it holds no term of coefficient zero where the eager path does.
     """
-    with terms.eager_only():
-        eager = Model.from_spec(spec, data, sparse=True)
-    built = Model.from_spec(spec, data, sparse=True)
-    assert list(built.variables) == list(eager.variables)
-    for name in eager.variables:
-        assert_varequal(built.variables[name], eager.variables[name])
-    assert list(built.constraints) == list(eager.constraints)
-    for name in eager.constraints:
-        con = eager.constraints[name]
+    reference = eager(spec, data)
+    built = Model.from_spec(spec, data)
+    assert list(built.variables) == list(reference.variables)
+    for name in reference.variables:
+        assert_varequal(built.variables[name], reference.variables[name])
+    assert list(built.constraints) == list(reference.constraints)
+    for name in reference.constraints:
+        con = reference.constraints[name]
         assert_conequal(built.constraints[name], con, strict=False)
         xr.testing.assert_equal(built.constraints[name].labels, con.labels)
-    assert list(built.expressions) == list(eager.expressions)
-    for name, expression in eager.expressions.items():
+    assert list(built.expressions) == list(reference.expressions)
+    for name, expression in reference.expressions.items():
         assert_alike(built.expressions[name], expression)
-    assert_alike(built.objective.expression, eager.objective.expression)
-    assert built.objective.sense == eager.objective.sense
+    assert_alike(built.objective.expression, reference.objective.expression)
+    assert built.objective.sense == reference.objective.sense
 
 
 @pytest.fixture
@@ -256,7 +257,6 @@ EAGER: dict[str, dict[str, Any]] = {
         objective={"sense": "minimize", "expression": "sum(x * x)"},
     ),
     "a-right-side-over-a-dimension-the-left-lacks": row(["e", "t"], "x <= q * y"),
-    "a-row-of-zero-weights": row(["e", "t"], "q * x <= 1"),
 }
 
 
@@ -265,3 +265,24 @@ def test_a_row_the_term_path_does_not_cover_builds_on_the_eager_path(
     spec: dict[str, Any],
 ) -> None:
     assert_built_alike(spec, DATA)
+
+
+@pytest.mark.parametrize(
+    "expression",
+    ["q * x <= 1", "q * x >= u - 1", "0 * q * x <= 1"],
+    ids=["alone", "beside-a-term", "everywhere"],
+)
+def test_a_row_of_zero_weights_builds_alike_on_both_paths(expression: str) -> None:
+    """The term path drops a zero weight the eager path keeps, which leaves the row constant on one path only."""
+    assert_built_alike(row(["e", "t"], expression), DATA)
+
+
+@pytest.mark.parametrize("build", [Model.from_spec, eager], ids=["terms", "eager"])
+def test_a_row_of_zero_weights_that_does_not_hold_is_refused_on_both_paths(
+    build: Callable[..., Model],
+) -> None:
+    with pytest.raises(
+        SpecDataError,
+        match=r"constraint 'row': 3 row\(s\).*at e='e1', t=1;.*which reads 0 >= 1",
+    ):
+        build(row(["e", "t"], "q * x >= 1"), DATA)
