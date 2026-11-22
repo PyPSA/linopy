@@ -1307,9 +1307,8 @@ def test_matmul_operand_errors_match_multiplication(kind: str) -> None:
     assert str(sparse.value) == str(dense.value)
 
 
-def test_matmul_falls_back_to_dense_on_non_unique_labels() -> None:
-    m = Model()
-    x = m.add_variables(coords=[pd.Index(["a", "a", "b"], name="d")], name="x")
+def test_matmul_falls_back_to_dense_on_non_unique_labels(backend: Model) -> None:
+    x = backend.add_variables(coords=[pd.Index(["a", "a", "b"], name="d")], name="x")
     expr = 1.0 * x
     operand = xr.DataArray(
         np.ones((3, len(LOC))), dims=["d", "loc"], coords={"d": expr.indexes["d"]}

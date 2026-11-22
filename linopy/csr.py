@@ -169,7 +169,7 @@ class Grid:
         """
         strides = self.strides
         positions = {
-            d: self.indexes[d].get_indexer(i)
+            d: _positions(self.indexes[d], i)
             if d in strides
             else np.zeros(len(i), dtype=np.int64)
             for d, i in other.indexes.items()
@@ -1274,6 +1274,13 @@ def _cell_rows(
             for d in dims
         ]
     )
+
+
+def _positions(index: pd.Index, labels: pd.Index) -> np.ndarray:
+    """The position of each of ``labels`` in ``index``, by position where both are equal."""
+    if index.equals(labels):
+        return np.arange(len(labels))
+    return index.get_indexer(labels)
 
 
 def _outer_sum(axis_positions: list[np.ndarray]) -> np.ndarray:
