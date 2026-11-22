@@ -736,8 +736,9 @@ def test_a_case_value_is_refused_where_it_is_read(
         ),
     ],
 )
+@pytest.mark.parametrize("build", [Model.from_spec, eager], ids=["terms", "eager"])
 def test_a_case_that_applies_nowhere_is_not_evaluated(
-    row: str, dims: list[str], case: str, rhs: list[float]
+    row: str, dims: list[str], case: str, rhs: list[float], build: Callable[..., Model]
 ) -> None:
     """No ``b`` is negative, so a window wider than ``t`` is never read, and the case is zero over its dimensions."""
     spec = with_(
@@ -752,7 +753,7 @@ def test_a_case_that_applies_nowhere_is_not_evaluated(
             }
         },
     )
-    built = Model.from_spec(spec, {**INF_AT_0, "s": GROUPS}).constraints["row"]
+    built = build(spec, {**INF_AT_0, "s": GROUPS}).constraints["row"]
     assert built.rhs.values.tolist() == rhs
 
 
@@ -1017,12 +1018,27 @@ def test_a_constraint_is_framed_in_the_name_order_of_its_dims(expression: str) -
     assert m.constraints["k"].lhs.coord_dims == ("g", "t")
 
 
-def without_members(row: str) -> Model:
-    """:data:`SPARSE_SPEC` with a scalar row *row*, built over a ``t`` without members."""
+@pytest.mark.parametrize("expression", ["x * z", "z * x"])
+def test_a_quadratic_expression_is_framed_in_the_name_order_of_its_dims(
+    expression: str,
+) -> None:
+    spec = {
+        "dimensions": {"t": {"dtype": "int"}, "g": {"dtype": "str"}},
+        "variables": {"x": {"dims": ["t"]}, "z": {"dims": ["g"]}},
+        "expressions": {"k": {"dims": ["t", "g"], "expression": expression}},
+    }
+    k = Model.from_spec(spec, {"t": T, "g": ["a", "b"]}).expressions["k"]
+    assert isinstance(k, linopy.QuadraticExpression)
+    assert k.coord_dims == ("g", "t")
+    assert k.data["vars"].dims[:2] == ("g", "t")
+
+
+def without_members(row: str, build: Callable[..., Model] = Model.from_spec) -> Model:
+    """:data:`SPARSE_SPEC` with a scalar row *row*, built with *build* over a ``t`` without members."""
     spec = with_(SPARSE_SPEC, constraints={"budget": {"dims": [], "expression": row}})
     empty = pd.Index([], name="t", dtype=int)
     none = xr.DataArray(np.array([], dtype=float), coords=[empty])
-    return Model.from_spec(spec, {"t": empty, "w": none, "c": none})
+    return build(spec, {"t": empty, "w": none, "c": none})
 
 
 @pytest.mark.parametrize("row", ["sum(x, over=t) >= 5", "sum(x, over=t) == 1"])
@@ -1035,11 +1051,12 @@ def test_a_summed_row_a_dimension_without_members_empties_is_refused_where_it_do
         without_members(row)
 
 
+@pytest.mark.parametrize("build", [Model.from_spec, eager], ids=["terms", "eager"])
 @pytest.mark.parametrize("row", ["sum(x, over=t) <= 0", "sum(x, over=t) == 0"])
 def test_a_summed_row_a_dimension_without_members_empties_is_kept_where_it_holds(
-    row: str,
+    row: str, build: Callable[..., Model]
 ) -> None:
-    budget = without_members(row).constraints["budget"]
+    budget = without_members(row, build).constraints["budget"]
     assert int(budget.labels) != -1
     assert not budget.lhs.has_terms
 

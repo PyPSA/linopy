@@ -33,6 +33,7 @@ from spec_helpers import (  # noqa: E402
     WHERE_DATA,
     WHERE_SPEC,
     curve,
+    eager,
     solved,
     with_,
     yaml_dict,
@@ -266,10 +267,13 @@ def framed(default: tuple[Hashable, ...], order: list[str]) -> tuple[Hashable, .
 @pytest.mark.parametrize(
     "order", [["snapshot"], ["snapshot", "generator"], ["bp", "snapshot", "nowhere"]]
 )
-def test_dim_order_lays_out_every_entry(method: str, order: list[str]) -> None:
+@pytest.mark.parametrize("build", [Model.from_spec, eager], ids=["terms", "eager"])
+def test_dim_order_lays_out_every_entry(
+    method: str, order: list[str], build: Callable[..., Model]
+) -> None:
     spec = curves(method)
-    default = Model.from_spec(spec, CURVE_SOURCES)
-    m = Model.from_spec(spec, CURVE_SOURCES, dim_order=order)
+    default = build(spec, CURVE_SOURCES)
+    m = build(spec, CURVE_SOURCES, dim_order=order)
     for name, variable in default.variables.items():
         assert m.variables[name].labels.dims == framed(variable.labels.dims, order)
     for name, constraint in default.constraints.items():
