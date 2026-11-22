@@ -150,6 +150,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `Model.from_spec(..., sparse=True)` drops a quadratic term the data zeroes, so it no longer densifies the linear terms it meets. ([\#1145](https://github.com/PyPSA/linopy/pull/1145))
 - `Model.from_spec(..., sparse=True)` keeps a relation lookup of a term, such as `at(2 * x, by=...)`, sparse, also one read along its own key. ([\#1145](https://github.com/PyPSA/linopy/pull/1145))
 - `LinearExpression.is_constant` is `True` for every expression without variables, also a sparse one and one whose terms a sum removed. ([\#1152](https://github.com/PyPSA/linopy/pull/1152))
+- A sparse model now matches a dense one in six places: a constant right-hand side raises when its axes are ambiguous, and its auxiliary coordinates are checked and kept; a one-column `DataFrame` grouper keeps its key coordinate; a product over a non-unique index no longer raises; an explicit zero coefficient no longer forces a persistent-solver rebuild; a constant expression keeps its rows in `to_polars`; its quadratic form is constant. ([\#XXXX](https://github.com/PyPSA/linopy/pull/XXXX))
 - `add_piecewise_formulation` no longer raises on a dimension labelled by tuples, e.g. `(period, timestep)` snapshots. ([\#1140](https://github.com/PyPSA/linopy/pull/1140))
 - The repr of a long expression shows the last terms of a `QuadraticExpression` after the `...` and prints the constant once. ([\#1023](https://github.com/PyPSA/linopy/pull/1023))
 
