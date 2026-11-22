@@ -1037,7 +1037,8 @@ class BaseExpression(ABC):
     @property
     def is_constant(self) -> bool:
         """True if the expression contains no variables."""
-        return self.data.sizes[TERM_DIM] == 0
+        vars_ = self.data.vars.values
+        return not self.data.sizes[TERM_DIM] or bool(vars_.size and vars_.max() < 0)
 
     def print(self, display_max_rows: int = 20, display_max_terms: int = 20) -> None:
         """

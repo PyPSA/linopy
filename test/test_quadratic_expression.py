@@ -320,8 +320,8 @@ def test_quadratic_expression_linear_terms(
     assert sorted(zip(labels.tolist(), coeffs.tolist())) == [(0, 3.0), (1, 3.0)]
 
 
-def test_quadratic_expression_constant_to_polars() -> None:
-    m = Model()
+def test_quadratic_expression_constant_to_polars(backend: Model) -> None:
+    m = backend
     arr = pd.Series(index=pd.Index([0, 1], name="t"), data=[10, 20])
     lin_expr = LinearExpression.from_constant(model=m, constant=arr)
     quad_expr = lin_expr.to_quadexpr()
