@@ -629,7 +629,8 @@ class CSRStore(Store):
                 return _positional_csr(data, cols, indptr, len(indptr) - 1, n_cols)
         rows = self.csr if active_rows.all() else self.csr[active_rows]
         if not rows.data.all():
-            rows = rows.copy()
+            if rows is self.csr:
+                rows = rows.copy()
             rows.eliminate_zeros()
         positional = _csr_from_label_columns(
             rows.data, rows.indices, rows.indptr, rows.shape[0], label_index, name
