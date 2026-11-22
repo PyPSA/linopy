@@ -213,7 +213,7 @@ def _zeros(
 
 def constant_term(model: Model, constant: xr.DataArray) -> LinearExpression:
     """
-    *constant* as a term of *model* without a variable, on the model's store.
+    *constant* as a term of the sparse *model* without a variable, on the model's store.
 
     It is laid out the way a term is, so nothing is aligned, which makes it
     cheaper than :meth:`~linopy.expressions.LinearExpression.from_constant`.
@@ -225,8 +225,6 @@ def constant_term(model: Model, constant: xr.DataArray) -> LinearExpression:
         coeffs=(dims, slots), vars=(dims, labels)
     )
     term = LinearExpression(data, model)
-    if not model.sparse:
-        return term
     store = term._store.to_sparse()
     return term if isinstance(store, str) else term._from_store(store, model)
 
