@@ -13,7 +13,6 @@ order :meth:`~linopy.spec.context.Context.frame` gives its dims: the dims
 from __future__ import annotations
 
 import operator
-import warnings
 from collections.abc import Callable
 from dataclasses import replace
 from typing import cast
@@ -22,7 +21,9 @@ import numpy as np
 import xarray as xr
 from mathspec import program as ms
 
+from linopy.common import maybe_replace_sign
 from linopy.constants import FACTOR_DIM, TERM_DIM
+from linopy.constraints import Constraint
 from linopy.expressions import LinearExpression, QuadraticExpression
 from linopy.spec import terms
 from linopy.spec.context import Context, Term, Value, as_expression, is_empty
@@ -40,6 +41,11 @@ from linopy.spec.where import admits_a_row, as_linopy_mask, evaluate_where
 from linopy.variables import Variable
 
 _FLIPPED: dict[str, ms.ConstraintSense] = {"==": "==", "<=": ">=", ">=": "<="}
+_COMPARED: dict[str, Callable[[xr.DataArray, xr.DataArray], xr.DataArray]] = {
+    "==": operator.eq,
+    "<=": operator.le,
+    ">=": operator.ge,
+}
 _SENSE = {"minimize": "min", "maximize": "max"}
 
 
@@ -162,13 +168,13 @@ def _constraints(ctx: Context) -> None:
                 mask=mask,
             )
             continue
-        term, dead = _left(name, lhs, scoped, row.dims, rows)
+        term = cast(Term, _linear(name, _built(lhs, scoped, row.dims), rows))
         other = _linear(name, _built(rhs, scoped, row.dims), rows)
         if any(term.sizes[d] == 0 for d in term.coord_dims):
             continue
-        _check_live(name, row, term, other, dead, ctx)
-        sides = [term, other] if isinstance(other, Term) else [term]
-        if all(as_expression(side).is_constant for side in sides):
+        constant, holds = _constant_rows(term, other, rows)
+        _refuse_violated(name, (term, sense, other), constant)
+        if not (holds or bool(constant.any())):
             continue
         if isinstance(other, xr.DataArray):
             const = constant_of(term)
@@ -176,13 +182,13 @@ def _constraints(ctx: Context) -> None:
                 "comparison", (row.lhs, row.rhs), operator.sub, const, other, scoped
             )
             term, other = carried(term, other)
-        ctx.model.add_constraints(
-            _framed(term, row.dims, ctx),
-            sense,
-            other,
-            name=ctx.rename(name),
-            mask=mask,
-        )
+        framed = cast(LinearExpression, _framed(term, row.dims, ctx))
+        renamed = ctx.rename(name)
+        if holds:
+            ctx.model.add_constraints(framed, sense, other, name=renamed, mask=mask)
+        else:
+            constant_rows = _constant(framed, sense, other)
+            ctx.model.add_constraints(constant_rows, name=renamed, mask=mask)
 
 
 def _from_terms(
@@ -209,32 +215,6 @@ def _built(node: ms.Expression, ctx: Context, dims: tuple[str, ...]) -> Value:
     return evaluate(node, ctx) if made is None else made
 
 
-def _left(
-    name: str,
-    node: ms.Expression,
-    ctx: Context,
-    dims: tuple[str, ...],
-    rows: xr.DataArray,
-) -> tuple[Term, xr.DataArray | None]:
-    """
-    The left side of constraint *name* and the rows :func:`_emptied` finds of
-    it, ``None`` for a bare variable, which holds a term wherever it exists.
-
-    The term path drops the zero terms the eager path keeps, so where that
-    leaves a row *rows* keeps without a term, the eager path builds the side
-    for :func:`_check_live` to judge the row as it does there.
-    """
-    made = _from_terms(lambda: terms.linear(node, ctx, dims), ctx)
-    if made is not None:
-        dead = _emptied(made, rows)
-        if not bool(dead.any()):
-            return made, dead
-    term = cast(Term, _linear(name, evaluate(node, ctx), rows))
-    if isinstance(term, Variable):
-        return term, None
-    return term, _emptied(cast(LinearExpression, term), rows)
-
-
 def _difference(
     lhs: ms.Expression,
     rhs: ms.Expression,
@@ -244,8 +224,8 @@ def _difference(
 ) -> LinearExpression | None:
     """
     *lhs* minus *rhs* from the term path, where *lhs* is a bare variable and
-    *rhs* carries one: what linopy's subtraction of the two sides gives, for
-    which :func:`_check_live` passes and neither side is constant. ``None``
+    *rhs* carries one: what linopy's subtraction of the two sides gives, which
+    holds a term on every row and neither side of which is constant. ``None``
     where that is not known beforehand, for the two sides to be built apart.
     """
     if not (isinstance(lhs, ms.VariableReference) and ms.carries_variable(rhs)):
@@ -286,68 +266,89 @@ def _linear(name: str, side: Value, rows: xr.DataArray) -> Value:
     return LinearExpression(side.data.assign(vars=vars), side.model)
 
 
-def _check_live(
+def _held(value: Value) -> xr.DataArray:
+    """Where *value* holds a variable term of nonzero coefficient; a bare variable wherever it is not masked."""
+    if isinstance(value, Variable):
+        return value.labels != -1
+    if isinstance(value, LinearExpression):
+        store = value._store.prune()
+        return store.dataarray(store.has_terms(), "held")
+    return xr.DataArray(False)
+
+
+def _constant_rows(
+    term: Term, other: Value, rows: xr.DataArray
+) -> tuple[xr.DataArray, bool]:
+    """
+    The rows *rows* keeps that *term* and *other* leave present and without a
+    variable term, and whether either holds a variable term on any row.
+    """
+    held = _held(term)
+    if bool(held.all()):
+        return xr.DataArray(False), True
+    held = held | _held(other)
+    constant = rows & ~held & ~_absent(term) & ~_absent(other)
+    return constant, bool(held.any())
+
+
+def _absent(value: Value) -> xr.DataArray:
+    """Where *value* is absent: a hole in its constant, or a masked bare variable."""
+    if isinstance(value, Variable):
+        return value.labels == -1
+    return constant_of(value).isnull()
+
+
+def _refuse_violated(
     name: str,
-    declared: ms.Constraint,
-    term: Term,
-    other: Value,
-    dead: xr.DataArray | None,
-    ctx: Context,
+    row: tuple[Term, ms.ConstraintSense, Value],
+    constant: xr.DataArray,
 ) -> None:
     """
-    Refuse a row the data emptied of every variable term, one *dead* names.
+    Refuse a row of constraint *name* that holds no variable term once the
+    data is attached, where it does not hold.
 
-    Such a row reads as ``0 sense rhs``: linopy carries no column there, the
-    row leaves the problem and the constraint silently stops binding. Where
-    every variable of the row declares a ``missing:`` number, the constant
-    left is what the math says, so a row whose two sides are equal there is
-    warned about rather than refused.
-    An absent row is not emptied: absence spread through arithmetic, a masked
-    variable or a vacated translation, takes the row with it. A bare variable
-    term is never emptied: a row of it exists exactly where the variable does.
+    *row* is the left side, the sense and the right side, and *constant* the
+    rows they leave present and without a term: each is the constant row
+    ``lhs sense rhs``. linopy keeps such a row, so the solver reads one that
+    holds as no restriction and one that does not as an infeasible model; the
+    build keeps the first and refuses the second. An absent row is not
+    constant: absence spread through arithmetic, a masked variable or a
+    vacated translation, takes the row with it.
     """
-    if dead is None or not bool(dead.any()):
+    if not bool(constant.any()):
         return
-    said = (
-        f"constraint '{name}': {int(dead.sum())} row(s) hold no variable term once the data "
-        f"is attached, the first at {first_coordinates(dead, 3)}. Nothing is left to constrain there, so "
-        f"the row leaves the problem without saying so."
-    )
-    valued = all(
-        ctx.program.variables[v].missing != "absent"
-        for v in ms.variables_of(declared.lhs, declared.rhs)
-    )
-    if valued and not _binds(other, constant_of(term), dead):
-        warnings.warn(
-            f"{said} Every variable there takes its missing: number and the two sides "
-            f"are equal, so the row is trivially true.",
-            UserWarning,
-            stacklevel=2,
-        )
+    term, sense, other = row
+    left, right = constant_of(term), constant_of(other)
+    violated = constant & ~_COMPARED[sense](left, right)
+    if not bool(violated.any()):
         return
-    supply = (
-        "  Supply the rows of the variables, if the row is meant to bind."
-        if valued
-        else "  Declare missing: 0 on the variables, if an absent term is a zero there."
+    first = np.unravel_index(int(np.argmax(violated.values)), violated.shape)
+    lhs, rhs = (
+        float(side.broadcast_like(violated).transpose(*violated.dims).values[first])
+        for side in (left, right)
     )
     raise SpecDataError(
-        f"{said}\n"
-        f"  Mask them out with a where on the constraint, if the row should not exist there.\n"
-        f"{supply}"
+        f"constraint '{name}': {int(violated.sum())} row(s) hold no variable term once "
+        f"the data is attached and do not hold, the first at "
+        f"{first_coordinates(violated, 3)}, which reads {lhs:g} {sense} {rhs:g}. "
+        f"linopy keeps such a row, so the model is infeasible.\n"
+        f"  Mask the rows out with a where on the constraint, if they should not "
+        f"exist, or supply the data that gives them a variable term."
     )
 
 
-def _emptied(term: LinearExpression, rows: xr.DataArray) -> xr.DataArray:
-    """The rows *rows* keeps where *term* is present and holds no variable term."""
-    store = term._store
-    alive = store.dataarray(store.has_terms() | np.isnan(store.const), "alive")
-    return rows & ~alive
-
-
-def _binds(other: Value, const: xr.DataArray, dead: xr.DataArray) -> bool:
-    """Whether the side without the variable term differs from the constant *const* left on a row *dead* names."""
-    differs = xr.DataArray(other) != const
-    return bool((differs & dead).any())
+def _constant(
+    lhs: LinearExpression, sense: ms.ConstraintSense, rhs: Value
+) -> Constraint:
+    """
+    The constraint *lhs* *sense* *rhs* of two sides without a variable term,
+    which :meth:`LinearExpression.to_constraint` refuses: its rows are kept as
+    linopy keeps any row without a term.
+    """
+    moved = cast(LinearExpression, lhs - rhs)
+    return Constraint(
+        moved.reset_const(), maybe_replace_sign(sense), -moved.const, lhs.model
+    )
 
 
 def _objective(ctx: Context) -> None:

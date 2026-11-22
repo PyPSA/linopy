@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import glob
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -357,9 +358,16 @@ def test_an_absent_row_masks_the_row_it_reaches(
 
 
 def test_a_row_of_nothing_but_an_absent_window_is_refused_like_sum() -> None:
-    spec = absent_row("sum_back(a * x, along=t, window=2) <= 4")
-    with pytest.raises(SpecDataError, match="1 row.*hold no variable term.*at t=0"):
+    spec = absent_row("sum_back(a * x, along=t, window=2) >= 4")
+    with pytest.raises(SpecDataError, match="1 row.*do not hold.*at t=0.*0 >= 4"):
         Model.from_spec(spec, ABSENT_DATA)
+
+
+def test_a_row_of_nothing_but_an_absent_window_is_kept_where_it_holds() -> None:
+    spec = absent_row("sum_back(a * x, along=t, window=2) <= 4")
+    row = Model.from_spec(spec, ABSENT_DATA).constraints["row"]
+    assert (row.labels != -1).values.tolist() == [True, True, True]
+    assert row.lhs.has_terms.values.tolist() == [False, True, True]
 
 
 def test_an_absent_summand_is_dropped() -> None:
@@ -566,12 +574,24 @@ def test_an_edge_value_stands_in_for_the_vacated_row() -> None:
     assert float(first.rhs) == 0.0
 
 
-def test_a_row_the_data_emptied_of_variables_is_refused() -> None:
-    """A zero absence leaves ``0 <= relmax`` standing, which linopy cannot carry and a solver would never see."""
+@pytest.mark.parametrize(
+    ("missing", "expression", "reads"),
+    [
+        (0, "size >= relmax", "0 >= 0.5"),
+        (0, "relmax <= size", "0 >= 0.5"),
+        (5, "size <= relmax", "5 <= 0.5"),
+        (0, "size == relmax", "0 == 0.5"),
+    ],
+)
+def test_a_row_the_data_empties_of_variables_is_refused_where_it_does_not_hold(
+    missing: float, expression: str, reads: str
+) -> None:
+    """A missing value leaves a constant row standing, which makes the model infeasible."""
     with pytest.raises(
-        SpecDataError, match=r"(?s)constraint 'sized'.*Supply the rows of the variables"
+        SpecDataError,
+        match=rf"(?s)constraint 'sized': 1 row.*at f='b', which reads {reads}",
     ):
-        Model.from_spec(sized(0, "size <= relmax"), ENVELOPE_DATA)
+        Model.from_spec(sized(missing, expression), ENVELOPE_DATA)
 
 
 def quotient(expression: str, where: str | None = None) -> dict[str, Any]:
@@ -909,15 +929,25 @@ def test_a_where_guards_a_reader_along_the_axes_it_does_not_move(
 
 
 @pytest.mark.parametrize(
-    ("missing", "expression"), [(0, "size >= 0"), (5, "size >= 5")]
+    ("missing", "expression"),
+    [(0, "size >= 0"), (5, "size >= 5"), (0, "size <= relmax")],
 )
-def test_a_dead_row_of_missing_values_whose_sides_are_equal_is_only_warned_about(
+def test_a_row_the_data_empties_of_variables_is_kept_where_it_holds(
     missing: float, expression: str
 ) -> None:
-    with pytest.warns(UserWarning, match=r"constraint 'sized'.*trivially true"):
-        m = solved(sized(missing, expression), ENVELOPE_DATA)
+    m = solved(sized(missing, expression), ENVELOPE_DATA)
     assert m.termination_condition == "optimal"
-    assert (m.constraints["sized"].vars.sel(f="b") == -1).all()
+    sized_row = m.constraints["sized"]
+    assert (sized_row.labels != -1).values.tolist() == [True, True]
+    assert sized_row.lhs.has_terms.values.tolist() == [True, False]
+
+
+@pytest.mark.parametrize("build", [Model.from_spec, eager], ids=["terms", "eager"])
+def test_a_row_a_masked_variable_leaves_is_absent_and_not_refused(
+    build: Callable[..., Model],
+) -> None:
+    sized_row = build(sized("absent", "size >= 5"), ENVELOPE_DATA).constraints["sized"]
+    assert (sized_row.labels != -1).values.tolist() == [True, False]
 
 
 def test_a_coefficient_needs_no_row_where_its_variable_is_absent() -> None:
@@ -987,15 +1017,31 @@ def test_a_constraint_is_framed_in_the_name_order_of_its_dims(expression: str) -
     assert m.constraints["k"].lhs.coord_dims == ("g", "t")
 
 
-@pytest.mark.parametrize("row", ["sum(x, over=t) >= 5", "sum(x, over=t) <= 0"])
-def test_a_dimension_with_no_members_empties_a_summed_row(row: str) -> None:
+def without_members(row: str) -> Model:
+    """:data:`SPARSE_SPEC` with a scalar row *row*, built over a ``t`` without members."""
     spec = with_(SPARSE_SPEC, constraints={"budget": {"dims": [], "expression": row}})
     empty = pd.Index([], name="t", dtype=int)
     none = xr.DataArray(np.array([], dtype=float), coords=[empty])
+    return Model.from_spec(spec, {"t": empty, "w": none, "c": none})
+
+
+@pytest.mark.parametrize("row", ["sum(x, over=t) >= 5", "sum(x, over=t) == 1"])
+def test_a_summed_row_a_dimension_without_members_empties_is_refused_where_it_does_not_hold(
+    row: str,
+) -> None:
     with pytest.raises(
-        SpecDataError, match="constraint 'budget'.*hold no variable term"
+        SpecDataError, match="constraint 'budget'.*do not hold.*the only row"
     ):
-        Model.from_spec(spec, {"t": empty, "w": none, "c": none})
+        without_members(row)
+
+
+@pytest.mark.parametrize("row", ["sum(x, over=t) <= 0", "sum(x, over=t) == 0"])
+def test_a_summed_row_a_dimension_without_members_empties_is_kept_where_it_holds(
+    row: str,
+) -> None:
+    budget = without_members(row).constraints["budget"]
+    assert int(budget.labels) != -1
+    assert not budget.lhs.has_terms
 
 
 @pytest.mark.parametrize(("missing", "kept"), [("absent", False), (0, True)])

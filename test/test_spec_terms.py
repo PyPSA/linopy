@@ -6,6 +6,7 @@ not cover a declaration.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +53,7 @@ from test_spec_operators import (  # noqa: E402
 )
 
 from linopy import LinearExpression, Model, QuadraticExpression  # noqa: E402
-from linopy.spec import terms  # noqa: E402
+from linopy.spec import SpecDataError, terms  # noqa: E402
 from linopy.testing import (  # noqa: E402
     assert_conequal,
     assert_equivalent,
@@ -256,7 +257,6 @@ EAGER: dict[str, dict[str, Any]] = {
         objective={"sense": "minimize", "expression": "sum(x * x)"},
     ),
     "a-right-side-over-a-dimension-the-left-lacks": row(["e", "t"], "x <= q * y"),
-    "a-row-of-zero-weights": row(["e", "t"], "q * x <= 1"),
 }
 
 
@@ -265,3 +265,24 @@ def test_a_row_the_term_path_does_not_cover_builds_on_the_eager_path(
     spec: dict[str, Any],
 ) -> None:
     assert_built_alike(spec, DATA)
+
+
+@pytest.mark.parametrize(
+    "expression",
+    ["q * x <= 1", "q * x >= u - 1", "0 * q * x <= 1"],
+    ids=["alone", "beside-a-term", "everywhere"],
+)
+def test_a_row_of_zero_weights_builds_alike_on_both_paths(expression: str) -> None:
+    """The term path drops a zero weight the eager path keeps, which leaves the row constant on one path only."""
+    assert_built_alike(row(["e", "t"], expression), DATA)
+
+
+@pytest.mark.parametrize("build", [Model.from_spec, eager], ids=["terms", "eager"])
+def test_a_row_of_zero_weights_that_does_not_hold_is_refused_on_both_paths(
+    build: Callable[..., Model],
+) -> None:
+    with pytest.raises(
+        SpecDataError,
+        match=r"constraint 'row': 3 row\(s\).*at e='e1', t=1;.*which reads 0 >= 1",
+    ):
+        build(row(["e", "t"], "q * x >= 1"), DATA)
