@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import polars as pl
 from xarray import DataArray
@@ -103,6 +104,74 @@ def _check_frame(frame: Frame) -> None:
         )
 
 
+def _lookup(index: pd.Index, column: Column) -> pl.Series:
+    """
+    The positions of the values of ``column`` in the unique ``index``, null
+    where a value is not in ``index``. ``column`` has no null values and the
+    dtype family of ``index``.
+    """
+    if isinstance(column, pd.Series):
+        pos = pl.Series(index.get_indexer(column))
+        return pos.set(pos == -1, None)
+    if (
+        isinstance(index, pd.RangeIndex)
+        and index.step == 1
+        and column.dtype.is_integer()
+    ):
+        pos = column.cast(pl.Int64, strict=False) - index.start
+        return pos.set((pos < 0) | (pos >= len(index)), None)
+    lookup = _as_polars(index)
+    key = column.cast(lookup.dtype, strict=False)
+    if lookup.dtype != column.dtype:
+        key = key.set(key.cast(column.dtype, strict=False).ne_missing(column), None)
+    table = pl.DataFrame({"key": lookup, "pos": np.arange(len(index))})
+    joined = key.to_frame("key").join(
+        table, on="key", how="left", maintain_order="left"
+    )
+    return joined["pos"]
+
+
+def _same_family(index: pd.Index, column: Column) -> bool:
+    """Whether ``column`` has the dtype family of ``index``, an empty one has any."""
+    return not len(column) or _family(column) == _family(index)
+
+
+def _strays(column: Column, pos: pl.Series) -> list[Any]:
+    """The distinct values of ``column`` without a position, in order of appearance."""
+    if not pos.null_count():
+        return []
+    missing = pos.is_null()
+    if isinstance(column, pl.Series):
+        return column.filter(missing).unique(maintain_order=True).to_list()
+    return column[missing.to_numpy()].unique().tolist()
+
+
+def _ravel(positions: Sequence[pl.Series], shape: Sequence[int]) -> pl.Series:
+    """The flat positions in a C-ordered array of ``shape`` of the per-axis ``positions``."""
+    flat = pl.Series(np.zeros(len(positions[0]), dtype=np.int64))
+    for pos, n in zip(positions, shape):
+        flat = flat * n + pos.cast(pl.Int64)
+    return flat
+
+
+def _grid(
+    flat: pl.Series, values: np.ndarray, size: int, fill: Any, dtype: npt.DTypeLike
+) -> np.ndarray:
+    """
+    A new flat array of ``size`` holding ``values`` at the unique positions
+    ``flat`` and ``fill`` elsewhere, of ``dtype`` if ``flat`` leaves a cell to
+    fill and of the dtype of ``values`` otherwise.
+    """
+    if len(flat) < size:
+        out = np.full(size, fill, dtype)
+    elif flat.is_sorted():
+        return values.copy()
+    else:
+        out = np.empty(size, values.dtype)
+    out[flat.to_numpy()] = values
+    return out
+
+
 def _positions(index: pd.Index, column: Column) -> pl.Series:
     """
     The positions of the values of ``column`` in ``index``. Raises for null
@@ -115,37 +184,14 @@ def _positions(index: pd.Index, column: Column) -> pl.Series:
         )
     if _has_nulls(column):
         raise ValueError(f"Column {column.name!r} has null values.")
-    if _family(column) != _family(index):
+    if not _same_family(index, column):
         raise TypeError(
             f"Column {column.name!r} of dtype {column.dtype} does not match "
             f"the coordinates of dimension {index.name!r} of dtype {index.dtype}."
         )
-    if isinstance(column, pd.Series):
-        pos = pl.Series(index.get_indexer(column))
-        pos = pos.set(pos == -1, None)
-    elif (
-        isinstance(index, pd.RangeIndex)
-        and index.step == 1
-        and column.dtype.is_integer()
-    ):
-        pos = column.cast(pl.Int64, strict=False) - index.start
-        pos = pos.set((pos < 0) | (pos >= len(index)), None)
-    else:
-        lookup = _as_polars(index)
-        key = column.cast(lookup.dtype, strict=False)
-        if lookup.dtype != column.dtype:
-            key = key.set(key.cast(column.dtype, strict=False).ne_missing(column), None)
-        table = pl.DataFrame({"key": lookup, "pos": np.arange(len(index))})
-        pos = key.to_frame("key").join(
-            table, on="key", how="left", maintain_order="left"
-        )["pos"]
-    if pos.null_count():
-        missing = pos.is_null()
-        outside = (
-            column.filter(missing).unique(maintain_order=True).to_list()
-            if isinstance(column, pl.Series)
-            else column[missing.to_numpy()].unique().tolist()
-        )
+    pos = _lookup(index, column)
+    outside = _strays(column, pos)
+    if outside:
         raise ValueError(
             f"Values {outside[:5]} of column {column.name!r} are "
             f"not in the coordinates of dimension {index.name!r}."
@@ -173,12 +219,10 @@ def _flat(
         raise ValueError(
             f"Coords lack the dimensions {absent} of columns {list(keys)}."
         )
-    flat = pl.Series(np.zeros(frame.shape[0], dtype=np.int64))
-    for k in keys:
-        flat = flat * len(target[k]) + _positions(target[k], frame[k])
+    shape = [len(target[k]) for k in keys]
+    flat = _ravel([_positions(target[k], frame[k]) for k in keys], shape)
     if flat.n_unique() != len(flat):
         raise ValueError(f"Frame has duplicate keys over {list(keys)}{duplicate_hint}.")
-    shape = [len(target[k]) for k in keys]
     size = int(np.prod(shape))
     if strict and len(flat) < size:
         missing = np.ones(size, dtype=bool)
@@ -292,12 +336,8 @@ def from_long(
         strict=default is None,
         hint="; pass `default=` to fill them",
     )
-    data = frame[value].to_numpy().astype(float)
-    if len(flat) == size and flat.is_sorted():
-        out = data
-    else:
-        out = np.full(size, default, dtype=float)
-        out[flat.to_numpy()] = data
+    data = frame[value].to_numpy().astype(float, copy=False)
+    out = _grid(flat, data, size, default, float)
     return DataArray(
         out.reshape(shape), coords=[target[k] for k in keys], dims=keys, name=value
     )
