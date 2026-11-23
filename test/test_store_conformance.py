@@ -237,6 +237,9 @@ CASES: dict[str, Case] = {
     "reindex-off-grid": Case(
         grid, lambda e: e.reindex(c=C), "reindex(indexers off the grid)"
     ),
+    "reindex-non-unique": Case(
+        grid, lambda e: e.reindex(a=[0, 0, 1]), "reindex(non-unique index)"
+    ),
     "rename-dim": Case(grid, lambda e: e.rename(a="d"), KEPT),
     "rename-aux": Case(grid, lambda e: e.rename(tag="label"), RENAME),
     "rename-const": Case(grid, lambda e: e.rename(const="k"), RENAME),
@@ -394,7 +397,7 @@ CASES: dict[str, Case] = {
     "to-constraint-rhs-unlabelled-off-grid": Case(
         grid,
         lambda e: e.to_constraint("<=", xr.DataArray([1.0, 2.0], dims="c")),
-        "to_constraint(rhs over dimensions outside the grid)",
+        KEPT,
     ),
     "groupby-series": Case(grid, lambda e: e.groupby(SERIES).sum(), KEPT),
     "groupby-dataframe": Case(grid, lambda e: e.groupby(FRAME).sum(), KEPT),

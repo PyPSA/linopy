@@ -66,6 +66,7 @@ from linopy.store import (
     Reason,
     Store,
     merged_grid,
+    on_cells,
 )
 
 if TYPE_CHECKING:
@@ -168,7 +169,7 @@ class Grid:
         """
         strides = self.strides
         positions = {
-            d: self.indexes[d].get_indexer(i)
+            d: _positions(self.indexes[d], i)
             if d in strides
             else np.zeros(len(i), dtype=np.int64)
             for d, i in other.indexes.items()
@@ -355,7 +356,7 @@ class CSRStore(Store):
         scatter_codes: dict[str, np.ndarray] = {}
         indexes: dict[str, pd.Index] = {}
         aux: AuxCoords = {}
-        if len(keys) == 1:
+        if isinstance(grouper, pd.Series):
             codes, uniques = pd.factorize(frame.iloc[:, 0], sort=True)
             scatter_codes[group_dim] = codes
             indexes[group_dim] = pd.Index(uniques, name=group_dim)
@@ -603,8 +604,9 @@ class CSRStore(Store):
     ) -> scipy.sparse.csr_array:
         """
         The stored rows at ``active_rows`` with label columns replaced by
-        dense positions, ``data`` and ``indptr`` the stored arrays where all
-        rows are active. The result arrays are cached by weak reference,
+        dense positions and explicit zeros dropped, ``data`` and ``indptr``
+        the stored arrays where all rows are active and no coefficient is
+        zero. The result arrays are cached by weak reference,
         keyed on ``label_index.label_to_pos``, which is rebuilt whenever
         variables are added or removed, and on ``active_rows``: while a
         caller such as a ``ModelSnapshot`` holds them, repeated calls return
@@ -626,6 +628,10 @@ class CSRStore(Store):
             ):
                 return _positional_csr(data, cols, indptr, len(indptr) - 1, n_cols)
         rows = self.csr if active_rows.all() else self.csr[active_rows]
+        if not rows.data.all():
+            if rows is self.csr:
+                rows = rows.copy()
+            rows.eliminate_zeros()
         positional = _csr_from_label_columns(
             rows.data, rows.indices, rows.indptr, rows.shape[0], label_index, name
         )
@@ -720,6 +726,18 @@ class CSRStore(Store):
             factor = factor.broadcast_like(const).transpose(*dims)
             store = store._scaled_terms(factor.to_numpy().reshape(-1), op)
         return store.assign_const(const.to_numpy().reshape(-1)).with_grid(grid)
+
+    def on_cells(self, value: Any) -> float | np.ndarray | None:
+        return on_cells(value, self.grid.dims, self.grid.to_dataset())
+
+    def moved(self, rhs: float | np.ndarray) -> tuple[CSRStore, DataArray]:
+        store = self.absorbed()
+        const = store.const.reshape(self.grid.shape)
+        with np.errstate(all="ignore"):
+            moved = rhs - const
+        check_arithmetic_nan(moved, operator.sub, rhs, const)
+        zero = np.broadcast_to(0.0, store.n_cells)
+        return store.assign_const(zero), self.grid.dataarray(moved)
 
     def absorbed(self, report: bool = False) -> CSRStore:
         """
@@ -1261,6 +1279,13 @@ def _cell_rows(
             for d in dims
         ]
     )
+
+
+def _positions(index: pd.Index, labels: pd.Index) -> np.ndarray:
+    """The position of each of ``labels`` in ``index``, by position where both are equal."""
+    if index.equals(labels):
+        return np.arange(len(labels))
+    return index.get_indexer(labels)
 
 
 def _outer_sum(axis_positions: list[np.ndarray]) -> np.ndarray:
