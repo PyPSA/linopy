@@ -218,6 +218,9 @@ DAY = pl.Series([dt.date(2030, 1, 1)])
 DAYS = pd.Index([dt.date(2030, 1, 1), dt.date(2030, 1, 2)], name="k", dtype=object)
 DATE_STRINGS = pd.Index(["2030-01-01", "2030-01-02"], name="k")
 MS = pl.Series([dt.datetime(2030, 1, 1)], dtype=pl.Datetime("ms"))
+US = pl.Series([dt.datetime(2030, 1, 2)], dtype=pl.Datetime("us"))
+NS = pd.date_range("2030-01-01", periods=2, name="k", unit="ns")
+SUB_US = pd.Series(NS[[1]] + pd.Timedelta(1, "ns"))
 NOT_IN = (ValueError, "not in the coordinates")
 NO_MATCH = (TypeError, "does not match")
 
@@ -245,6 +248,11 @@ KEY_DTYPES: dict[str, tuple[Column, pd.Index, list[float] | tuple[type, str]]] =
     "date-string-pandas": (pd.Series(DAY.to_list()), DATE_STRINGS, NO_MATCH),
     "ms-sub-ms": (MS, SUB_MS, [np.nan, 1]),
     "ms-us": (MS, MIDNIGHT, [1, np.nan]),
+    "us-ns": (US, NS, [np.nan, 1]),
+    "us-ns-pandas": (US.to_pandas(), NS, [np.nan, 1]),
+    "ns-us": (pl.Series(NS[[1]]), MIDNIGHT.as_unit("us"), [np.nan, 1]),
+    "sub-us-us": (pl.from_pandas(SUB_US), MIDNIGHT.as_unit("us"), NOT_IN),
+    "sub-us-us-pandas": (SUB_US, MIDNIGHT.as_unit("us"), NOT_IN),
     "tz": (MS.dt.replace_time_zone("Europe/Berlin"), BERLIN, [1, np.nan]),
     "tz-pandas": (pd.Series(BERLIN[[1]]), BERLIN, [np.nan, 1]),
     "tz-naive": (MS.dt.replace_time_zone("UTC"), MIDNIGHT, NO_MATCH),
