@@ -11,6 +11,7 @@ import os
 import re
 import warnings
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
@@ -2154,7 +2155,9 @@ class Model:
             Existing environment passed to the solver (e.g. `gurobipy.Env`).
             Currently only in use for Gurobi. The default is None.
         sanitize_infinities : bool, optional
-            Whether to filter out constraints that are subject to `<= inf` or `>= -inf`.
+            Whether to leave constraint rows subject to `<= inf` or `>= -inf`
+            out of this solve. Their labels are kept, so the model is
+            unchanged afterwards, and their dual is NaN.
         slice_size : int, optional
             Size of the slice to use for writing the lp file. The slice size
             is used to split large variables and constraints into smaller
@@ -2283,10 +2286,12 @@ class Model:
             else:
                 solution_fn = self.get_solution_file()
 
-        with sos_reformulation_context(self, solver_name, reformulate_sos):
-            if sanitize_infinities:
-                self.constraints.sanitize_infinities()
-
+        with (
+            sos_reformulation_context(self, solver_name, reformulate_sos),
+            self.constraints.infinities_masked()
+            if sanitize_infinities
+            else nullcontext(),
+        ):
             try:
                 self.solver = None  # closes any previous solver
                 if io_api == "direct":
@@ -2628,18 +2633,20 @@ class Model:
         # reset result
         self.reset_solution()
 
-        if sanitize_infinities:
-            self.constraints.sanitize_infinities()
+        with (
+            self.constraints.infinities_masked()
+            if sanitize_infinities
+            else nullcontext()
+        ):
+            self.objective._value = 0.0
+            self.status = "ok"
+            self.termination_condition = TerminationCondition.optimal.value
 
-        self.objective._value = 0.0
-        self.status = "ok"
-        self.termination_condition = TerminationCondition.optimal.value
+            for name, var in self.variables.items():
+                var.solution = xr.DataArray(0.0, var.coords)
 
-        for name, var in self.variables.items():
-            var.solution = xr.DataArray(0.0, var.coords)
-
-        for name, con in self.constraints.items():
-            con.dual = xr.DataArray(0.0, con.labels.coords)
+            for name, con in self.constraints.items():
+                con.dual = xr.DataArray(0.0, con.labels.coords)
 
         return "ok", "none"
 

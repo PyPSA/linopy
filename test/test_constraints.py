@@ -416,6 +416,63 @@ def test_matrices_before_solve_with_infinite_rhs(io_api: str) -> None:
     np.testing.assert_allclose(m.constraints["up"].dual.values[1], 0)
 
 
+def test_infinities_masked_restores_labels() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, coords=[range(3)], name="x")
+    up = m.add_constraints(x <= np.array([np.inf, 5.0, np.inf]), name="up")
+    m.add_constraints(x >= 1, name="lo")
+
+    assert m.constraints.label_index.n_active_cons == 6
+    with pytest.raises(RuntimeError, match="boom"):
+        with m.constraints.infinities_masked():
+            np.testing.assert_array_equal(up.labels, [-1, 1, -1])
+            assert m.constraints.label_index.n_active_cons == 4
+            raise RuntimeError("boom")
+
+    np.testing.assert_array_equal(up.labels, [0, 1, 2])
+    np.testing.assert_array_equal(m.constraints.label_index.clabels, [0, 1, 2, 3, 4, 5])
+
+
+def _model_with_infinite_row() -> tuple[Model, Any]:
+    m = Model()
+    x = m.add_variables(lower=0, upper=10, coords=[range(3)], name="x")
+    m.add_constraints(x >= np.array([1.0, -np.inf, 3.0]), name="c")
+    m.add_objective(x.sum())
+    return m, x
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS is not installed")
+@pytest.mark.parametrize("io_api", ["direct", "lp"])
+def test_solve_keeps_infinite_row_for_next_solve(io_api: str) -> None:
+    m, x = _model_with_infinite_row()
+    c = m.constraints["c"]
+
+    m.solve("highs", io_api=io_api)
+    np.testing.assert_array_equal(c.labels, [0, 1, 2])
+    np.testing.assert_allclose(x.solution, [1, 0, 3])
+    assert np.isnan(c.dual.values[1])
+
+    c.update(rhs=np.array([1.0, 2.0, 3.0]))
+    m.solve("highs", io_api=io_api)
+    np.testing.assert_allclose(x.solution, [1, 2, 3])
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS is not installed")
+def test_persistent_update_after_model_solve_with_infinite_row() -> None:
+    from linopy.solvers import Solver
+
+    m, x = _model_with_infinite_row()
+    c = m.constraints["c"]
+    solver = Solver.from_name("highs", model=m, io_api="direct", track_updates=True)
+
+    m.solve("highs", io_api="direct")
+    c.update(rhs=np.array([1.0, 2.0, 3.0]))
+    solver.update(m)
+    assert solver._rebuilds == 0
+    solver.solve(assign=True)
+    np.testing.assert_allclose(x.solution, [1, 2, 3])
+
+
 def test_masked_incorrect_infinities() -> None:
     # https://github.com/PyPSA/linopy/issues/1116
     m: Model = Model()

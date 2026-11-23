@@ -12,9 +12,11 @@ from collections.abc import (
     Callable,
     Generator,
     Hashable,
+    Iterator,
     Mapping,
     Sequence,
 )
+from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import product
 from typing import (
@@ -1523,6 +1525,26 @@ class Constraints(LabelContainer[Constraint]):
         """
         for con in self.data.values():
             con.sanitize_infinities()
+
+    @contextmanager
+    def infinities_masked(self) -> Iterator[None]:
+        """
+        Mask the rows with an invalid infinite RHS for the duration of the block.
+
+        Rows ``<= inf`` and ``>= -inf`` hold for any value and are left out of
+        what the solver sees, as with :meth:`sanitize_infinities`. On exit each
+        constraint gets its labels back, so the model is unchanged and a later
+        finite RHS on such a row reaches the next solve.
+        """
+        saved = {name: con._labels for name, con in self.data.items()}
+        self.sanitize_infinities()
+        try:
+            yield
+        finally:
+            for name, labels in saved.items():
+                if name in self.data:
+                    self.data[name]._labels = labels
+            self._invalidate_label_position_index()
 
     def format_labels(
         self, values: Sequence[int], display_max_terms: int | None = None
