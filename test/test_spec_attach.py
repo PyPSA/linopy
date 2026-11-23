@@ -1018,6 +1018,7 @@ def test_polars_datetimes_attach_like_pandas_ones() -> None:
 
 US_SNAPSHOTS = SNAPSHOTS.as_unit("us")
 NS_SNAPSHOTS = SNAPSHOTS.as_unit("ns")
+BERLIN_SNAPSHOTS = SNAPSHOTS.tz_localize("Europe/Berlin")
 FAMILY_KEYS: dict[str, tuple[str, pd.Index, pd.Series]] = {
     "int32-on-int64": (
         "int",
@@ -1031,6 +1032,11 @@ FAMILY_KEYS: dict[str, tuple[str, pd.Index, pd.Series]] = {
     ),
     "us-on-ns": ("datetime", NS_SNAPSHOTS, pd.Series(US_SNAPSHOTS[[2, 0, 1]])),
     "ns-on-us": ("datetime", US_SNAPSHOTS, pd.Series(NS_SNAPSHOTS[[2, 0, 1]])),
+    "utc-on-berlin": (
+        "datetime",
+        BERLIN_SNAPSHOTS,
+        pd.Series(BERLIN_SNAPSHOTS[[2, 0, 1]].tz_convert("UTC")),
+    ),
     "categorical-on-str": (
         "str",
         pd.Index(["a", "b", "c"]),

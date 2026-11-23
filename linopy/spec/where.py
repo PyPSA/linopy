@@ -149,7 +149,7 @@ def looked_up(arr: Array, columns: ms.JoinColumns, ctx: Context) -> Array:
     value column holds, and along a key column it carries at the key's own label.
     """
     table = ctx.relations[columns.name]
-    if not len(table.rows):
+    if not len(table):
         along = tuple(columns.dim(role) for role in columns.joined)
         onto = {d: ctx.coords[d] for d in table.key_dims}
         return operators.nothing_read(arr, along, onto)

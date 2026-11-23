@@ -169,9 +169,9 @@ def _sum(
 
 def _through(array: Array, columns: ms.JoinColumns, ctx: Context) -> Array:
     """*array* summed through the rows of the relation *columns* name, joined and grouped as the call says."""
-    rows = ctx.relations[columns.name].rows
-    joined = {columns.dim(r): rows[r].to_numpy() for r in columns.joined}
-    grouped = {columns.dim(r): rows[r].to_numpy() for r in columns.grouped}
+    table = ctx.relations[columns.name]
+    joined = {columns.dim(r): table.labels(r) for r in columns.joined}
+    grouped = {columns.dim(r): table.labels(r) for r in columns.grouped}
     onto = {d: ctx.coords[d] for d in grouped}
     return operators.grouped_sum(array, joined, grouped, onto)
 

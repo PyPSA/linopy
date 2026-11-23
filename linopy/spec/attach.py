@@ -360,34 +360,42 @@ def _check_table(what: str, df: Frame, columns: Sequence[str]) -> None:
 @dataclass(frozen=True)
 class Table:
     """
-    A relation's rows as the data gives them: one column per role of the
-    declaration, each holding labels of the role's dimension, one row per
-    key tuple.
+    A relation's rows in the order the data gives them: per role of the
+    declaration, the position of each row's label in the role's dimension,
+    one row per key tuple.
 
     The rows are the relation: a bare relation is never laid out as a grid
     over its key, which for two columns over one dimension is that dimension
-    squared. A value column reads over the key's dimensions through
-    :meth:`column`.
+    squared. A role's labels are its dimension's, taken at the positions
+    through :meth:`labels`, and a value column reads over the key's
+    dimensions through :meth:`column`.
     """
 
     declared: ms.Relation
-    rows: Frame
+    positions: Mapping[str, pl.Series] = field(compare=False, repr=False)
     coords: Mapping[str, pd.Index]
     at: pl.Series = field(compare=False, repr=False)
     _columns: dict[str, xr.DataArray] = field(
         default_factory=dict, init=False, compare=False, repr=False
     )
 
+    def __len__(self) -> int:
+        return len(self.at)
+
     @property
     def key_dims(self) -> list[str]:
         return [self.declared.dim(role) for role in self.declared.key]
 
+    def labels(self, role: str) -> pd.Index:
+        """The label of each row in *role*, from the coordinates of its dimension."""
+        index = self.coords[self.declared.dim(role)]
+        return index.take(self.positions[role].to_numpy())
+
     def column(self, role: str) -> xr.DataArray:
         """The value column *role* over the key's dimensions, NaN where the key has no row."""
         if role not in self._columns:
-            self._columns[role] = _scattered(
-                self.at, self.rows[role].to_numpy(), self._on_key
-            )
+            values = self.labels(role).to_numpy()
+            self._columns[role] = _scattered(self.at, values, self._on_key)
         return self._columns[role]
 
     @functools.cached_property
@@ -415,8 +423,8 @@ def _relations(
                 f"none for one it does not."
             )
         rows = _relation_rows(name, rel, sources[name])
-        at = _check_relation(rows, name, rel, coords)
-        out[name] = Table(rel, rows, coords, at)
+        positions, at = _check_relation(rows, name, rel, coords)
+        out[name] = Table(rel, positions, coords, at)
         _refuse_unmapped(name, out[name])
     return out
 
@@ -512,8 +520,8 @@ def _check_relation(
     name: str,
     rel: ms.Relation,
     coords: Mapping[str, pd.Index],
-) -> pl.Series:
-    """Refuse a null, a label its dimension lacks or a key tuple taking two rows; the flat position of each row's key tuple."""
+) -> tuple[dict[str, pl.Series], pl.Series]:
+    """Refuse a null, a label its dimension lacks or a key tuple taking two rows; the position of each row's label per role and the flat position of its key tuple."""
     key = list(rel.key)
     for role in rel.roles:
         holes = _holes(rows[role])
@@ -543,7 +551,7 @@ def _check_relation(
             f"{shown(labels)}. A relation has one row per key tuple, so each label it maps "
             f"takes exactly one row."
         )
-    return at
+    return positions, at
 
 
 def _refuse_stray_labels(
@@ -577,7 +585,7 @@ def _refuse_unmapped(name: str, table: Table) -> None:
     """Refuse a ``missing: refused`` relation lacking a key tuple, a keyed one naming the first few."""
     rel = table.declared
     grid = int(np.prod([len(table.coords[d]) for d in table.key_dims]))
-    lacking = grid - len(table.rows)
+    lacking = grid - len(table)
     if rel.missing != "refused" or not lacking:
         return
     first = (

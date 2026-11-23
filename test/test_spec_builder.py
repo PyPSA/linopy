@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 import xarray as xr
 
@@ -1650,3 +1651,53 @@ def test_a_spec_built_again_from_its_kept_program_builds_the_same_model() -> Non
     first = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
     second = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
     assert_model_equal(first, second)
+
+
+ZONED = pd.date_range("2030-01-01", periods=3, freq="h", tz="Europe/Berlin", name="b")
+ZONED_SPEC: dict[str, Any] = {
+    "dimensions": {"g": {}, "b": {"dtype": "datetime"}, "p": {}},
+    "relations": {
+        "gen_bus": {"key": "g", "values": "b", "missing": "absent"},
+        "period_of": {"key": "b", "values": "p"},
+    },
+    "parameters": {"price": {"dims": ["b"]}},
+    "variables": {
+        "x": {"dims": ["g"], "bounds": {"lower": 0}},
+        "y": {"dims": ["b"], "bounds": {"lower": 0}},
+    },
+    "constraints": {
+        "k": {"dims": ["g"], "expression": "x <= at(price, by=gen_bus[b])"},
+        "s": {"dims": ["b"], "expression": "sum(x, over=g, by=gen_bus[b]) <= 10"},
+        "q": {"dims": ["p"], "expression": "sum(y, over=b, by=period_of[p]) <= 1"},
+    },
+    "objective": {"sense": "maximize", "expression": "sum(x) + sum(y)"},
+}
+
+
+def zoned_sources(zone: str, convert: Any) -> dict[str, Any]:
+    labels = ZONED.tz_convert(zone)
+    gen_bus = pd.DataFrame({"g": ["w", "s", "v"], "b": labels[[2, 0, 1]]})
+    period_of = pd.DataFrame({"b": labels, "p": ["e", "e", "l"]})
+    return {
+        "g": ["w", "s", "v"],
+        "b": ZONED,
+        "p": ["e", "l"],
+        "price": pd.DataFrame({"b": ZONED, "price": [1.0, 2.0, 3.0]}),
+        "gen_bus": convert(gen_bus),
+        "period_of": convert(period_of),
+    }
+
+
+@pytest.mark.parametrize("zone", ["Europe/Berlin", "UTC"])
+@pytest.mark.parametrize("lib", ["pandas", "polars"])
+def test_tz_aware_relation_labels_build_the_model_of_their_instants(
+    lib: str, zone: str
+) -> None:
+    convert = pl.from_pandas if lib == "polars" else (lambda f: f)
+    m = Model.from_spec(ZONED_SPEC, zoned_sources(zone, convert), store=True)
+    assert m.constraints["k"].rhs.values.tolist() == [3.0, 1.0, 2.0]
+    assert m.constraints["s"].lhs.vars.values.tolist() == [[1], [2], [0]]
+    assert m.constraints["q"].lhs.vars.values.tolist() == [[3, 4], [5, -1]]
+    pandas = zoned_sources("Europe/Berlin", lambda f: f)
+    assert_model_equal(m, Model.from_spec(ZONED_SPEC, pandas, store=True))
+    assert_model_equal(Model.from_spec(ZONED_SPEC, m.parameters, store=True), m)

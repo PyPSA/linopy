@@ -296,11 +296,10 @@ def test_a_stored_relation_reads_back_as_its_rows_at_their_dtype(
     program = lower(RELATION_SPEC)
     given, read = attach(program, sources), attach(program, stored)
     for name, into in RELATION_INTO.items():
-        rows = read.relations[name].rows
-        pd.testing.assert_frame_equal(
-            rows, given.relations[name].rows, check_dtype=False, check_index_type=False
-        )
-        assert rows[into.name].dtype.kind == into.dtype.kind
+        table = read.relations[name]
+        for role in table.declared.roles:
+            assert table.labels(role).equals(given.relations[name].labels(role))
+        assert table.labels(into.name).dtype.kind == into.dtype.kind
 
 
 def copied(deep: bool) -> Callable[[Model, Path, str], Model]:
