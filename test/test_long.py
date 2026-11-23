@@ -12,6 +12,7 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
+from dateutil.tz import gettz, tzutc
 from test_store_conformance import RELATION, RELATION_FRAME, A, B, assert_same
 
 from linopy import (
@@ -221,6 +222,9 @@ MS = pl.Series([dt.datetime(2030, 1, 1)], dtype=pl.Datetime("ms"))
 US = pl.Series([dt.datetime(2030, 1, 2)], dtype=pl.Datetime("us"))
 NS = pd.date_range("2030-01-01", periods=2, name="k", unit="ns")
 SUB_US = pd.Series(NS[[1]] + pd.Timedelta(1, "ns"))
+UTC = pd.date_range("2030-01-01", periods=2, freq="h", name="k", tz=tzutc())
+BERLIN_TZFILE = BERLIN.tz_convert(gettz("Europe/Berlin"))
+FIXED = pd.to_datetime(["2030-01-01T00:00+01:00", "2030-01-01T01:00+01:00"])
 NOT_IN = (ValueError, "not in the coordinates")
 NO_MATCH = (TypeError, "does not match")
 
@@ -255,6 +259,15 @@ KEY_DTYPES: dict[str, tuple[Column, pd.Index, list[float] | tuple[type, str]]] =
     "sub-us-us-pandas": (SUB_US, MIDNIGHT.as_unit("us"), NOT_IN),
     "tz": (MS.dt.replace_time_zone("Europe/Berlin"), BERLIN, [1, np.nan]),
     "tz-pandas": (pd.Series(BERLIN[[1]]), BERLIN, [np.nan, 1]),
+    "tz-other-zone": (MS.dt.replace_time_zone("UTC"), BERLIN, [np.nan, 1]),
+    "tz-other-zone-pandas": (
+        pd.Series(BERLIN[[1]].tz_convert("UTC")),
+        BERLIN,
+        [np.nan, 1],
+    ),
+    "tz-tzfile": (MS.dt.replace_time_zone("Europe/Berlin"), BERLIN_TZFILE, [1, np.nan]),
+    "tz-tzutc": (MS.dt.replace_time_zone("UTC"), UTC, [1, np.nan]),
+    "tz-fixed-offset": (pl.Series(FIXED[[1]]), FIXED, [np.nan, 1]),
     "tz-naive": (MS.dt.replace_time_zone("UTC"), MIDNIGHT, NO_MATCH),
     "naive-tz-pandas": (pd.Series(MIDNIGHT[[0]]), BERLIN, NO_MATCH),
     "duration": (pl.Series([1], dtype=pl.Duration("ns")), MIDNIGHT, NO_MATCH),

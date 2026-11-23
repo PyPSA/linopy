@@ -26,6 +26,7 @@ Frame: TypeAlias = pl.DataFrame | pd.DataFrame
 Column: TypeAlias = pl.Series | pd.Series
 Missing: TypeAlias = Literal["refused", "absent"] | float
 
+ZONED = "tz-aware datetime"
 KIND_FAMILIES = {
     "b": "boolean",
     "i": "numeric",
@@ -49,7 +50,7 @@ INFERRED_FAMILIES = {
 
 def _family(column: Column | pd.Index) -> str:
     """
-    The dtype family of ``column``: numeric, datetime with its time zone,
+    The dtype family of ``column``: numeric, datetime, tz-aware datetime,
     date, duration, string or boolean, a pandas categorical classified by
     its categories and an object column by its values.
     """
@@ -57,7 +58,7 @@ def _family(column: Column | pd.Index) -> str:
     if isinstance(dtype, pd.CategoricalDtype):
         return _family(dtype.categories.rename(column.name))
     if isinstance(dtype, pd.DatetimeTZDtype):
-        return f"datetime[{dtype.tz}]"
+        return ZONED
     if not isinstance(dtype, pl.DataType) and dtype.kind == "O":
         inferred = pd.api.types.infer_dtype(column)
         return INFERRED_FAMILIES.get(inferred, inferred)
@@ -66,7 +67,7 @@ def _family(column: Column | pd.Index) -> str:
     if not isinstance(dtype, pl.DataType):
         raise TypeError(f"Column {column.name!r} has unsupported dtype {dtype}.")
     if isinstance(dtype, pl.Datetime) and dtype.time_zone is not None:
-        return f"datetime[{dtype.time_zone}]"
+        return ZONED
     if isinstance(dtype, pl.Datetime):
         return "datetime"
     if isinstance(dtype, pl.Date):
@@ -84,8 +85,7 @@ def _family(column: Column | pd.Index) -> str:
 
 def _as_polars(index: pd.Index) -> pl.Series:
     if isinstance(index, pd.DatetimeIndex) and index.tz is not None:
-        utc = pl.Series(index.asi8).cast(pl.Datetime(index.unit))
-        return utc.dt.replace_time_zone("UTC").dt.convert_time_zone(str(index.tz))
+        return pl.Series(index.asi8).cast(pl.Datetime(index.unit, "UTC"))
     if _family(index) == "date":
         return pl.Series(index.to_numpy(dtype="datetime64[D]")).cast(pl.Date)
     return pl.Series(index.to_numpy())
@@ -119,7 +119,7 @@ def _lookup(index: pd.Index, column: Column) -> pl.Series:
     """
     The positions of the values of ``column`` in the unique ``index``, null
     where a value is not in ``index``. ``column`` has no null values and the
-    dtype family of ``index``.
+    dtype family of ``index``; tz-aware datetimes match by instant.
     """
     if isinstance(column, pd.Series):
         pos = pl.Series(index.get_indexer(column))
@@ -131,6 +131,8 @@ def _lookup(index: pd.Index, column: Column) -> pl.Series:
     ):
         pos = column.cast(pl.Int64, strict=False) - index.start
         return pos.set((pos < 0) | (pos >= len(index)), None)
+    if _family(column) == ZONED:
+        column = column.dt.convert_time_zone("UTC")
     lookup = _as_polars(index)
     key = column.cast(lookup.dtype, strict=False)
     if lookup.dtype != column.dtype:
@@ -293,9 +295,10 @@ def from_long(
         ``"refused"`` or ``"absent"``.
     TypeError
         For a frame type other than a polars or pandas DataFrame, a non-numeric
-        value column and key dtype families (numeric, datetime with its time
-        zone, date, duration, string, boolean) differing from the ones of
-        ``coords``.
+        value column and key dtype families (numeric, datetime, tz-aware
+        datetime, date, duration, string, boolean) differing from the ones of
+        ``coords``. Tz-aware keys match tz-aware coordinates by instant,
+        whatever their time zone.
 
     Warns
     -----

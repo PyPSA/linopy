@@ -821,13 +821,13 @@ def _refuse_strangers(
 def _refuse_label_type(
     what: str, dim: str, labels: Column | pd.Index, known: pd.Index
 ) -> None:
-    """Refuse *labels* of another dtype family than *known*: numeric, datetime with its time zone, date, duration, string or boolean."""
+    """Refuse *labels* of another dtype family than *known*: numeric, datetime, tz-aware datetime, date, duration, string or boolean."""
     if _same_family(known, labels):
         return
     arrived, expected = _family(labels), _family(known)
     hint = (
         " Parse them with pd.to_datetime, or with parse_dates= when reading the table."
-        if expected.startswith("datetime")
+        if "datetime" in expected
         else ""
     )
     distinct = pd.Index(labels.to_numpy()).unique().tolist()
