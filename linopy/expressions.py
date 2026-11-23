@@ -113,7 +113,7 @@ from linopy.constants import (
     PerformanceWarning,
 )
 from linopy.csr import CSRStore, Grid, _densify_notice
-from linopy.long import Relation, _positions, _to_numpy
+from linopy.long import Relation, _is_arrow_table, _positions, _to_numpy
 from linopy.semantics import (
     AbsentType,
     FillValueLike,
@@ -230,8 +230,10 @@ def _resolve_group(group: Any, data: Dataset) -> Any:
     like ``groupby(data["name"])``, mirroring xarray. Other inputs (Series,
     DataFrame, DataArray, multi-key lists) are returned unchanged.
     """
-    if isinstance(group, pl.DataFrame) or (
-        isinstance(group, pd.DataFrame) and group.index.name is None
+    if (
+        isinstance(group, pl.DataFrame)
+        or (isinstance(group, pd.DataFrame) and group.index.name is None)
+        or _is_arrow_table(group)
     ):
         raise TypeError(
             "Grouping by a frame needs a pandas index named after a dimension, "

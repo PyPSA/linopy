@@ -33,9 +33,18 @@ def to_polars(frame: pd.DataFrame) -> pl.DataFrame:
     return pl.from_dict(frame.astype(object).where(frame.notna(), None).to_dict("list"))
 
 
+class ArrowStream:
+    def __init__(self, data: pl.DataFrame | pl.Series) -> None:
+        self.data = data
+
+    def __arrow_c_stream__(self, requested_schema: Any = None) -> Any:
+        return self.data.__arrow_c_stream__(requested_schema)
+
+
 FRAME_LIBS: dict[str, Callable[[pd.DataFrame], Any]] = {
     "pandas": lambda f: f,
     "polars": to_polars,
+    "arrow": lambda f: ArrowStream(to_polars(f)),
 }
 FRAME_AB = pd.DataFrame(
     {"a": [0, 2, 1, 0], "b": ["p", "p", "q", "q"], "v": [1.0, 2, 3, 4]}
@@ -329,8 +338,19 @@ def test_from_long_refuses_unknown_missing(missing: Any) -> None:
         FRAME_A.set_index("a").v,
         FRAME_A.set_index("a"),
         FRAME_AB.set_index(["a", "b"]),
+        to_polars(FRAME_A)["v"],
+        ArrowStream(to_polars(FRAME_A)["v"]),
+        xr.DataArray([1.0, 2.0], coords=[A[:2]], name="v"),
     ],
-    ids=["lazyframe", "series", "named-index", "multiindex"],
+    ids=[
+        "lazyframe",
+        "series",
+        "named-index",
+        "multiindex",
+        "polars-series",
+        "arrow-array",
+        "dataarray",
+    ],
 )
 def test_from_long_rejects_frame_forms(frame: Any) -> None:
     with pytest.raises(TypeError):

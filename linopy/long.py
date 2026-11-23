@@ -11,7 +11,7 @@ from __future__ import annotations
 import numbers
 from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, Protocol, TypeAlias
 
 import numpy as np
 import numpy.typing as npt
@@ -23,7 +23,15 @@ from linopy.alignment import _as_index, _coords_to_dict
 from linopy.constants import _warn_evolving_api
 from linopy.types import CoordsLike
 
+
+class ArrowStream(Protocol):
+    """A table exporting the Arrow PyCapsule stream interface, e.g. a pyarrow Table or a DuckDB relation."""
+
+    def __arrow_c_stream__(self, requested_schema: Any = None, /) -> Any: ...
+
+
 Frame: TypeAlias = pl.DataFrame | pd.DataFrame
+FrameLike: TypeAlias = Frame | ArrowStream
 Column: TypeAlias = pl.Series | pd.Series
 Missing: TypeAlias = Literal["refused", "absent"] | float
 
@@ -118,11 +126,19 @@ def _is_missing(value: Any) -> bool:
     return isinstance(value, numbers.Real) and not isinstance(value, bool | np.bool_)
 
 
-def _check_frame(frame: Frame) -> None:
-    if not isinstance(frame, Frame):
-        raise TypeError(
-            f"Expected a polars or pandas DataFrame, got {type(frame).__name__}."
-        )
+def _is_arrow_table(obj: Any) -> bool:
+    """Whether ``obj`` exports the Arrow stream interface and is no frame, series or DataArray."""
+    return not isinstance(obj, Frame | Column | DataArray) and hasattr(
+        obj, "__arrow_c_stream__"
+    )
+
+
+def _as_frame(frame: FrameLike) -> Frame:
+    """
+    ``frame`` as a polars or pandas DataFrame, an Arrow stream read into
+    polars. Raises for anything else, a series and a pandas frame with index
+    levels or column levels.
+    """
     if isinstance(frame, pd.DataFrame) and (
         frame.columns.nlevels > 1 or frame.index.names != [None]
     ):
@@ -130,6 +146,18 @@ def _check_frame(frame: Frame) -> None:
             "Expected flat columns and an unnamed index, call `reset_index()` "
             "to turn index levels into key columns."
         )
+    if isinstance(frame, Frame):
+        return frame
+    expected = (
+        "Expected a polars or pandas DataFrame or a table exporting the Arrow "
+        f"stream interface, got {type(frame).__name__}."
+    )
+    if not _is_arrow_table(frame):
+        raise TypeError(expected)
+    try:
+        return pl.DataFrame(frame)
+    except pl.exceptions.PolarsError as err:
+        raise TypeError(expected) from err
 
 
 def _lookup(index: pd.Index, column: Column) -> pl.Series:
@@ -286,7 +314,7 @@ def _flat(
 
 
 def from_long(
-    frame: Frame, coords: CoordsLike, missing: Missing = "refused"
+    frame: FrameLike, coords: CoordsLike, missing: Missing = "refused"
 ) -> DataArray:
     """
     Pivot a long-form frame onto ``coords``.
@@ -303,10 +331,12 @@ def from_long(
 
     Parameters
     ----------
-    frame : polars.DataFrame or pandas.DataFrame
+    frame : polars.DataFrame, pandas.DataFrame or Arrow table
         The long-form data, one row per key combination: key columns plus one
         value column, numeric without null values; NaN values are kept. A
-        pandas frame needs an unnamed index, its keys are columns.
+        pandas frame needs an unnamed index, its keys are columns. Any other
+        table exporting the Arrow stream interface, e.g. a pyarrow Table or a
+        DuckDB relation, is read into polars.
     coords : list/dict/xarray.Coordinates
         The coordinates the keys are positioned in, e.g. ``var.coords`` of
         the variable the result is used with.
@@ -330,7 +360,7 @@ def from_long(
         with duplicate labels and a ``missing`` other than ``"refused"``,
         ``"absent"`` or a number.
     TypeError
-        For a frame type other than a polars or pandas DataFrame, a non-numeric
+        For a frame other than a polars or pandas DataFrame or an Arrow table, a non-numeric
         value column and key dtype families (numeric, datetime, tz-aware
         datetime, date, duration, string, boolean) differing from the ones of
         ``coords``. Tz-aware keys match tz-aware coordinates by instant,
@@ -365,7 +395,7 @@ def from_long(
         "https://github.com/PyPSA/linopy/issues. This warning fires once per "
         "session.",
     )
-    _check_frame(frame)
+    frame = _as_frame(frame)
     if not _is_missing(missing):
         raise ValueError(
             f"`missing` is 'refused', 'absent' or a number, got {missing!r}."
@@ -402,7 +432,7 @@ def from_long(
     )
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True, eq=False, init=False)
 class Relation:
     """
     A many-to-many map from the member cells of one or several dimensions to
@@ -417,8 +447,10 @@ class Relation:
 
     Parameters
     ----------
-    frame : polars.DataFrame or pandas.DataFrame
+    frame : polars.DataFrame, pandas.DataFrame or Arrow table
         The member-group pairs, exactly the ``member`` columns and ``group``.
+        Any other table exporting the Arrow stream interface, e.g. a pyarrow
+        Table or a DuckDB relation, is read into polars.
     member : str or sequence of str
         Name of the member column or columns, each a dimension of the grouped
         expression.
@@ -456,17 +488,25 @@ class Relation:
     group: str
     groups: pd.Index | None = None
 
-    def __post_init__(self) -> None:
+    def __init__(
+        self,
+        frame: FrameLike,
+        member: str | Sequence[str],
+        group: str,
+        groups: pd.Index | None = None,
+    ) -> None:
         _warn_evolving_api(
             "Relation",
             "long-form: Relation is a new API; its signature and input format may "
             "change in minor releases. Please share your use cases at "
             "https://github.com/PyPSA/linopy/issues. This warning fires once per "
             "session.",
-            stacklevel=4,
         )
-        _check_frame(self.frame)
-        members, group = self.members, self.group
+        object.__setattr__(self, "frame", _as_frame(frame))
+        object.__setattr__(self, "member", member)
+        object.__setattr__(self, "group", group)
+        object.__setattr__(self, "groups", groups)
+        members = self.members
         columns = list(self.frame.columns)
         if group in members:
             raise ValueError(

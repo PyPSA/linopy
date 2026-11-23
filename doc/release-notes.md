@@ -17,7 +17,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 
 - `linopy.from_long(frame, coords, missing="refused")` turns a long-form pandas or polars frame (key columns plus one value column) into a `DataArray` to pass wherever linopy takes a constant: bounds, coefficients, right-hand sides, penalties. `missing` says what a missing key combination means, as a mathspec parameter's `missing:` does: `"refused"` raises, `"absent"` leaves NaN, a number fills it. Malformed input raises. ([\#1049](https://github.com/PyPSA/linopy/issues/1049))
 - `expr.groupby(linopy.Relation(frame, member, group)).sum()` sums over a many-to-many relation without an incidence matrix, e.g. `Relation(ports, ["link", "port"], "bus")` adds each link port to its bus. `Relation.group_of(coords)` maps member cells to their group, e.g. to read nodal prices per generator. The sum stays sparse on a sparse expression. ([\#1049](https://github.com/PyPSA/linopy/issues/1049))
-- Both emit [`linopy.EvolvingAPIWarning`][linopy.EvolvingAPIWarning] once per session, as their signature may change in minor releases. See [Long-form inputs](user-guide/long-form-inputs.ipynb).
+- Both also take any table exporting the Arrow stream interface, e.g. a pyarrow Table or a DuckDB relation, and read it into polars. Both emit [`linopy.EvolvingAPIWarning`][linopy.EvolvingAPIWarning] once per session, as their signature may change in minor releases. See [Long-form inputs](user-guide/long-form-inputs.ipynb).
 
 **Models from mathspec programs**
 
