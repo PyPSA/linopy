@@ -809,3 +809,53 @@ def test_sparse_positional_csr_cached_while_held(rows: str) -> None:
     rebuilt = store.positional_csr(m.variables.label_index, active, "c")
     assert rebuilt.indices is not first.indices
     np.testing.assert_array_equal(rebuilt.indices, first.indices)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "unaddressed_category",
+        "all_masked_members",
+        "mixed_absent_member",
+        "explicit_zero_coeff",
+        "duplicate_vars",
+    ],
+)
+def test_groupby_sum_absence_conformance(case: str) -> None:
+    """Both CSRStore._from_scatter (dense->sparse) and CSRStore.aggregate (sparse->sparse) agree on §13 absence rules."""
+    idx = pd.Index(["i0", "i1", "i2", "i3"], name="i")
+
+    def build_expr(m: Model) -> LinearExpression:
+        x = m.add_variables(coords=[idx], name="x")
+        if case == "duplicate_vars":
+            return (x + x).where(xr.DataArray([True, True, False, True], coords=[idx]))
+        expr = 1.0 * x + xr.DataArray([1.0, 2.0, 3.0, 4.0], coords=[idx])
+        if case == "all_masked_members":
+            return expr.where(xr.DataArray([True, True, False, False], coords=[idx]))
+        if case == "mixed_absent_member":
+            return expr.where(xr.DataArray([True, False, True, True], coords=[idx]))
+        if case == "explicit_zero_coeff":
+            return (0.0 * x + 5.0).where(
+                xr.DataArray([True, True, False, True], coords=[idx])
+            )
+        return expr
+
+    if case == "unaddressed_category":
+        groups = pd.Categorical(
+            ["g1", "g1", "g2", "g2"], categories=["g1", "g2", "g_empty"]
+        )
+    elif case == "all_masked_members":
+        groups = ["g1", "g1", "g2", "g2"]
+    else:
+        groups = ["g1", "g1", "g2", "g2"]
+
+    grouper = xr.DataArray(groups, coords=[idx], dims=["i"], name="g")
+
+    dense_m = Model(sparse=False)
+    sparse_m = Model(sparse=True)
+    dense_res = build_expr(dense_m).groupby(grouper).sum()
+    with no_densify():
+        sparse_res = build_expr(sparse_m).groupby(grouper).sum()
+
+    assert sparse_res.is_sparse
+    assert_equivalent(dense_res, sparse_res)
