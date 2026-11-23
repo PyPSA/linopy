@@ -40,11 +40,12 @@ from pandas.api.extensions import ExtensionArray
 from linopy.long import (
     Column,
     Frame,
+    _alike,
+    _distinct,
     _family,
     _grid,
     _lookup,
     _ravel,
-    _same_family,
     _strays,
 )
 from linopy.spec.errors import (
@@ -829,19 +830,27 @@ def _refuse_strangers(
 def _refuse_label_type(
     what: str, dim: str, labels: Column | pd.Index, known: pd.Index
 ) -> None:
-    """Refuse *labels* of another dtype family than *known*: numeric, datetime, tz-aware datetime, date, duration, string or boolean."""
-    if _same_family(known, labels):
+    """
+    Refuse *labels* of another dtype family than *known*: numeric, datetime,
+    tz-aware datetime, date, duration, string or boolean.
+
+    Polars dates are read as datetimes the way a dimension of them is, at
+    midnight.
+    """
+    if not len(labels):
         return
     arrived, expected = _family(labels), _family(known)
+    dates = isinstance(labels, pl.Series) and labels.dtype == pl.Date
+    if _alike(arrived, expected) or (dates and expected == "datetime"):
+        return
     hint = (
         " Parse them with pd.to_datetime, or with parse_dates= when reading the table."
         if "datetime" in expected
         else ""
     )
-    distinct = pd.Index(labels.to_numpy()).unique().tolist()
     raise SpecDataError(
         f"{what} has '{arrived}' label(s) of dtype {labels.dtype} in dimension '{dim}', and "
-        f"'{dim}' holds '{expected}' labels: {shown(distinct)} differ in type from "
+        f"'{dim}' holds '{expected}' labels: {shown(_distinct(labels))} differ in type from "
         f"{shown(known.tolist())}, and a label of another type matches no coordinate, even one "
         f"equal in value. Cast them to the dimension's type.{hint}"
     )

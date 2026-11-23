@@ -163,10 +163,19 @@ def _same_family(index: pd.Index, column: Column) -> bool:
     has any, and a mixed-type one, or one on a mixed-type ``index``, is
     looked up by value.
     """
-    if not len(column):
-        return True
-    have, want = _family(column), _family(index)
+    return not len(column) or _alike(_family(column), _family(index))
+
+
+def _alike(have: str, want: str) -> bool:
+    """Whether dtype family ``have`` matches ``want``, any does a mixed or unknown one."""
     return have == want or not {have, want} <= FAMILIES
+
+
+def _distinct(column: Column | pd.Index) -> list[Any]:
+    """The distinct values of ``column`` in order of appearance, of its own type."""
+    if isinstance(column, pl.Series):
+        return column.unique(maintain_order=True).to_list()
+    return column.unique().tolist()
 
 
 def _strays(column: Column, pos: pl.Series) -> list[Any]:
@@ -175,8 +184,8 @@ def _strays(column: Column, pos: pl.Series) -> list[Any]:
         return []
     missing = pos.is_null()
     if isinstance(column, pl.Series):
-        return column.filter(missing).unique(maintain_order=True).to_list()
-    return column[missing.to_numpy()].unique().tolist()
+        return _distinct(column.filter(missing))
+    return _distinct(column[missing.to_numpy()])
 
 
 def _ravel(positions: Sequence[pl.Series], shape: Sequence[int]) -> pl.Series:

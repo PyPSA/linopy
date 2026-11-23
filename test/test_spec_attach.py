@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
@@ -1076,6 +1077,54 @@ def test_a_table_label_of_its_dimensions_dtype_family_attaches(
         assert values.values.tolist() == [1.0, 2.0, 3.0]
     else:
         assert pd.Index(attached.relations["r"].column("d").values).equals(index)
+
+
+DAYS = pl.Series("snapshot", [dt.date(2025, 1, 3), dt.date(2025, 1, 1)])
+
+
+@pytest.mark.parametrize("into", ["parameter", "relation"])
+@pytest.mark.parametrize(
+    ("dtype", "labels", "want"),
+    [
+        ("datetime", DAYS.sort(), [2.0, 1.0]),
+        (
+            "int",
+            [1, 2, 3],
+            "datetime.date(2025, 1, 3), datetime.date(2025, 1, 1) differ",
+        ),
+    ],
+    ids=["datetime", "int"],
+)
+def test_polars_dates_attach_like_a_dimension_of_them(
+    dtype: str, labels: Any, want: Any, into: str
+) -> None:
+    program = lower(
+        {
+            "dimensions": {"snapshot": {"dtype": dtype}, "h": {"dtype": "str"}},
+            "relations": {"r": {"key": "h", "values": "snapshot", "missing": "absent"}},
+            "parameters": {"p": {"dims": ["snapshot"], "missing": "absent"}},
+        }
+    )
+    sources = {
+        "snapshot": labels,
+        "h": ["u", "v"],
+        "p": pl.DataFrame({"snapshot": DAYS, "p": [1.0, 2.0]}),
+        "r": pl.DataFrame({"h": ["v", "u"], "snapshot": DAYS}),
+    }
+    read = (
+        (lambda a: filled(a, "p").values)
+        if into == "parameter"
+        else (lambda a: a.relations["r"].column("snapshot").values)
+    )
+    if isinstance(want, str):
+        with pytest.raises(SpecDataError, match=re.escape(want)):
+            read(attach(program, sources))
+    elif into == "parameter":
+        np.testing.assert_array_equal(read(attach(program, sources)), want)
+    else:
+        assert pd.Index(read(attach(program, sources))).equals(
+            pd.DatetimeIndex(DAYS.to_list()[::-1], dtype="datetime64[ms]")
+        )
 
 
 @pytest.mark.parametrize("lib", ["pandas", "polars"])
