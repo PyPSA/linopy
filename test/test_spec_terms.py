@@ -7,6 +7,7 @@ not cover a declaration.
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -265,6 +266,13 @@ def test_a_row_the_term_path_does_not_cover_builds_on_the_eager_path(
     spec: dict[str, Any],
 ) -> None:
     assert_built_alike(spec, DATA)
+
+
+def test_eager_only_leaves_a_build_in_another_thread_on_the_term_path() -> None:
+    with terms.eager_only(), ThreadPoolExecutor(1) as pool:
+        assert pool.submit(terms.active).result()
+        assert not terms.active()
+    assert terms.active()
 
 
 @pytest.mark.parametrize(

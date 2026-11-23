@@ -25,6 +25,7 @@ import math
 import operator
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import NamedTuple, cast
 
@@ -50,23 +51,22 @@ from linopy.spec.evaluator import (
 from linopy.spec.where import looked_up
 
 DENSE_KEYS = 50_000_000
-_EAGER_ONLY = False
+_EAGER_ONLY: ContextVar[bool] = ContextVar("eager_only", default=False)
 
 
 @contextmanager
 def eager_only() -> Iterator[None]:
-    """Build every declaration with the eager evaluator inside the block: for tests and debugging."""
-    global _EAGER_ONLY
-    before, _EAGER_ONLY = _EAGER_ONLY, True
+    """Build every declaration with the eager evaluator inside the block, in this context alone: for tests and debugging."""
+    token = _EAGER_ONLY.set(True)
     try:
         yield
     finally:
-        _EAGER_ONLY = before
+        _EAGER_ONLY.reset(token)
 
 
 def active() -> bool:
     """Whether the builder tries this path: outside :func:`eager_only`."""
-    return not _EAGER_ONLY
+    return not _EAGER_ONLY.get()
 
 
 class Unsupported(Exception):
