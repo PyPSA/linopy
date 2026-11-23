@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 import xarray as xr
 
@@ -42,8 +43,10 @@ from test_spec_builder import (  # noqa: E402
     FULL_W,
     NAMED_WX,
     SPARSE_SPEC,
+    ZONED_SPEC,
     T,
     example,
+    zoned_sources,
 )
 from test_spec_operators import (  # noqa: E402
     OPERATOR_DATA,
@@ -248,6 +251,31 @@ def test_a_row_from_term_tables_is_the_row_the_eager_path_builds(
     monkeypatch.setattr(terms, "DENSE_KEYS", dense_keys)
     assert_built_alike(row(dims, expression), DATA)
     assert len(tables) == 2
+
+
+ZONED_TERMS = with_(
+    ZONED_SPEC,
+    constraints={
+        "k": {"dims": ["g"], "expression": "at(price, by=gen_bus[b]) * x <= 1"},
+        "s": {"dims": ["b"], "expression": "sum(x + 1, over=g, by=gen_bus[b]) <= 10"},
+        "q": {"dims": ["g"], "expression": "at(y, by=gen_bus[b]) <= 1"},
+    },
+)
+
+
+@pytest.mark.parametrize("lib", ["pandas", "polars"])
+def test_tz_aware_relation_labels_build_on_the_term_path(
+    tables: list[terms.Table], lib: str
+) -> None:
+    convert = pl.from_pandas if lib == "polars" else (lambda f: f)
+    data = zoned_sources("UTC", convert)
+    assert_built_alike(ZONED_TERMS, data)
+    assert len(tables) == 4
+    m = Model.from_spec(ZONED_TERMS, data)
+    assert m.constraints["k"].lhs.coeffs.values.tolist() == [[3.0], [1.0], [2.0]]
+    assert m.constraints["s"].lhs.vars.values.tolist() == [[1], [2], [0]]
+    assert m.constraints["s"].rhs.values.tolist() == [9.0, 9.0, 9.0]
+    assert m.constraints["q"].lhs.vars.values.tolist() == [[5], [3], [4]]
 
 
 EAGER: dict[str, dict[str, Any]] = {

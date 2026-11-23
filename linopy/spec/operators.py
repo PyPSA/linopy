@@ -14,7 +14,7 @@ import warnings
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
 from functools import reduce
-from typing import Any, cast
+from typing import Any, TypeAlias, cast
 
 import numpy as np
 import pandas as pd
@@ -27,6 +27,7 @@ from linopy.spec.context import Array, as_expression
 from linopy.spec.errors import SpecDataError
 
 Amount = int | xr.DataArray
+Labels: TypeAlias = np.ndarray | pd.Index
 _ROW = "_row"
 
 
@@ -106,8 +107,8 @@ def sum_over(array: Array, over: str) -> Array:
 
 def grouped_sum(
     array: Array,
-    joined: Mapping[str, np.ndarray],
-    grouped: Mapping[str, np.ndarray],
+    joined: Mapping[str, Labels],
+    grouped: Mapping[str, Labels],
     onto: Mapping[str, pd.Index],
 ) -> Array:
     """
@@ -142,7 +143,7 @@ def grouped_sum(
 
 def _gathered(
     picked: LinearExpression,
-    grouped: Mapping[str, np.ndarray],
+    grouped: Mapping[str, Labels],
     onto: Mapping[str, pd.Index],
 ) -> LinearExpression:
     """The rows of *picked* gathered into their groups, each row's terms in row order behind the term slot it fills."""
@@ -179,7 +180,7 @@ def _gathered(
 
 def _scattered(
     picked: xr.DataArray,
-    grouped: Mapping[str, np.ndarray],
+    grouped: Mapping[str, Labels],
     onto: Mapping[str, pd.Index],
 ) -> xr.DataArray:
     """The rows of *picked* added into their groups, a hole adding nothing."""

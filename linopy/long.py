@@ -8,11 +8,13 @@ to groups for :meth:`~linopy.expressions.LinearExpressionGroupby.sum`.
 
 from __future__ import annotations
 
+import numbers
 from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import Any, Literal, Protocol, TypeAlias
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import polars as pl
 from xarray import DataArray
@@ -21,9 +23,19 @@ from linopy.alignment import _as_index, _coords_to_dict
 from linopy.constants import _warn_evolving_api
 from linopy.types import CoordsLike
 
-Frame: TypeAlias = pl.DataFrame | pd.DataFrame
-Column: TypeAlias = pl.Series | pd.Series
 
+class ArrowStream(Protocol):
+    """A table exporting the Arrow PyCapsule stream interface, e.g. a pyarrow Table or a DuckDB relation."""
+
+    def __arrow_c_stream__(self, requested_schema: Any = None, /) -> Any: ...
+
+
+Frame: TypeAlias = pl.DataFrame | pd.DataFrame
+FrameLike: TypeAlias = Frame | ArrowStream
+Column: TypeAlias = pl.Series | pd.Series
+Missing: TypeAlias = Literal["refused", "absent"] | float
+
+ZONED = "tz-aware datetime"
 KIND_FAMILIES = {
     "b": "boolean",
     "i": "numeric",
@@ -34,27 +46,39 @@ KIND_FAMILIES = {
     "U": "string",
     "S": "string",
 }
+INFERRED_FAMILIES = {
+    "empty": "string",
+    "integer": "numeric",
+    "floating": "numeric",
+    "mixed-integer-float": "numeric",
+    "decimal": "numeric",
+    "timedelta": "duration",
+    "datetime64": "datetime",
+    "bytes": "string",
+}
+FAMILIES = frozenset({*KIND_FAMILIES.values(), "date", ZONED})
 
 
 def _family(column: Column | pd.Index) -> str:
     """
-    The dtype family of ``column``: numeric, datetime with its time zone,
+    The dtype family of ``column``: numeric, datetime, tz-aware datetime,
     date, duration, string or boolean, a pandas categorical classified by
-    its categories.
+    its categories and an object column by its values.
     """
     dtype = column.dtype
     if isinstance(dtype, pd.CategoricalDtype):
         return _family(dtype.categories.rename(column.name))
     if isinstance(dtype, pd.DatetimeTZDtype):
-        return f"datetime[{dtype.tz}]"
+        return ZONED
     if not isinstance(dtype, pl.DataType) and dtype.kind == "O":
-        return "date" if pd.api.types.infer_dtype(column) == "date" else "string"
+        inferred = pd.api.types.infer_dtype(column)
+        return INFERRED_FAMILIES.get(inferred, inferred)
     if not isinstance(dtype, pl.DataType) and dtype.kind in KIND_FAMILIES:
         return KIND_FAMILIES[dtype.kind]
     if not isinstance(dtype, pl.DataType):
         raise TypeError(f"Column {column.name!r} has unsupported dtype {dtype}.")
     if isinstance(dtype, pl.Datetime) and dtype.time_zone is not None:
-        return f"datetime[{dtype.time_zone}]"
+        return ZONED
     if isinstance(dtype, pl.Datetime):
         return "datetime"
     if isinstance(dtype, pl.Date):
@@ -72,11 +96,17 @@ def _family(column: Column | pd.Index) -> str:
 
 def _as_polars(index: pd.Index) -> pl.Series:
     if isinstance(index, pd.DatetimeIndex) and index.tz is not None:
-        utc = pl.Series(index.asi8).cast(pl.Datetime(index.unit))
-        return utc.dt.replace_time_zone("UTC").dt.convert_time_zone(str(index.tz))
+        return pl.Series(index.asi8).cast(pl.Datetime(index.unit, "UTC"))
     if _family(index) == "date":
         return pl.Series(index.to_numpy(dtype="datetime64[D]")).cast(pl.Date)
     return pl.Series(index.to_numpy())
+
+
+def _to_numpy(column: Column) -> np.ndarray:
+    """The values of ``column`` in numpy, tz-aware datetimes as timestamps of their zone."""
+    if isinstance(column, pl.Series) and _family(column) == ZONED:
+        return column.to_pandas().to_numpy()
+    return column.to_numpy()
 
 
 def _has_nulls(column: Column) -> bool:
@@ -89,11 +119,26 @@ def _is_float_numpy(column: Column) -> bool:
     return isinstance(column.dtype, np.dtype) and column.dtype.kind == "f"
 
 
-def _check_frame(frame: Frame) -> None:
-    if not isinstance(frame, Frame):
-        raise TypeError(
-            f"Expected a polars or pandas DataFrame, got {type(frame).__name__}."
-        )
+def _is_missing(value: Any) -> bool:
+    """Whether ``value`` is a ``missing`` policy: "refused", "absent" or a number."""
+    if isinstance(value, str):
+        return value in ("refused", "absent")
+    return isinstance(value, numbers.Real) and not isinstance(value, bool | np.bool_)
+
+
+def _is_arrow_table(obj: Any) -> bool:
+    """Whether ``obj`` exports the Arrow stream interface and is no frame, series or DataArray."""
+    return not isinstance(obj, Frame | Column | DataArray) and hasattr(
+        obj, "__arrow_c_stream__"
+    )
+
+
+def _as_frame(frame: FrameLike) -> Frame:
+    """
+    ``frame`` as a polars or pandas DataFrame, an Arrow stream read into
+    polars. Raises for anything else, a series and a pandas frame with index
+    levels or column levels.
+    """
     if isinstance(frame, pd.DataFrame) and (
         frame.columns.nlevels > 1 or frame.index.names != [None]
     ):
@@ -101,6 +146,107 @@ def _check_frame(frame: Frame) -> None:
             "Expected flat columns and an unnamed index, call `reset_index()` "
             "to turn index levels into key columns."
         )
+    if isinstance(frame, Frame):
+        return frame
+    expected = (
+        "Expected a polars or pandas DataFrame or a table exporting the Arrow "
+        f"stream interface, got {type(frame).__name__}."
+    )
+    if not _is_arrow_table(frame):
+        raise TypeError(expected)
+    try:
+        return pl.DataFrame(frame)
+    except pl.exceptions.PolarsError as err:
+        raise TypeError(expected) from err
+
+
+def _lookup(index: pd.Index, column: Column) -> pl.Series:
+    """
+    The positions of the values of ``column`` in the unique ``index``, null
+    where a value is not in ``index``. ``column`` has no null values and the
+    dtype family of ``index``; tz-aware datetimes match by instant, values
+    of a mixed-type ``index`` by value.
+    """
+    if isinstance(column, pl.Series) and _family(index) not in FAMILIES:
+        column = column.to_pandas()
+    if isinstance(column, pd.Series):
+        pos = pl.Series(index.get_indexer(column))
+        return pos.set(pos == -1, None)
+    if (
+        isinstance(index, pd.RangeIndex)
+        and index.step == 1
+        and column.dtype.is_integer()
+    ):
+        pos = column.cast(pl.Int64, strict=False) - index.start
+        return pos.set((pos < 0) | (pos >= len(index)), None)
+    if _family(column) == ZONED:
+        column = column.dt.convert_time_zone("UTC")
+    lookup = _as_polars(index)
+    key = column.cast(lookup.dtype, strict=False)
+    if lookup.dtype != column.dtype:
+        key = key.set(key.cast(column.dtype, strict=False).ne_missing(column), None)
+    table = pl.DataFrame({"key": lookup, "pos": np.arange(len(index))})
+    joined = key.to_frame("key").join(
+        table, on="key", how="left", maintain_order="left"
+    )
+    return joined["pos"]
+
+
+def _same_family(index: pd.Index, column: Column) -> bool:
+    """
+    Whether ``column`` has the dtype family of ``index``. An empty column
+    has any, and a mixed-type one, or one on a mixed-type ``index``, is
+    looked up by value.
+    """
+    return not len(column) or _alike(_family(column), _family(index))
+
+
+def _alike(have: str, want: str) -> bool:
+    """Whether dtype family ``have`` matches ``want``, any does a mixed or unknown one."""
+    return have == want or not {have, want} <= FAMILIES
+
+
+def _distinct(column: Column | pd.Index) -> list[Any]:
+    """The distinct values of ``column`` in order of appearance, of its own type."""
+    if isinstance(column, pl.Series):
+        return column.unique(maintain_order=True).to_list()
+    return column.unique().tolist()
+
+
+def _strays(column: Column, pos: pl.Series) -> list[Any]:
+    """The distinct values of ``column`` without a position, in order of appearance."""
+    if not pos.null_count():
+        return []
+    missing = pos.is_null()
+    if isinstance(column, pl.Series):
+        return _distinct(column.filter(missing))
+    return _distinct(column[missing.to_numpy()])
+
+
+def _ravel(positions: Sequence[pl.Series], shape: Sequence[int]) -> pl.Series:
+    """The flat positions in a C-ordered array of ``shape`` of the per-axis ``positions``."""
+    flat = pl.Series(np.zeros(len(positions[0]), dtype=np.int64))
+    for pos, n in zip(positions, shape):
+        flat = flat * n + pos.cast(pl.Int64)
+    return flat
+
+
+def _grid(
+    flat: pl.Series, values: np.ndarray, size: int, fill: Any, dtype: npt.DTypeLike
+) -> np.ndarray:
+    """
+    A new flat array of ``size`` holding ``values`` at the unique positions
+    ``flat`` and ``fill`` elsewhere, of ``dtype`` if ``flat`` leaves a cell to
+    fill and of the dtype of ``values`` otherwise.
+    """
+    if len(flat) < size:
+        out = np.full(size, fill, dtype)
+    elif flat.is_sorted():
+        return values.copy()
+    else:
+        out = np.empty(size, values.dtype)
+    out[flat.to_numpy()] = values
+    return out
 
 
 def _positions(index: pd.Index, column: Column) -> pl.Series:
@@ -115,37 +261,14 @@ def _positions(index: pd.Index, column: Column) -> pl.Series:
         )
     if _has_nulls(column):
         raise ValueError(f"Column {column.name!r} has null values.")
-    if _family(column) != _family(index):
+    if not _same_family(index, column):
         raise TypeError(
             f"Column {column.name!r} of dtype {column.dtype} does not match "
             f"the coordinates of dimension {index.name!r} of dtype {index.dtype}."
         )
-    if isinstance(column, pd.Series):
-        pos = pl.Series(index.get_indexer(column))
-        pos = pos.set(pos == -1, None)
-    elif (
-        isinstance(index, pd.RangeIndex)
-        and index.step == 1
-        and column.dtype.is_integer()
-    ):
-        pos = column.cast(pl.Int64, strict=False) - index.start
-        pos = pos.set((pos < 0) | (pos >= len(index)), None)
-    else:
-        lookup = _as_polars(index)
-        key = column.cast(lookup.dtype, strict=False)
-        if lookup.dtype != column.dtype:
-            key = key.set(key.cast(column.dtype, strict=False).ne_missing(column), None)
-        table = pl.DataFrame({"key": lookup, "pos": np.arange(len(index))})
-        pos = key.to_frame("key").join(
-            table, on="key", how="left", maintain_order="left"
-        )["pos"]
-    if pos.null_count():
-        missing = pos.is_null()
-        outside = (
-            column.filter(missing).unique(maintain_order=True).to_list()
-            if isinstance(column, pl.Series)
-            else column[missing.to_numpy()].unique().tolist()
-        )
+    pos = _lookup(index, column)
+    outside = _strays(column, pos)
+    if outside:
         raise ValueError(
             f"Values {outside[:5]} of column {column.name!r} are "
             f"not in the coordinates of dimension {index.name!r}."
@@ -173,12 +296,10 @@ def _flat(
         raise ValueError(
             f"Coords lack the dimensions {absent} of columns {list(keys)}."
         )
-    flat = pl.Series(np.zeros(frame.shape[0], dtype=np.int64))
-    for k in keys:
-        flat = flat * len(target[k]) + _positions(target[k], frame[k])
+    shape = [len(target[k]) for k in keys]
+    flat = _ravel([_positions(target[k], frame[k]) for k in keys], shape)
     if flat.n_unique() != len(flat):
         raise ValueError(f"Frame has duplicate keys over {list(keys)}{duplicate_hint}.")
-    shape = [len(target[k]) for k in keys]
     size = int(np.prod(shape))
     if strict and len(flat) < size:
         missing = np.ones(size, dtype=bool)
@@ -193,7 +314,7 @@ def _flat(
 
 
 def from_long(
-    frame: Frame, coords: CoordsLike, default: float | None = None
+    frame: FrameLike, coords: CoordsLike, missing: Missing = "refused"
 ) -> DataArray:
     """
     Pivot a long-form frame onto ``coords``.
@@ -201,8 +322,8 @@ def from_long(
     The columns of ``frame`` named after a dimension of ``coords`` are the key
     columns, exactly one other column is the value column. The result is
     named after the value column and spans the key dimensions only, in column
-    order, with the full coordinates of ``coords``: key combinations not
-    listed take ``default`` or raise without it. Dimensions of ``coords``
+    order, with the full coordinates of ``coords``: ``missing`` says what a
+    key combination not listed means. Dimensions of ``coords``
     without a key column are not part of the result, linopy broadcasts it over
     them where it is used.
     The result is the full cube over the key dimensions, a sparsely filled
@@ -210,15 +331,19 @@ def from_long(
 
     Parameters
     ----------
-    frame : polars.DataFrame or pandas.DataFrame
+    frame : polars.DataFrame, pandas.DataFrame or Arrow table
         The long-form data, one row per key combination: key columns plus one
         value column, numeric without null values; NaN values are kept. A
-        pandas frame needs an unnamed index, its keys are columns.
+        pandas frame needs an unnamed index, its keys are columns. Any other
+        table exporting the Arrow stream interface, e.g. a pyarrow Table or a
+        DuckDB relation, is read into polars.
     coords : list/dict/xarray.Coordinates
         The coordinates the keys are positioned in, e.g. ``var.coords`` of
         the variable the result is used with.
-    default : float, optional
-        Value of key combinations missing from ``frame``; without it, gaps raise.
+    missing : "refused", "absent" or float, default "refused"
+        What a key combination missing from ``frame`` means, as a mathspec
+        parameter's ``missing:`` says it: ``"refused"`` raises, ``"absent"``
+        leaves the cell absent (NaN), a number is the value of the cell.
 
     Returns
     -------
@@ -231,12 +356,15 @@ def from_long(
         For no key column, not exactly one column besides the key columns (a
         misspelled key column counts as a second value column), null keys or
         values, duplicate keys, key combinations missing from ``frame``
-        without ``default``, keys outside ``coords`` and key coordinates with
-        duplicate labels.
+        with ``missing="refused"``, keys outside ``coords``, key coordinates
+        with duplicate labels and a ``missing`` other than ``"refused"``,
+        ``"absent"`` or a number.
     TypeError
-        For a frame type other than a polars or pandas DataFrame, a non-numeric
-        value column and key dtypes (numeric, datetime with its time zone,
-        date, duration, string) differing from the ones of ``coords``.
+        For a frame other than a polars or pandas DataFrame or an Arrow table, a non-numeric
+        value column and key dtype families (numeric, datetime, tz-aware
+        datetime, date, duration, string, boolean) differing from the ones of
+        ``coords``. Tz-aware keys match tz-aware coordinates by instant,
+        whatever their time zone.
 
     Warns
     -----
@@ -253,7 +381,7 @@ def from_long(
     >>> m = linopy.Model()
     >>> i = pd.RangeIndex(3, name="i")
     >>> ub = linopy.from_long(
-    ...     pd.DataFrame({"i": [0, 2], "ub": [5.0, 7.0]}), coords=[i], default=0
+    ...     pd.DataFrame({"i": [0, 2], "ub": [5.0, 7.0]}), coords=[i], missing=0
     ... )
     >>> ub.name
     'ub'
@@ -267,7 +395,11 @@ def from_long(
         "https://github.com/PyPSA/linopy/issues. This warning fires once per "
         "session.",
     )
-    _check_frame(frame)
+    frame = _as_frame(frame)
+    if not _is_missing(missing):
+        raise ValueError(
+            f"`missing` is 'refused', 'absent' or a number, got {missing!r}."
+        )
     dims = list(_coords_to_dict(coords))
     keys = [k for k in frame.columns if k in dims]
     if not keys:
@@ -289,21 +421,18 @@ def from_long(
         frame,
         keys,
         coords,
-        strict=default is None,
-        hint="; pass `default=` to fill them",
+        strict=missing == "refused",
+        hint="; pass `missing=` to fill them",
     )
-    data = frame[value].to_numpy().astype(float)
-    if len(flat) == size and flat.is_sorted():
-        out = data
-    else:
-        out = np.full(size, default, dtype=float)
-        out[flat.to_numpy()] = data
+    fill = np.nan if missing == "absent" else missing
+    data = frame[value].to_numpy().astype(float, copy=False)
+    out = _grid(flat, data, size, fill, float)
     return DataArray(
         out.reshape(shape), coords=[target[k] for k in keys], dims=keys, name=value
     )
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True, eq=False, init=False)
 class Relation:
     """
     A many-to-many map from the member cells of one or several dimensions to
@@ -318,8 +447,10 @@ class Relation:
 
     Parameters
     ----------
-    frame : polars.DataFrame or pandas.DataFrame
+    frame : polars.DataFrame, pandas.DataFrame or Arrow table
         The member-group pairs, exactly the ``member`` columns and ``group``.
+        Any other table exporting the Arrow stream interface, e.g. a pyarrow
+        Table or a DuckDB relation, is read into polars.
     member : str or sequence of str
         Name of the member column or columns, each a dimension of the grouped
         expression.
@@ -357,17 +488,25 @@ class Relation:
     group: str
     groups: pd.Index | None = None
 
-    def __post_init__(self) -> None:
+    def __init__(
+        self,
+        frame: FrameLike,
+        member: str | Sequence[str],
+        group: str,
+        groups: pd.Index | None = None,
+    ) -> None:
         _warn_evolving_api(
             "Relation",
             "long-form: Relation is a new API; its signature and input format may "
             "change in minor releases. Please share your use cases at "
             "https://github.com/PyPSA/linopy/issues. This warning fires once per "
             "session.",
-            stacklevel=4,
         )
-        _check_frame(self.frame)
-        members, group = self.members, self.group
+        object.__setattr__(self, "frame", _as_frame(frame))
+        object.__setattr__(self, "member", member)
+        object.__setattr__(self, "group", group)
+        object.__setattr__(self, "groups", groups)
+        members = self.members
         columns = list(self.frame.columns)
         if group in members:
             raise ValueError(
@@ -416,7 +555,7 @@ class Relation:
             strict=True,
             duplicate_hint="; group_of needs exactly one row per member cell",
         )
-        values = self.frame[self.group].to_numpy()
+        values = _to_numpy(self.frame[self.group])
         out = np.empty_like(values)
         out[flat.to_numpy()] = values
         return DataArray(
