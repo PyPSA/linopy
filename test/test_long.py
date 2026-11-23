@@ -225,6 +225,7 @@ SUB_US = pd.Series(NS[[1]] + pd.Timedelta(1, "ns"))
 UTC = pd.date_range("2030-01-01", periods=2, freq="h", name="k", tz=tzutc())
 BERLIN_TZFILE = BERLIN.tz_convert(gettz("Europe/Berlin"))
 FIXED = pd.to_datetime(["2030-01-01T00:00+01:00", "2030-01-01T01:00+01:00"])
+MIXED = pd.Index(["p", 1], name="k", dtype=object)
 NOT_IN = (ValueError, "not in the coordinates")
 NO_MATCH = (TypeError, "does not match")
 
@@ -288,8 +289,16 @@ KEY_DTYPES: dict[str, tuple[Column, pd.Index, list[float] | tuple[type, str]]] =
     "object-mixed-pandas": (
         pd.Series([20, "p"], dtype=object),
         pd.Index([10, 20]),
-        NO_MATCH,
+        NOT_IN,
     ),
+    "object-datetime64-pandas": (
+        pd.Series([np.datetime64("2030-01-02")], dtype=object),
+        MIDNIGHT,
+        [np.nan, 1],
+    ),
+    "mixed-index": (pl.Series(["p"]), MIXED, [1, np.nan]),
+    "mixed-index-pandas": (pd.Series([1]), MIXED, [np.nan, 1]),
+    "mixed-index-stray": (pl.Series(["1"]), MIXED, NOT_IN),
 }
 
 

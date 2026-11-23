@@ -44,8 +44,10 @@ INFERRED_FAMILIES = {
     "mixed-integer-float": "numeric",
     "decimal": "numeric",
     "timedelta": "duration",
+    "datetime64": "datetime",
     "bytes": "string",
 }
+FAMILIES = frozenset({*KIND_FAMILIES.values(), "date", ZONED})
 
 
 def _family(column: Column | pd.Index) -> str:
@@ -119,8 +121,11 @@ def _lookup(index: pd.Index, column: Column) -> pl.Series:
     """
     The positions of the values of ``column`` in the unique ``index``, null
     where a value is not in ``index``. ``column`` has no null values and the
-    dtype family of ``index``; tz-aware datetimes match by instant.
+    dtype family of ``index``; tz-aware datetimes match by instant, values
+    of a mixed-type ``index`` by value.
     """
+    if isinstance(column, pl.Series) and _family(index) not in FAMILIES:
+        column = column.to_pandas()
     if isinstance(column, pd.Series):
         pos = pl.Series(index.get_indexer(column))
         return pos.set(pos == -1, None)
@@ -145,8 +150,15 @@ def _lookup(index: pd.Index, column: Column) -> pl.Series:
 
 
 def _same_family(index: pd.Index, column: Column) -> bool:
-    """Whether ``column`` has the dtype family of ``index``, an empty one has any."""
-    return not len(column) or _family(column) == _family(index)
+    """
+    Whether ``column`` has the dtype family of ``index``. An empty column
+    has any, and a mixed-type one, or one on a mixed-type ``index``, is
+    looked up by value.
+    """
+    if not len(column):
+        return True
+    have, want = _family(column), _family(index)
+    return have == want or not {have, want} <= FAMILIES
 
 
 def _strays(column: Column, pos: pl.Series) -> list[Any]:

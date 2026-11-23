@@ -1082,6 +1082,32 @@ def test_a_table_label_finer_than_its_dimension_is_a_stray(lib: str) -> None:
         attached.read("load")
 
 
+@pytest.mark.parametrize("lib", ["pandas", "polars"])
+@pytest.mark.parametrize(
+    ("labels", "want"),
+    [(["a"], [1.0, np.nan]), (["a", "b"], "not coordinates of it: 'b'")],
+    ids=["label", "stray"],
+)
+def test_a_table_label_of_a_mixed_type_dimension_matches_by_value(
+    labels: list[str], want: Any, lib: str
+) -> None:
+    program = lower(
+        {
+            "dimensions": {"d": {"dtype": "str"}},
+            "parameters": {"p": {"dims": ["d"], "missing": "absent"}},
+        }
+    )
+    rows = pd.DataFrame({"d": labels, "p": [1.0] * len(labels)})
+    frame = pl.from_pandas(rows) if lib == "polars" else rows
+    mixed = pd.Index(["a", 1], dtype=object)
+    attached = attach(program, {"d": mixed, "p": frame})
+    if isinstance(want, str):
+        with pytest.raises(SpecDataError, match=want):
+            attached.read("p")
+    else:
+        np.testing.assert_array_equal(filled(attached, "p").values, want)
+
+
 def test_a_stray_relation_value_over_an_int_target_is_shown_as_written() -> None:
     program = lower({**RELATION_SPEC, "dimensions": {"g": {}, "b": {"dtype": "int"}}})
     numbered = {"b": [1, 2], "gen_bus": pd.DataFrame({"g": ["w", "s"], "b": [1, 99]})}
