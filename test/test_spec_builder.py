@@ -1083,6 +1083,7 @@ def test_a_summed_row_a_dimension_without_members_empties_is_kept_where_it_holds
 ) -> None:
     budget = without_members(row, build).constraints["budget"]
     assert int(budget.labels) != -1
+    assert not np.signbit(budget.rhs.values)
     assert not budget.lhs.has_terms
 
 

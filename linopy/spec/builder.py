@@ -356,7 +356,7 @@ def _constant(
     """
     moved = cast(LinearExpression, lhs - rhs)
     return Constraint(
-        moved.reset_const(), maybe_replace_sign(sense), -moved.const, lhs.model
+        moved.reset_const(), maybe_replace_sign(sense), 0.0 - moved.const, lhs.model
     )
 
 
