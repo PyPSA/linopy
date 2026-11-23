@@ -14,8 +14,7 @@ import warnings
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
 from functools import reduce
-from typing import TypeAlias, cast
-from typing import Any, cast
+from typing import Any, TypeAlias, cast
 
 import numpy as np
 import pandas as pd
