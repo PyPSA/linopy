@@ -61,6 +61,7 @@ AT_R = xr.DataArray([2, 0, 2], coords=[R])
 MULTI_R = xr.Coordinates.from_pandas_multiindex(
     pd.MultiIndex.from_tuples([("x", 1), ("y", 2)], names=["k1", "k2"]), "r"
 )
+PAIRS = pd.Index([(2020, 0), (2030, 0), (2040, 1)], name="a", tupleize_cols=False)
 
 
 def var(e: LinearExpression, name: str) -> Variable:
@@ -95,6 +96,10 @@ def non_unique(m: Model) -> LinearExpression:
 
 def zero_size(m: Model) -> LinearExpression:
     return 1 * m.add_variables(coords=[pd.Index([], dtype=int, name="a")], name="n")
+
+
+def tupled(m: Model) -> LinearExpression:
+    return 2 * m.add_variables(coords=[PAIRS, B], name="x")
 
 
 def without_tag(e: LinearExpression) -> LinearExpression:
@@ -165,6 +170,10 @@ CASES: dict[str, Case] = {
     "isel-scalar": Case(grid, lambda e: e.isel(b=0), KEPT),
     "isel-scalar-coord": Case(
         grid, lambda e: e.assign_coords(s=5).isel(a=1, drop=True), KEPT
+    ),
+    "isel-scalar-tuple": Case(tupled, lambda e: e.isel(a=1), KEPT),
+    "isel-scalar-tuple-coord": Case(
+        grid, lambda e: e.assign_coords(pair=("a", PAIRS.to_numpy())).isel(a=1), KEPT
     ),
     "getitem": Case(grid, lambda e: e[0:2], KEPT),
     "roll": Case(grid, lambda e: e.roll(a=1), KEPT),
@@ -809,3 +818,23 @@ def test_sparse_positional_csr_cached_while_held(rows: str) -> None:
     rebuilt = store.positional_csr(m.variables.label_index, active, "c")
     assert rebuilt.indices is not first.indices
     np.testing.assert_array_equal(rebuilt.indices, first.indices)
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        pd.Index(["x", "y"], name="a"),
+        pd.date_range("2020-01-01", periods=2, tz="Europe/Berlin", name="a"),
+        PAIRS,
+    ],
+    ids=["str", "tz-aware", "tuple"],
+)
+def test_isel_scalar_label_matches_dense(labels: pd.Index) -> None:
+    picked = [
+        (1 * Model(sparse=sparse).add_variables(coords=[labels], name="x"))
+        .isel(a=1)
+        .coords["a"]
+        for sparse in (False, True)
+    ]
+    assert picked[0].dtype == picked[1].dtype
+    assert picked[0].item() == picked[1].item()

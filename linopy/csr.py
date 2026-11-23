@@ -49,7 +49,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse
 from numpy.typing import ArrayLike, DTypeLike
-from xarray import DataArray, Dataset, broadcast
+from xarray import DataArray, Dataset, IndexVariable, broadcast
 
 from linopy.common import lookup_table
 from linopy.config import options
@@ -220,7 +220,7 @@ class Grid:
         aux: AuxCoords = {}
         if not drop:
             aux = {
-                d: ((), np.asarray(self.indexes[d].to_numpy()[i]))
+                d: ((), IndexVariable((d,), self.indexes[d])[i].to_numpy())
                 for d, i in picked.items()
             }
         for name, (d, values) in self.aux.items():
@@ -229,7 +229,7 @@ class Grid:
             elif d not in picked:
                 aux[name] = (d, values[indexers[d]])
             elif not drop:
-                aux[name] = ((), np.asarray(values[indexers[d]]))
+                aux[name] = ((), values[indexers[d], ...])
         return Grid(indexes, aux), rows
 
     def with_indexes(self, indexers: Mapping[Any, Any]) -> Grid:
