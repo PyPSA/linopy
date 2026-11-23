@@ -316,9 +316,10 @@ def test_from_long_column_dtypes(case: str) -> None:
         xr.testing.assert_identical(res, xr.DataArray(want, coords=[index], name="v"))
 
 
-def test_from_long_refuses_unknown_missing() -> None:
+@pytest.mark.parametrize("missing", ["zero", None, True, np.True_, [0]])
+def test_from_long_refuses_unknown_missing(missing: Any) -> None:
     with pytest.raises(ValueError, match="'refused', 'absent' or a number"):
-        from_long(FRAME_A, coords=[A], missing="zero")  # type: ignore[arg-type]
+        from_long(FRAME_A, coords=[A], missing=missing)
 
 
 @pytest.mark.parametrize(

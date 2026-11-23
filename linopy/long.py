@@ -8,6 +8,7 @@ to groups for :meth:`~linopy.expressions.LinearExpressionGroupby.sum`.
 
 from __future__ import annotations
 
+import numbers
 from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias
@@ -101,6 +102,13 @@ def _has_nulls(column: Column) -> bool:
 
 def _is_float_numpy(column: Column) -> bool:
     return isinstance(column.dtype, np.dtype) and column.dtype.kind == "f"
+
+
+def _is_missing(value: Any) -> bool:
+    """Whether ``value`` is a ``missing`` policy: "refused", "absent" or a number."""
+    if isinstance(value, str):
+        return value in ("refused", "absent")
+    return isinstance(value, numbers.Real) and not isinstance(value, bool | np.bool_)
 
 
 def _check_frame(frame: Frame) -> None:
@@ -303,8 +311,8 @@ def from_long(
         misspelled key column counts as a second value column), null keys or
         values, duplicate keys, key combinations missing from ``frame``
         with ``missing="refused"``, keys outside ``coords``, key coordinates
-        with duplicate labels and a ``missing`` string other than
-        ``"refused"`` or ``"absent"``.
+        with duplicate labels and a ``missing`` other than ``"refused"``,
+        ``"absent"`` or a number.
     TypeError
         For a frame type other than a polars or pandas DataFrame, a non-numeric
         value column and key dtype families (numeric, datetime, tz-aware
@@ -342,7 +350,7 @@ def from_long(
         "session.",
     )
     _check_frame(frame)
-    if isinstance(missing, str) and missing not in ("refused", "absent"):
+    if not _is_missing(missing):
         raise ValueError(
             f"`missing` is 'refused', 'absent' or a number, got {missing!r}."
         )
