@@ -12,6 +12,7 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
+from arrow_helpers import ArrowStream
 from dateutil.tz import gettz, tzutc
 from test_store_conformance import RELATION, RELATION_FRAME, A, B, assert_same
 
@@ -31,14 +32,6 @@ from linopy.testing import assert_equivalent
 
 def to_polars(frame: pd.DataFrame) -> pl.DataFrame:
     return pl.from_dict(frame.astype(object).where(frame.notna(), None).to_dict("list"))
-
-
-class ArrowStream:
-    def __init__(self, data: pl.DataFrame | pl.Series) -> None:
-        self.data = data
-
-    def __arrow_c_stream__(self, requested_schema: Any = None) -> Any:
-        return self.data.__arrow_c_stream__(requested_schema)
 
 
 FRAME_LIBS: dict[str, Callable[[pd.DataFrame], Any]] = {

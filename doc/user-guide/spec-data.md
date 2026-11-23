@@ -57,8 +57,10 @@ Each kind of data takes exactly one shape for tables and one for grids, and
 anything else is refused with `SpecDataError` naming the shape to pass,
 rather than guessed at. A **table** is a `pandas.DataFrame` or a
 `polars.DataFrame` that carries its labels in columns, never in its index,
-and has no column beyond those it is read for. A **grid** is an
-`xarray.DataArray` over the declared dimensions.
+and has no column beyond those it is read for. Any other table exporting the
+Arrow stream interface, such as a pyarrow `Table` or a DuckDB relation, is
+read into polars once, on its first lookup, and is then a polars table. A
+**grid** is an `xarray.DataArray` over the declared dimensions.
 
 linopy reads the keys once, off `keys()`, and never iterates the mapping
 beyond that. Each declared name is then read with one `__getitem__`. A mapping

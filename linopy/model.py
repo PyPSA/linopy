@@ -516,7 +516,9 @@ class Model:
             with exactly one column per dimension and its values under its
             own name, a ``DataArray`` over its dimensions, or one number if
             it has none. A relation is a pandas or polars ``DataFrame`` with
-            exactly its declared columns. See :doc:`spec-data`.
+            exactly its declared columns. A table exporting the Arrow stream
+            interface, e.g. a pyarrow Table or a DuckDB relation, is read into
+            polars once. See :doc:`spec-data`.
         store : bool, default False
             Write the spec's parameters, unfilled with a missing row a NaN
             hole, and its relations into ``model.parameters`` under their

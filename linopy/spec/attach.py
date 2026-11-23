@@ -15,7 +15,8 @@ while a table says a row is missing by leaving it out. Read leaves a missing
 row a hole, and :func:`fill` applies ``missing:``.
 
 Each kind of data takes one shape, and anything else is refused rather than
-guessed at. A table is a pandas or polars DataFrame carrying its labels in
+guessed at. A table is a pandas or polars DataFrame, or a table exporting the
+Arrow stream interface read into polars once, carrying its labels in
 columns named after the dimensions or roles, never in its index, and no
 column beyond those it is read for. A grid is a DataArray over the declared
 dimensions. A dimension is a flat sequence of unique labels.
@@ -26,7 +27,7 @@ from __future__ import annotations
 import difflib
 import functools
 import warnings
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, KeysView, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
@@ -41,9 +42,11 @@ from linopy.long import (
     Column,
     Frame,
     _alike,
+    _as_frame,
     _distinct,
     _family,
     _grid,
+    _is_arrow_table,
     _lookup,
     _ravel,
     _strays,
@@ -123,11 +126,46 @@ def attach(program: ms.Program, sources: Mapping[str, Any] | xr.Dataset) -> Atta
         )
     if isinstance(sources, xr.Dataset):
         sources = _from_dataset(program, sources)
+    sources = _ArrowRead(sources)
     keys = frozenset(sources.keys())
     _warn_near_misses(keys, program)
     coords = _master_coords(program, sources, keys)
     relations = _relations(program, sources, keys, coords)
     return Attached(program, coords, relations, sources, keys)
+
+
+class _ArrowRead(Mapping[str, Any]):
+    """
+    *sources* read by key, a table exporting the Arrow stream interface read
+    into polars on its first lookup and kept, as a stream may be read once.
+    Anything polars does not read as a table stays as it is, for its reader
+    to refuse.
+    """
+
+    def __init__(self, sources: Mapping[str, Any]) -> None:
+        self.sources = sources
+        self.tables: dict[str, Frame] = {}
+
+    def __getitem__(self, key: str) -> Any:
+        if key in self.tables:
+            return self.tables[key]
+        obj = self.sources[key]
+        if not _is_arrow_table(obj):
+            return obj
+        try:
+            self.tables[key] = _as_frame(obj)
+        except TypeError:
+            return obj
+        return self.tables[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.sources)
+
+    def __len__(self) -> int:
+        return len(self.sources)
+
+    def keys(self) -> KeysView[str]:
+        return self.sources.keys()
 
 
 @dataclass(frozen=True, eq=False)
@@ -146,7 +184,8 @@ class Attached:
     relations
         By relation name, its rows checked against the master coordinates.
     sources
-        The caller's data, read by key on demand, one ``__getitem__`` per read.
+        The caller's data, read by key on demand, one ``__getitem__`` per read,
+        an Arrow table only on its first, into polars.
     keys
         The keys of ``sources``, read once at attach time.
     """
@@ -724,7 +763,10 @@ def _from_table(
             f"of a value is the absence of the row, and such a row says the coordinate exists and "
             f"denies it in the same breath. Drop those rows, or supply the values."
         )
-    values = df[name].to_numpy()
+    column = df[name]
+    if isinstance(column.dtype, pl.Decimal):
+        column = column.cast(pl.Float64)
+    values = column.to_numpy()
     if not len(values):
         values = values.astype(_EMPTY_DTYPES[declared.dtype])
     _check_value_dtype(name, declared.dtype, values.dtype)

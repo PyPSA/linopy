@@ -16,6 +16,7 @@ import xarray as xr
 
 pytest.importorskip("mathspec")
 
+from arrow_helpers import ArrowStream  # noqa: E402
 from spec_helpers import table, with_  # noqa: E402
 
 from linopy.spec import SpecDataError  # noqa: E402
@@ -124,6 +125,7 @@ CAP_SHAPES = {
     "table-dims-reordered": table(CAP.transpose("t", "f").to_series(), "cap"),
     "table-unnamed-index": CAP_TABLE.set_axis(range(10, 19)),
     "polars-table": polars(CAP_TABLE),
+    "arrow-table": ArrowStream(polars(CAP_TABLE)),
 }
 
 
@@ -142,6 +144,8 @@ COST_SHAPES = {
     "whole-numbers": table(COST.astype(int), "cost"),
     "polars-table": polars(COST_TABLE),
     "polars-whole-numbers": polars(table(COST.astype(int), "cost")),
+    "arrow-table": ArrowStream(polars(COST_TABLE)),
+    "polars-decimal": polars(COST_TABLE).cast({"cost": pl.Decimal(10, 2)}),
 }
 
 
@@ -233,6 +237,7 @@ RELATION_SHAPES = {
     ),
     "table-unnamed-index": GRP_TABLE.set_axis([7, 3, 5]),
     "polars-table": polars(GRP_TABLE),
+    "arrow-table": ArrowStream(polars(GRP_TABLE)),
 }
 
 
@@ -720,6 +725,11 @@ REFUSALS = [
         {"grp": None}, r"no data provided for relation 'grp'", id="missing-relation"
     ),
     pytest.param(
+        {"f": ArrowStream(pl.Series("f", list(F)))},
+        r"index for dimension 'f': cannot read labels out of ArrowStream",
+        id="dimension-arrow-array",
+    ),
+    pytest.param(
         {"grp": pd.Series(["n", "e", "n"], index=F)},
         r"relation 'grp': cannot read rows out of Series; pass a pandas or polars "
         r"DataFrame with exactly the columns \['f', 'g'\]",
@@ -856,6 +866,14 @@ def test_sources_are_read_by_key_once_never_iterated(
     source = Unlisted(good)
     read_all(program, source)
     assert Counter(source.reads) == dict.fromkeys(good, 1)
+
+
+def test_an_arrow_table_is_read_once_however_often_its_parameter_is(
+    program: Any, good: dict[str, Any]
+) -> None:
+    attached = attach(program, {**good, "cost": ArrowStream(polars(COST_TABLE))})
+    first, second = (filled(attached, "cost") for _ in range(2))
+    xr.testing.assert_equal(first, second)
 
 
 def test_a_source_key_close_to_a_declared_name_warns(
