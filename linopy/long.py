@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
-from typing import Any, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 import numpy as np
 import numpy.typing as npt
@@ -24,6 +24,7 @@ from linopy.types import CoordsLike
 
 Frame: TypeAlias = pl.DataFrame | pd.DataFrame
 Column: TypeAlias = pl.Series | pd.Series
+Missing: TypeAlias = Literal["refused", "absent"] | float
 
 KIND_FAMILIES = {
     "b": "boolean",
@@ -247,7 +248,7 @@ def _flat(
 
 
 def from_long(
-    frame: Frame, coords: CoordsLike, default: float | None = None
+    frame: Frame, coords: CoordsLike, missing: Missing = "refused"
 ) -> DataArray:
     """
     Pivot a long-form frame onto ``coords``.
@@ -255,8 +256,8 @@ def from_long(
     The columns of ``frame`` named after a dimension of ``coords`` are the key
     columns, exactly one other column is the value column. The result is
     named after the value column and spans the key dimensions only, in column
-    order, with the full coordinates of ``coords``: key combinations not
-    listed take ``default`` or raise without it. Dimensions of ``coords``
+    order, with the full coordinates of ``coords``: ``missing`` says what a
+    key combination not listed means. Dimensions of ``coords``
     without a key column are not part of the result, linopy broadcasts it over
     them where it is used.
     The result is the full cube over the key dimensions, a sparsely filled
@@ -271,8 +272,10 @@ def from_long(
     coords : list/dict/xarray.Coordinates
         The coordinates the keys are positioned in, e.g. ``var.coords`` of
         the variable the result is used with.
-    default : float, optional
-        Value of key combinations missing from ``frame``; without it, gaps raise.
+    missing : "refused", "absent" or float, default "refused"
+        What a key combination missing from ``frame`` means, as a mathspec
+        parameter's ``missing:`` says it: ``"refused"`` raises, ``"absent"``
+        leaves the cell absent (NaN), a number is the value of the cell.
 
     Returns
     -------
@@ -285,12 +288,14 @@ def from_long(
         For no key column, not exactly one column besides the key columns (a
         misspelled key column counts as a second value column), null keys or
         values, duplicate keys, key combinations missing from ``frame``
-        without ``default``, keys outside ``coords`` and key coordinates with
-        duplicate labels.
+        with ``missing="refused"``, keys outside ``coords``, key coordinates
+        with duplicate labels and a ``missing`` string other than
+        ``"refused"`` or ``"absent"``.
     TypeError
         For a frame type other than a polars or pandas DataFrame, a non-numeric
-        value column and key dtypes (numeric, datetime with its time zone,
-        date, duration, string) differing from the ones of ``coords``.
+        value column and key dtype families (numeric, datetime with its time
+        zone, date, duration, string, boolean) differing from the ones of
+        ``coords``.
 
     Warns
     -----
@@ -307,7 +312,7 @@ def from_long(
     >>> m = linopy.Model()
     >>> i = pd.RangeIndex(3, name="i")
     >>> ub = linopy.from_long(
-    ...     pd.DataFrame({"i": [0, 2], "ub": [5.0, 7.0]}), coords=[i], default=0
+    ...     pd.DataFrame({"i": [0, 2], "ub": [5.0, 7.0]}), coords=[i], missing=0
     ... )
     >>> ub.name
     'ub'
@@ -322,6 +327,10 @@ def from_long(
         "session.",
     )
     _check_frame(frame)
+    if isinstance(missing, str) and missing not in ("refused", "absent"):
+        raise ValueError(
+            f"`missing` is 'refused', 'absent' or a number, got {missing!r}."
+        )
     dims = list(_coords_to_dict(coords))
     keys = [k for k in frame.columns if k in dims]
     if not keys:
@@ -343,11 +352,12 @@ def from_long(
         frame,
         keys,
         coords,
-        strict=default is None,
-        hint="; pass `default=` to fill them",
+        strict=missing == "refused",
+        hint="; pass `missing=` to fill them",
     )
+    fill = np.nan if missing == "absent" else missing
     data = frame[value].to_numpy().astype(float, copy=False)
-    out = _grid(flat, data, size, default, float)
+    out = _grid(flat, data, size, fill, float)
     return DataArray(
         out.reshape(shape), coords=[target[k] for k in keys], dims=keys, name=value
     )

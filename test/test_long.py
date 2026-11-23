@@ -24,7 +24,7 @@ from linopy import (
     from_long,
 )
 from linopy.constants import _emitted_evolving_warnings
-from linopy.long import Column
+from linopy.long import Column, Missing
 from linopy.testing import assert_equivalent
 
 
@@ -41,13 +41,13 @@ FRAME_AB = pd.DataFrame(
 )
 FRAME_A = pd.DataFrame({"a": [2, 0, 1], "v": [1.0, 2, 3]})
 
-CONSTANTS: dict[str, tuple[pd.DataFrame, float, xr.DataArray]] = {
-    "all-keys-default": (
+CONSTANTS: dict[str, tuple[pd.DataFrame, Missing, xr.DataArray]] = {
+    "gaps-filled": (
         FRAME_AB,
         5.0,
         xr.DataArray([[1.0, 4], [5, 3], [2, 5]], coords=[A, B]),
     ),
-    "missing-key-column": (FRAME_A, np.nan, xr.DataArray([2.0, 3, 1], coords=[A])),
+    "missing-key-column": (FRAME_A, "absent", xr.DataArray([2.0, 3, 1], coords=[A])),
     "column-order": (
         pd.DataFrame({"b": ["q", "p"], "a": [1, 1], "v": [3.0, 4]}),
         1.0,
@@ -59,8 +59,8 @@ CONSTANTS: dict[str, tuple[pd.DataFrame, float, xr.DataArray]] = {
 @pytest.mark.parametrize("lib", list(FRAME_LIBS))
 @pytest.mark.parametrize("case", list(CONSTANTS))
 def test_from_long(case: str, lib: str) -> None:
-    frame, default, want = CONSTANTS[case]
-    res = from_long(FRAME_LIBS[lib](frame), coords=[A, B], default=default)
+    frame, missing, want = CONSTANTS[case]
+    res = from_long(FRAME_LIBS[lib](frame), coords=[A, B], missing=missing)
     xr.testing.assert_identical(res, want.rename("v"))
 
 
@@ -68,8 +68,8 @@ def test_from_long(case: str, lib: str) -> None:
 def test_from_long_variable_coords(lib: str) -> None:
     frame = FRAME_AB.rename(columns={"v": "cost"})
     var = x(Model())
-    res = from_long(FRAME_LIBS[lib](frame), coords=var.coords, default=np.nan)
-    want = from_long(frame, coords=[A, B], default=np.nan)
+    res = from_long(FRAME_LIBS[lib](frame), coords=var.coords, missing="absent")
+    want = from_long(frame, coords=[A, B], missing="absent")
     assert res.name == "cost"
     xr.testing.assert_identical(res, want)
 
@@ -88,7 +88,7 @@ KEY_COORDS: dict[str, pd.Index] = {
 def test_from_long_key_dtypes(dtype: str, lib: str) -> None:
     coord = KEY_COORDS[dtype]
     frame = pd.DataFrame({"k": coord[[2, 0]], "v": [1.0, 2.0]})
-    res = from_long(FRAME_LIBS[lib](frame), coords=[coord], default=0)
+    res = from_long(FRAME_LIBS[lib](frame), coords=[coord], missing=0)
     want = xr.DataArray([2.0, 0, 1], coords=[coord], name="v")
     xr.testing.assert_identical(res, want)
 
@@ -101,8 +101,8 @@ def test_from_long_sorted_full_cube_matches_scatter(fill: float) -> None:
     rows = cube.sample(frac=fill, random_state=0).sort_index()
     frame = to_polars(rows)
     shuffled = frame.sample(fraction=1.0, shuffle=True, seed=0)
-    res = from_long(frame, coords=coords, default=-1)
-    xr.testing.assert_identical(res, from_long(shuffled, coords=coords, default=-1))
+    res = from_long(frame, coords=coords, missing=-1)
+    xr.testing.assert_identical(res, from_long(shuffled, coords=coords, missing=-1))
     want = cube.v.where(cube.index.isin(rows.index), -1.0).to_numpy()
     np.testing.assert_array_equal(res.values, want.reshape(40, 30))
 
@@ -135,11 +135,11 @@ POSITIONS: dict[str, Callable[[Model, Any], Any]] = {
 }
 
 
-@pytest.mark.parametrize("case", ["all-keys-default", "missing-key-column"])
+@pytest.mark.parametrize("case", ["gaps-filled", "missing-key-column"])
 @pytest.mark.parametrize("position", list(POSITIONS))
 def test_from_long_positions(backend: Model, position: str, case: str) -> None:
-    frame, default, want = CONSTANTS[case]
-    const = from_long(frame, coords=[A, B], default=default)
+    frame, missing, want = CONSTANTS[case]
+    const = from_long(frame, coords=[A, B], missing=missing)
     if position == "penalty":
         const = const.fillna(1.0)
         want = want.fillna(1.0)
@@ -178,7 +178,7 @@ INVALID: dict[str, tuple[pd.DataFrame, type[Exception], str]] = {
         pd.DataFrame({"a": [0], "b": ["q"], "v": [1.0]}),
         ValueError,
         r"misses 5 of 6 key combinations over \['a', 'b'\], first \[0, 'p'\]; "
-        "pass `default=`",
+        "pass `missing=`",
     ),
     "key-outside-coords": (
         pd.DataFrame({"a": [7, 1, 9], "v": [1.0, 2, 3]}),
@@ -280,10 +280,15 @@ def test_from_long_column_dtypes(case: str) -> None:
     frame = pl.DataFrame(data) if isinstance(column, pl.Series) else pd.DataFrame(data)
     if isinstance(want, tuple):
         with pytest.raises(want[0], match=want[1]):
-            from_long(frame, coords=[index], default=np.nan)
+            from_long(frame, coords=[index], missing="absent")
     else:
-        res = from_long(frame, coords=[index], default=np.nan)
+        res = from_long(frame, coords=[index], missing="absent")
         xr.testing.assert_identical(res, xr.DataArray(want, coords=[index], name="v"))
+
+
+def test_from_long_refuses_unknown_missing() -> None:
+    with pytest.raises(ValueError, match="'refused', 'absent' or a number"):
+        from_long(FRAME_A, coords=[A], missing="zero")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
