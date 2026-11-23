@@ -327,13 +327,20 @@ def refuse_made(
     left: xr.DataArray,
     right: xr.DataArray,
     ctx: Context,
+    widen: Callable[[xr.DataArray], xr.DataArray] | None = None,
 ) -> xr.DataArray:
-    """*op* of *left* and *right*, refused wherever it is not finite though both are present, the parameters *nodes* read named."""
+    """
+    *op* of *left* and *right*, refused wherever it is not finite though both
+    are present, the parameters *nodes* read named. *widen* puts the refused
+    coordinates on the rows of the expression the operands stand in for.
+    """
     made = cast(xr.DataArray, operators.binary(op, left, right))
     if made.dtype.kind not in "fc" or bool(np.isfinite(made.values).all()):
         return made
     nan_made = made.isnull() & left.notnull() & right.notnull()
     bad = nan_made | (np.isinf(made) & _finite(left) & _finite(right))
+    if widen is not None:
+        bad = widen(bad)
     if ctx.rows is not None and bool(bad.any()):
         ctx.memo.masked += 1
         bad = bad & ctx.rows

@@ -365,11 +365,15 @@ class Evaluator:
         if isinstance(second, ms.Negate):
             second, minus = second.operand, True
         left, right = self.addend(first, ctx), self.addend(second, ctx)
+        dims = _union(left.dims, right.dims)
+
+        def widen(bad: xr.DataArray) -> xr.DataArray:
+            return self.full(bad, dims).transpose(*dims, ...)
 
         def refused(
             op: Callable[..., xr.DataArray], a: xr.DataArray, b: xr.DataArray
         ) -> xr.DataArray:
-            return refuse_made("add", (node,), op, a, b, ctx)
+            return refuse_made("add", (node,), op, a, b, ctx, widen)
 
         return _plus(left, right, minus, refused)
 

@@ -634,7 +634,7 @@ SHIFTED_TERM = "shift(a, along=t, offset=1, edge=0)"
         pytest.param(
             "x + sum(a, over=t) - sum(a, over=t) >= 1",
             INF_AT_0,
-            "the only row",
+            "t=0",
             id="sums-beside-a-term",
         ),
         pytest.param(
