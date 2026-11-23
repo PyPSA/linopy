@@ -105,6 +105,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 **Sparse models**
 
 - More operations keep an expression sparse: arithmetic on variables (`2 * x`, `x + y`), merges of operands over a subset or superset of dimensions, `assign_coords` and `groupby` on auxiliary coordinates of the grid, vectorised `sel`, `isel`, `[]` and `where` over a new labelled dimension, `densify_terms`, `Constraint.update(rhs=...)`, `Model.assign_coords`, `add_expressions`, `Model.copy` and netcdf writing. ([\#1020](https://github.com/PyPSA/linopy/issues/1020), [\#1049](https://github.com/PyPSA/linopy/issues/1049))
+- Arithmetic and comparisons with a constant over new dimensions stay sparse. ([\#1145](https://github.com/PyPSA/linopy/pull/1145))
 - Variable operations without a sparse path, e.g. quadratic products, `rolling` and `cumsum`, build the dense expression directly, without a `PerformanceWarning`.
 - Sparse merges and sums are faster: rows are sorted and deduplicated once, when a constraint is added. Like a dense expression, a sparse one may now hold the same variable more than once, and `nterm` counts the stored terms.
 - A conformance suite checks that every operation on a sparse expression stays sparse or names its densify fallback, and that both backends agree. ([\#1044](https://github.com/PyPSA/linopy/issues/1044))
@@ -125,29 +126,23 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `add_constraints` no longer raises on invalid infinite right-hand sides at positions excluded by `mask`. ([\#1116](https://github.com/PyPSA/linopy/issues/1116))
 - `add_constraints` rejects dimensions named after reserved fields (`sign`, `rhs`, ...), like `add_variables`.
 - Multiplying a constant or one-term expression by a multi-term expression no longer raises a `TypeError`. ([\#1055](https://github.com/PyPSA/linopy/issues/1055))
-- `QuadraticExpression.groupby(...).map` returns a `QuadraticExpression`. ([\#1064](https://github.com/PyPSA/linopy/issues/1064))
-- On a sparse model, building or grouping a quadratic expression, e.g. `2 * x + x * x`, `(2 * x) * x` or `(x * x).groupby(g).sum()`, no longer emits a `PerformanceWarning`. ([\#1195](https://github.com/PyPSA/linopy/pull/1195))
+- `QuadraticExpression.groupby(...).sum()` and `.map` return a `QuadraticExpression`. ([\#1064](https://github.com/PyPSA/linopy/issues/1064))
+- On a sparse model, building a quadratic expression from a sparse one, e.g. `x.groupby(g).sum() * y`, no longer emits a `PerformanceWarning`. ([\#1195](https://github.com/PyPSA/linopy/pull/1195))
 - `LinearExpression.add` and `.sub` with `join=` accept a quadratic expression, where they raised a `ValueError`. ([\#1195](https://github.com/PyPSA/linopy/pull/1195))
 - `Variable.fix` accepts NaN or non-binary fix values at masked positions of a binary variable. `Variables.fix` validates all variables before fixing any.
-- `LinearExpression(data, model)` no longer raises on a `.sel` over full coordinates. ([\#1144](https://github.com/PyPSA/linopy/pull/1144))
-- `LinearExpression.from_constant` builds on the model's store, so a sparse model's constant stays sparse and adding it emits no `PerformanceWarning`. ([\#1145](https://github.com/PyPSA/linopy/pull/1145))
-- A sparse expression added to, multiplied or divided by a constant over new dimensions stays sparse instead of densifying. ([\#1145](https://github.com/PyPSA/linopy/pull/1145))
-- A sparse expression compared with a right-hand side over new dimensions builds a sparse constraint instead of densifying. ([\#1145](https://github.com/PyPSA/linopy/pull/1145))
-- `LinearExpression.is_constant` is `True` for every expression without variables, also a sparse one and one whose terms a sum removed. ([\#1152](https://github.com/PyPSA/linopy/pull/1152))
-- On a sparse model, a constant right-hand side raises when its axes are ambiguous, and its auxiliary coordinates are checked and kept, as on a dense one. ([\#1200](https://github.com/PyPSA/linopy/pull/1200))
+- `LinearExpression.is_constant` is `True` for every expression without variables, e.g. the sum of a fully masked variable. ([\#1152](https://github.com/PyPSA/linopy/pull/1152))
+- On a sparse model, a constraint keeps the auxiliary coordinates of its right-hand side, as on a dense one. ([\#1200](https://github.com/PyPSA/linopy/pull/1200))
 - On a sparse model, `groupby` over a one-column `DataFrame` keeps the key coordinate. ([\#1200](https://github.com/PyPSA/linopy/pull/1200))
-- On a sparse model, multiplying by a constant over a non-unique index no longer raises. ([\#1200](https://github.com/PyPSA/linopy/pull/1200))
-- A zero coefficient, written as `0 * x` or left by cancelling terms as in `x - x`, no longer enters the solver matrix, so adding one needs no persistent-solver rebuild; a sparse model kept the first, a dense one the second. ([\#1200](https://github.com/PyPSA/linopy/pull/1200))
-- `to_polars` of a constant expression returns one row per present cell; a sparse one returned no rows, a masked one rows with a NaN constant. ([\#1200](https://github.com/PyPSA/linopy/pull/1200))
-- `QuadraticExpression.is_constant` is `True` for a sparse constant converted to a quadratic expression. ([\#1200](https://github.com/PyPSA/linopy/pull/1200))
-- On a sparse model, `reindex` over a non-unique index behaves as on a dense one: from one it raises instead of summing the duplicate cells, onto one it no longer raises. ([\#1200](https://github.com/PyPSA/linopy/pull/1200))
+- Cancelling terms, as in `x - x`, no longer leave a zero coefficient in the solver matrix, so they need no persistent-solver rebuild. ([\#1200](https://github.com/PyPSA/linopy/pull/1200))
+- `to_polars` of a constant expression returns one row per present cell; a masked one returned rows with a NaN constant. ([\#1200](https://github.com/PyPSA/linopy/pull/1200))
+- On a sparse model, `reindex` onto a non-unique index no longer raises, as on a dense one. ([\#1200](https://github.com/PyPSA/linopy/pull/1200))
 - A zero right-hand side moved off the left-hand side is `0.0`, not `-0.0`. ([\#1200](https://github.com/PyPSA/linopy/pull/1200))
 - `add_piecewise_formulation` no longer raises on a dimension labelled by tuples, e.g. `(period, timestep)` snapshots. ([\#1140](https://github.com/PyPSA/linopy/pull/1140))
 - The repr of a long expression shows the last terms of a `QuadraticExpression` after the `...` and prints the constant once. ([\#1023](https://github.com/PyPSA/linopy/pull/1023))
 
 *I/O*
 
-- A solve through an LP file no longer fails when the objective has no live variable, e.g. when all its variables are masked, or, with GLPK, when it is `0 * x`. ([\#1176](https://github.com/PyPSA/linopy/issues/1176))
+- GLPK: a solve through an LP file no longer fails when the objective has no variable term, e.g. `0 * x`. ([\#1176](https://github.com/PyPSA/linopy/issues/1176))
 - `to_netcdf` handles timezone-aware datetimes in indexes, coordinates and `Model.parameters`. ([\#1021](https://github.com/PyPSA/linopy/pull/1021))
 - Object-dtype parameters, e.g. strings with `NaN` holes, round-trip through netcdf with their holes. Mixed-type object arrays raise a `TypeError` on write.
 - MPS export raises for indicator constraints instead of silently dropping them. ([\#1186](https://github.com/PyPSA/linopy/issues/1186))
