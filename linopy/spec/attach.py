@@ -708,6 +708,14 @@ def _from_table(
     """
     dims = declared.dims
     _check_table(f"parameter '{name}'", df, [*dims, name])
+    for d in dims:
+        unlabelled = _holes(df[d])
+        if unlabelled.any():
+            raise SpecDataError(
+                f"parameter '{name}' carries {int(unlabelled.sum())} row(s) with a null label "
+                f"in '{d}': {coordinates_shown(dims, _rows_at(df, dims, unlabelled)[:3])}. A row "
+                f"without a label belongs to no coordinate: drop it, or supply the label."
+            )
     holes = _holes(df[name])
     if holes.any():
         raise SpecDataError(
@@ -839,7 +847,14 @@ def _refuse_label_type(
     """
     if not len(labels):
         return
-    arrived, expected = _family(labels), _family(known)
+    try:
+        arrived, expected = _family(labels), _family(known)
+    except TypeError:
+        raise SpecDataError(
+            f"{what} has label(s) of dtype {labels.dtype} in dimension '{dim}', a dtype no "
+            f"label has: they match none of {shown(known.tolist())}. Cast them to the "
+            f"dimension's type."
+        ) from None
     dates = isinstance(labels, pl.Series) and labels.dtype == pl.Date
     if _alike(arrived, expected) or (dates and expected == "datetime"):
         return

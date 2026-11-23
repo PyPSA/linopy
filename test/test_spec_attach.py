@@ -472,6 +472,26 @@ REFUSALS = [
         id="unknown-label",
     ),
     pytest.param(
+        {"cost": pd.DataFrame({"f": ["a", None], "cost": [1.0, 2.0]})},
+        r"parameter 'cost' carries 1 row\(s\) with a null label in 'f': f=",
+        id="null-label",
+    ),
+    pytest.param(
+        {"cost": pl.DataFrame({"f": [None], "cost": [1.0]})},
+        r"parameter 'cost' carries 1 row\(s\) with a null label in 'f'",
+        id="null-label-of-polars-dtype-null",
+    ),
+    pytest.param(
+        {"cost": pl.DataFrame({"f": [["a"]], "cost": [1.0]})},
+        r"parameter 'cost' has label\(s\) of dtype List\(String\) in dimension 'f'",
+        id="list-label",
+    ),
+    pytest.param(
+        {"grp": pl.DataFrame({"f": [["a"]], "g": ["n"]})},
+        r"relation 'grp' has label\(s\) of dtype List\(String\) in dimension 'f'",
+        id="list-label-in-a-relation",
+    ),
+    pytest.param(
         {"cap": CAP.assign_coords(t=[0, 1, 9])},
         r"parameter 'cap'.*'t'.*\b9\b",
         id="unknown-label-dense",
