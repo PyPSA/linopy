@@ -173,11 +173,14 @@ that the list names, or `SpecDataError` names it.
 
 ### Label types
 
-Labels must have the type of the dimension they belong to. An `int`
-dimension given the text `"0"`, `"1"` is refused with a message saying the
-labels differ in type, not spelling. For a datetime dimension the message
-points to `pd.to_datetime` or `parse_dates=`, since dates read from text
-files and databases often arrive as strings.
+The labels of a table must have the dtype family of the dimension they
+belong to: numeric, datetime with its time zone, date, duration, string or
+boolean, the rule `linopy.from_long` follows. Within a family they match by
+value, so `int32` labels fit an `int64` dimension and microsecond timestamps
+a nanosecond one. An `int` dimension given the text `"0"`, `"1"` is refused
+with a message saying the labels differ in type. For a datetime dimension
+the message points to `pd.to_datetime` or `parse_dates=`, since dates read
+from text files and databases often arrive as strings.
 
 ## A mapping over a database
 

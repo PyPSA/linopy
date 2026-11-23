@@ -585,7 +585,8 @@ REFUSALS = [
     ),
     pytest.param(
         {"cap": CAP.assign_coords(t=["0", "1", "2"])},
-        r"parameter 'cap' has 'str' label\(s\) in dimension 't'.*differ in type, not spelling",
+        r"parameter 'cap' has 'string' label\(s\) of dtype \w+ in dimension 't', and 't' holds "
+        r"'numeric' labels: '0', '1', '2' differ in type",
         id="str-labels-on-an-int-dimension",
     ),
     pytest.param(
@@ -725,7 +726,7 @@ REFUSALS = [
     ),
     pytest.param(
         {"grp": pd.DataFrame({"f": [1], "g": ["n"]})},
-        r"relation 'grp' has 'int' label\(s\) in dimension 'f'.*differ in type",
+        r"relation 'grp' has 'numeric' label\(s\) of dtype int64 in dimension 'f'.*differ in type",
         id="relation-int-key-on-a-str-dimension",
     ),
     pytest.param(
@@ -1000,9 +1001,7 @@ def test_datetime_labels_given_as_text_are_a_type_mismatch() -> None:
         {"snapshot": SNAPSHOTS.astype(str), "load": [1.0, 2.0, 3.0]}
     )
     attached = attach(lower(LOAD_SPEC), {"snapshot": SNAPSHOTS, "load": from_sql})
-    with pytest.raises(
-        SpecDataError, match=r"differ in type, not spelling.*pd\.to_datetime"
-    ):
+    with pytest.raises(SpecDataError, match=r"differ in type.*pd\.to_datetime"):
         attached.read("load")
 
 
@@ -1015,6 +1014,72 @@ def test_polars_datetimes_attach_like_pandas_ones() -> None:
         "load": polars(load),
     }
     xr.testing.assert_equal(filled(attach(program, from_polars), "load"), expected)
+
+
+US_SNAPSHOTS = SNAPSHOTS.as_unit("us")
+NS_SNAPSHOTS = SNAPSHOTS.as_unit("ns")
+FAMILY_KEYS: dict[str, tuple[str, pd.Index, pd.Series]] = {
+    "int32-on-int64": (
+        "int",
+        pd.Index([10, 20, 30]),
+        pd.Series([30, 10, 20], dtype="int32"),
+    ),
+    "object-int-on-int64": (
+        "int",
+        pd.Index([10, 20, 30]),
+        pd.Series([30, 10, 20], dtype=object),
+    ),
+    "us-on-ns": ("datetime", NS_SNAPSHOTS, pd.Series(US_SNAPSHOTS[[2, 0, 1]])),
+    "ns-on-us": ("datetime", US_SNAPSHOTS, pd.Series(NS_SNAPSHOTS[[2, 0, 1]])),
+    "categorical-on-str": (
+        "str",
+        pd.Index(["a", "b", "c"]),
+        pd.Series(pd.Categorical(list("cab"))),
+    ),
+}
+
+
+@pytest.mark.parametrize("lib", ["pandas", "polars"])
+@pytest.mark.parametrize("into", ["parameter", "relation"])
+@pytest.mark.parametrize("case", FAMILY_KEYS)
+def test_a_table_label_of_its_dimensions_dtype_family_attaches(
+    case: str, into: str, lib: str
+) -> None:
+    dtype, index, keys = FAMILY_KEYS[case]
+    program = lower(
+        {
+            "dimensions": {"d": {"dtype": dtype}, "h": {"dtype": "str"}},
+            "relations": {"r": {"key": "h", "values": "d"}},
+            "parameters": {"p": {"dims": ["d"]}},
+        }
+    )
+    frames = {
+        "p": pd.DataFrame({"d": keys, "p": [3.0, 1.0, 2.0]}),
+        "r": pd.DataFrame({"h": ["w", "u", "v"], "d": keys}),
+    }
+    convert = pl.from_pandas if lib == "polars" else (lambda f: f)
+    sources = {
+        "d": index,
+        "h": ["u", "v", "w"],
+        **{k: convert(f) for k, f in frames.items()},
+    }
+    attached = attach(program, sources)
+    if into == "parameter":
+        values = filled(attached, "p")
+        assert values.indexes["d"].equals(index)
+        assert values.values.tolist() == [1.0, 2.0, 3.0]
+    else:
+        assert pd.Index(attached.relations["r"].column("d").values).equals(index)
+
+
+@pytest.mark.parametrize("lib", ["pandas", "polars"])
+def test_a_table_label_finer_than_its_dimension_is_a_stray(lib: str) -> None:
+    keys = pd.Series(NS_SNAPSHOTS[[0]] + pd.Timedelta(1, "ns"))
+    load = pd.DataFrame({"snapshot": keys, "load": [1.0]})
+    frame = pl.from_pandas(load) if lib == "polars" else load
+    attached = attach(lower(LOAD_SPEC), {"snapshot": US_SNAPSHOTS, "load": frame})
+    with pytest.raises(SpecDataError, match="not coordinates of it"):
+        attached.read("load")
 
 
 def test_a_stray_relation_value_over_an_int_target_is_shown_as_written() -> None:
@@ -1088,5 +1153,5 @@ def test_a_table_label_equal_to_a_coordinate_in_value_only_is_refused() -> None:
     )
     rows = pd.DataFrame({"y": pd.Series([True], dtype=object), "p": [1.0]})
     attached = attach(program, {"y": pd.Index([1, 2], name="y"), "p": rows})
-    with pytest.raises(SpecDataError, match="in value but not in type: True"):
+    with pytest.raises(SpecDataError, match="True differ in type from 1, 2"):
         attached.read("p")
