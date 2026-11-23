@@ -35,13 +35,22 @@ KIND_FAMILIES = {
     "U": "string",
     "S": "string",
 }
+INFERRED_FAMILIES = {
+    "empty": "string",
+    "integer": "numeric",
+    "floating": "numeric",
+    "mixed-integer-float": "numeric",
+    "decimal": "numeric",
+    "timedelta": "duration",
+    "bytes": "string",
+}
 
 
 def _family(column: Column | pd.Index) -> str:
     """
     The dtype family of ``column``: numeric, datetime with its time zone,
     date, duration, string or boolean, a pandas categorical classified by
-    its categories.
+    its categories and an object column by its values.
     """
     dtype = column.dtype
     if isinstance(dtype, pd.CategoricalDtype):
@@ -49,7 +58,8 @@ def _family(column: Column | pd.Index) -> str:
     if isinstance(dtype, pd.DatetimeTZDtype):
         return f"datetime[{dtype.tz}]"
     if not isinstance(dtype, pl.DataType) and dtype.kind == "O":
-        return "date" if pd.api.types.infer_dtype(column) == "date" else "string"
+        inferred = pd.api.types.infer_dtype(column)
+        return INFERRED_FAMILIES.get(inferred, inferred)
     if not isinstance(dtype, pl.DataType) and dtype.kind in KIND_FAMILIES:
         return KIND_FAMILIES[dtype.kind]
     if not isinstance(dtype, pl.DataType):

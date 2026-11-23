@@ -258,6 +258,17 @@ KEY_DTYPES: dict[str, tuple[Column, pd.Index, list[float] | tuple[type, str]]] =
         [np.nan, 1],
     ),
     "categorical-int-str-pandas": (pd.Series(pd.Categorical([1])), B, NO_MATCH),
+    "object-int-pandas": (
+        pd.Series([20], dtype=object),
+        pd.Index([10, 20]),
+        [np.nan, 1],
+    ),
+    "object-int-str-pandas": (pd.Series([1], dtype=object), B, NO_MATCH),
+    "object-mixed-pandas": (
+        pd.Series([20, "p"], dtype=object),
+        pd.Index([10, 20]),
+        NO_MATCH,
+    ),
 }
 
 
