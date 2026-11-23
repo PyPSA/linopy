@@ -25,6 +25,7 @@ from linopy.common import maybe_replace_sign
 from linopy.constants import FACTOR_DIM, TERM_DIM
 from linopy.constraints import Constraint
 from linopy.expressions import LinearExpression, QuadraticExpression
+from linopy.restrict.matrix import DROPPED_ROW_TOL
 from linopy.spec import terms
 from linopy.spec.context import Context, Term, Value, as_expression, is_empty
 from linopy.spec.errors import SpecDataError, first_coordinates
@@ -41,10 +42,12 @@ from linopy.spec.where import admits_a_row, as_linopy_mask, evaluate_where
 from linopy.variables import Variable
 
 _FLIPPED: dict[str, ms.ConstraintSense] = {"==": "==", "<=": ">=", ">=": "<="}
-_COMPARED: dict[str, Callable[[xr.DataArray, xr.DataArray], xr.DataArray]] = {
-    "==": operator.eq,
-    "<=": operator.le,
-    ">=": operator.ge,
+_HOLDS: dict[
+    str, Callable[[xr.DataArray, xr.DataArray, xr.DataArray], xr.DataArray]
+] = {
+    "==": lambda left, right, slack: (left <= right + slack) & (left >= right - slack),
+    "<=": lambda left, right, slack: left <= right + slack,
+    ">=": lambda left, right, slack: left >= right - slack,
 }
 _SENSE = {"minimize": "min", "maximize": "max"}
 
@@ -305,7 +308,7 @@ def _refuse_violated(
 ) -> None:
     """
     Refuse a row of constraint *name* that holds no variable term once the
-    data is attached, where it does not hold.
+    data is attached, where it does not hold within :func:`_slack`.
 
     *row* is the left side, the sense and the right side, and *constant* the
     rows they leave present and without a term: each is the constant row
@@ -319,7 +322,7 @@ def _refuse_violated(
         return
     term, sense, other = row
     left, right = constant_of(term), constant_of(other)
-    violated = constant & ~_COMPARED[sense](left, right)
+    violated = constant & ~_HOLDS[sense](left, right, _slack(left, right))
     if not bool(violated.any()):
         return
     first = np.unravel_index(int(np.argmax(violated.values)), violated.shape)
@@ -331,10 +334,16 @@ def _refuse_violated(
         f"constraint '{name}': {int(violated.sum())} row(s) hold no variable term once "
         f"the data is attached and do not hold, the first at "
         f"{first_coordinates(violated, 3)}, which reads {lhs:g} {sense} {rhs:g}. "
-        f"linopy keeps such a row, so the model is infeasible.\n"
+        f"linopy keeps such a row, and it cannot hold for any value of the variables.\n"
         f"  Mask the rows out with a where on the constraint, if they should not "
         f"exist, or supply the data that gives them a variable term."
     )
+
+
+def _slack(left: xr.DataArray, right: xr.DataArray) -> xr.DataArray:
+    """How far a constant row ``left sense right`` may miss and still hold: ``DROPPED_ROW_TOL`` relative to its larger finite side, where that exceeds one."""
+    a, b = (abs(side).where(np.isfinite(side), 0.0) for side in (left, right))
+    return DROPPED_ROW_TOL * xr.where(a > b, a, b).clip(min=1.0)
 
 
 def _constant(

@@ -943,6 +943,31 @@ def test_a_row_the_data_empties_of_variables_is_kept_where_it_holds(
     assert sized_row.lhs.has_terms.values.tolist() == [True, False]
 
 
+def rounded(at_b: float) -> dict[str, Any]:
+    """:data:`ENVELOPE_DATA` with ``relmax`` *at_b* at ``f='b'``, where :func:`sized` empties the row."""
+    return {**ENVELOPE_DATA, "relmax": xr.DataArray([0.5, at_b], coords=[F])}
+
+
+@pytest.mark.parametrize("build", [Model.from_spec, eager], ids=["terms", "eager"])
+@pytest.mark.parametrize(
+    "expression", ["size == relmax", "size >= relmax", "size <= -relmax"]
+)
+def test_a_row_the_data_empties_of_variables_holds_within_a_rounding_error(
+    expression: str, build: Callable[..., Model]
+) -> None:
+    sized_row = build(sized(0, expression), rounded(0.1 + 0.2 - 0.3))
+    assert (sized_row.constraints["sized"].labels != -1).values.tolist() == [True, True]
+
+
+def test_a_row_the_data_empties_of_variables_is_refused_beyond_a_rounding_error() -> (
+    None
+):
+    with pytest.raises(
+        SpecDataError, match=r"at f='b', which reads 0 == 1e-06.*cannot hold"
+    ):
+        Model.from_spec(sized(0, "size == relmax"), rounded(1e-6))
+
+
 @pytest.mark.parametrize("build", [Model.from_spec, eager], ids=["terms", "eager"])
 def test_a_row_a_masked_variable_leaves_is_absent_and_not_refused(
     build: Callable[..., Model],
