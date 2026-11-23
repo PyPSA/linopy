@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, Model
+from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, Model, available_solvers
 from linopy.testing import assert_conequal
 
 # Test model functions
@@ -372,6 +372,48 @@ def test_sanitize_infinities() -> None:
         m.add_constraints(x >= np.inf, name="con_wrong_inf")
     with pytest.raises(ValueError):
         m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")
+
+
+def test_sanitize_infinities_refreshes_label_index() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, coords=[range(3)], name="x")
+    m.add_constraints(x <= np.array([np.inf, 5.0, np.inf]), name="up")
+    m.add_constraints(x >= 1, name="lo")
+
+    assert m.constraints.label_index.n_active_cons == 6
+    m.constraints.sanitize_infinities()
+    np.testing.assert_array_equal(m.constraints.label_index.clabels, [1, 3, 4, 5])
+    np.testing.assert_array_equal(
+        m.constraints.label_index.label_to_pos, [-1, 0, -1, 1, 2, 3]
+    )
+
+
+def test_sanitize_missings_refreshes_label_index() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, coords=[range(3)], name="x")
+    con = m.add_constraints(x <= 5, name="up")
+    con.update(lhs=x.where(xr.DataArray([True, False, True], coords=x.coords)))
+
+    assert m.constraints.label_index.n_active_cons == 3
+    m.constraints.sanitize_missings()
+    np.testing.assert_array_equal(m.constraints.label_index.clabels, [0, 2])
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS is not installed")
+@pytest.mark.parametrize("io_api", ["direct", "lp"])
+def test_matrices_before_solve_with_infinite_rhs(io_api: str) -> None:
+    # https://github.com/PyPSA/linopy/issues/1178
+    m = Model()
+    x = m.add_variables(lower=0, coords=[range(3)], name="x")
+    m.add_constraints(x <= np.array([np.inf, 5.0, np.inf]), name="up")
+    m.add_constraints(x >= 1, name="lo")
+    m.add_objective(x.sum())
+
+    assert m.matrices.A is not None
+    m.solve("highs", io_api=io_api)
+
+    np.testing.assert_allclose(m.constraints["lo"].dual, [1, 1, 1])
+    np.testing.assert_allclose(m.constraints["up"].dual.values[1], 0)
 
 
 def test_masked_incorrect_infinities() -> None:

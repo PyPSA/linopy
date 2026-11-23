@@ -1031,6 +1031,7 @@ class Constraint:
         """Mask out rows where all variables are missing (-1)."""
         has_terms = self._lhs._store.dataarray(self._lhs._store.has_terms(), "labels")
         self._labels = self.labels.where(has_terms, -1)
+        self.model.constraints._invalidate_label_position_index()
         return self
 
     def sanitize_infinities(self) -> Constraint:
@@ -1039,6 +1040,7 @@ class Constraint:
             (self.sign == GREATER_EQUAL) & (self.rhs == -np.inf)
         )
         self._labels = self.labels.where(~valid_infinity_values, -1)
+        self.model.constraints._invalidate_label_position_index()
         return self
 
     def to_dense(self) -> Constraint:

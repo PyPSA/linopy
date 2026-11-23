@@ -163,6 +163,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 *Solvers*
 
 - A constraint row without a nonzero term, e.g. `0 * x >= 5`, reaches the solver instead of being dropped. ([\#1170](https://github.com/PyPSA/linopy/issues/1170), [\#1183](https://github.com/PyPSA/linopy/pull/1183))
+- Reading `m.matrices` before `solve()` no longer makes a direct-API solve raise an `IndexError` when a constraint has an infinite right-hand side. ([\#1178](https://github.com/PyPSA/linopy/issues/1178))
 - With `add_objective(..., scaling=...)`, the solve log reports objective and dual bound in model units. ([\#1077](https://github.com/PyPSA/linopy/issues/1077))
 - GLPK: an infeasible MIP, or an infeasible LP solved without presolve, is reported as `infeasible` instead of `ok`. ([\#1183](https://github.com/PyPSA/linopy/pull/1183))
 - CPLEX: "optimal with unscaled infeasibilities" is reported as `imprecise` and its solution is imported. ([\#368](https://github.com/PyPSA/linopy/issues/368))
