@@ -113,7 +113,7 @@ from linopy.constants import (
     PerformanceWarning,
 )
 from linopy.csr import CSRStore, Grid, _densify_notice
-from linopy.long import Relation, _positions
+from linopy.long import Relation, _positions, _to_numpy
 from linopy.semantics import (
     AbsentType,
     FillValueLike,
@@ -713,7 +713,7 @@ class LinearExpressionGroupby:
                     f"relation member column {m!r} must name a dimension "
                     f"of {list(dims)}."
                 )
-        labels = relation.frame[group].to_numpy()
+        labels = _to_numpy(relation.frame[group])
         codes, _ = pd.factorize(labels, sort=True)
         order = np.argsort(codes, kind="stable")
         rows = pd.RangeIndex(len(order), name=RELATION_DIM)

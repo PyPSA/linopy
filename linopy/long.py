@@ -94,6 +94,13 @@ def _as_polars(index: pd.Index) -> pl.Series:
     return pl.Series(index.to_numpy())
 
 
+def _to_numpy(column: Column) -> np.ndarray:
+    """The values of ``column`` in numpy, tz-aware datetimes as timestamps of their zone."""
+    if isinstance(column, pl.Series) and _family(column) == ZONED:
+        return column.to_pandas().to_numpy()
+    return column.to_numpy()
+
+
 def _has_nulls(column: Column) -> bool:
     if isinstance(column, pl.Series):
         return column.null_count() > 0
@@ -508,7 +515,7 @@ class Relation:
             strict=True,
             duplicate_hint="; group_of needs exactly one row per member cell",
         )
-        values = self.frame[self.group].to_numpy()
+        values = _to_numpy(self.frame[self.group])
         out = np.empty_like(values)
         out[flat.to_numpy()] = values
         return DataArray(

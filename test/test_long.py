@@ -362,6 +362,18 @@ def test_relation_groupby_matches_incidence_matmul(
 
 
 @pytest.mark.parametrize("lib", list(FRAME_LIBS))
+def test_relation_groups_keep_their_time_zone(backend: Model, lib: str) -> None:
+    member = pd.Index(["x", "y"], name="m")
+    groups = BERLIN.rename("g")
+    frame = pd.DataFrame({"m": member, "g": groups[::-1]})
+    relation = Relation(FRAME_LIBS[lib](frame), "m", "g", groups=groups)
+    res = (1 * backend.add_variables(coords=[member], name="x")).groupby(relation).sum()
+    assert res.indexes["g"].equals(groups)
+    assert res.vars.values.tolist() == [[1], [0]]
+    assert pd.Index(relation.group_of([member]).values).equals(groups[::-1])
+
+
+@pytest.mark.parametrize("lib", list(FRAME_LIBS))
 def test_groupby_long_frame_raises(backend: Model, lib: str) -> None:
     with pytest.raises(TypeError, match="linopy.Relation"):
         (1 * x(backend)).groupby(FRAME_LIBS[lib](RELATION_FRAME)).sum()
