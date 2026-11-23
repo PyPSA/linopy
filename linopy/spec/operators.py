@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import operator
 import warnings
-from collections.abc import Hashable, Mapping
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
 from functools import reduce
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -28,6 +28,43 @@ from linopy.spec.errors import SpecDataError
 
 Amount = int | xr.DataArray
 _ROW = "_row"
+
+
+def binary(
+    op: Callable[[Any, Any], Any],
+    left: xr.DataArray,
+    right: xr.DataArray,
+) -> xr.DataArray:
+    """
+    *op* of two arrays as xarray gives it, computed in numpy where both lie on
+    the same indexes and hold no other coordinate or attribute: aligning costs
+    more than the operation on the arrays a build combines.
+    """
+    if not (_bare(left) and _bare(right)) or any(
+        not left.indexes[d].equals(right.indexes[d])
+        for d in left.dims
+        if d in right.dims
+    ):
+        return op(left, right)
+    dims = (*left.dims, *(d for d in right.dims if d not in left.dims))
+    order = [right.dims.index(d) for d in dims if d in right.dims]
+    shape = [right.sizes.get(d, 1) for d in dims]
+    a = left.values.reshape(left.shape + (1,) * (len(dims) - left.ndim))
+    with np.errstate(all="ignore"):
+        values = op(a, right.values.transpose(order).reshape(shape))
+    name = left.name if left.name == right.name else None
+    like = (
+        left if len(dims) == left.ndim else right if len(dims) == right.ndim else None
+    )
+    if like is None:
+        indexes = {**right.indexes, **left.indexes}
+        coords = {d: indexes[d] for d in dims}
+        return xr.DataArray(values, coords=coords, dims=dims, name=name)
+    return like._replace(variable=xr.Variable(dims, values), name=name)
+
+
+def _bare(arr: xr.DataArray) -> bool:
+    return not arr.attrs and set(arr.coords) == set(arr.dims) == set(arr.indexes)
 
 
 def _filled(expression: Array, fill: float) -> Array:
@@ -176,7 +213,7 @@ def _zeros(
 
 def constant_term(model: Model, constant: xr.DataArray) -> LinearExpression:
     """
-    *constant* as a term of *model* without a variable, on the model's store.
+    *constant* as a term of the sparse *model* without a variable, on the model's store.
 
     It is laid out the way a term is, so nothing is aligned, which makes it
     cheaper than :meth:`~linopy.expressions.LinearExpression.from_constant`.
@@ -188,8 +225,6 @@ def constant_term(model: Model, constant: xr.DataArray) -> LinearExpression:
         coeffs=(dims, slots), vars=(dims, labels)
     )
     term = LinearExpression(data, model)
-    if not model.sparse:
-        return term
     store = term._store.to_sparse()
     return term if isinstance(store, str) else term._from_store(store, model)
 

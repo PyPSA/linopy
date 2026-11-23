@@ -23,6 +23,7 @@ from spec_helpers import (  # noqa: E402
     WHERE_DATA,
     WHERE_SPEC,
     S,
+    eager,
     solved,
     table,
     with_,
@@ -253,9 +254,7 @@ def test_a_missing_shift_amount_is_refused_where_a_live_row_reads_it(
     "within", ["", ", within=season_of[s]"], ids=["axis", "groups"]
 )
 @pytest.mark.parametrize("edge", ["edge=0", "edge='wrap'"])
-def test_an_absent_entity_offset_shifts_to_no_row(
-    backend: Model, edge: str, within: str
-) -> None:
+def test_an_absent_entity_offset_shifts_to_no_row(edge: str, within: str) -> None:
     e = pd.Index(["a", "b"], name="e")
     shifted = f"shift(x, along=t, offset=lag, {edge}{within})"
     spec = {
@@ -276,7 +275,7 @@ def test_an_absent_entity_offset_shifts_to_no_row(
         "season_of": pd.DataFrame({"t": TT, "s": ["a", "a", "b", "b"]}),
         "lag": pd.DataFrame({"e": ["a"], "lag": [1]}),
     }
-    m = Model.from_spec(spec, data, sparse=backend.sparse)
+    m = Model.from_spec(spec, data)
     live = m.constraints["c"].labels != -1
     assert live.sum("t").values.tolist() == [4, 0]
 
@@ -420,7 +419,7 @@ def test_a_relation_that_maps_nothing_leaves_every_group_at_the_empty_sum() -> N
 
     assert m.objective.value == pytest.approx(0.0)
     assert isinstance(m.expressions["per_bus"], LinearExpression)
-    assert m.expressions["per_bus"].nterm == 0
+    assert not m.expressions["per_bus"].has_terms.any()
     per_bus = evaluate(spec, m, "per_bus")["per_bus"]
     assert per_bus.indexes["bus"].tolist() == ["north", "south"]
     np.testing.assert_allclose(per_bus.values, [0.0, 0.0])
@@ -517,7 +516,7 @@ SELF_MAP_SPEC: dict[str, Any] = {
     ],
 )
 def test_a_relation_into_its_own_dimension_joins_on_it(
-    backend: Model, built: str, folds: list[str], want: list[float]
+    built: str, folds: list[str], want: list[float]
 ) -> None:
     t = TT[:3]
     data = {
@@ -525,7 +524,7 @@ def test_a_relation_into_its_own_dimension_joins_on_it(
         "v": pd.DataFrame({"t": t, "v": V[:3]}),
         "next_of": pd.DataFrame({"t": t, "next": [1, 2, 2]}),
     }
-    m = Model.from_spec(SELF_MAP_SPEC, data, sparse=backend.sparse)
+    m = Model.from_spec(SELF_MAP_SPEC, data)
     m.solve(solver_name="highs", output_flag=False)
     assert m.solution[built].values.tolist() == pytest.approx(want)
     for folded in evaluate(SELF_MAP_SPEC, m, *folds, sources=data).values():
@@ -666,20 +665,18 @@ RELATION_SUMS: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
 @pytest.mark.parametrize(
     ("spec", "data"), RELATION_SUMS.values(), ids=list(RELATION_SUMS)
 )
-def test_a_relation_sum_keeps_the_backing_and_matches_dense(
-    backend: Model, spec: dict[str, Any], data: dict[str, Any]
+def test_a_relation_sum_keeps_the_backing_and_matches_the_eager_path(
+    spec: dict[str, Any], data: dict[str, Any]
 ) -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error", PerformanceWarning)
-        m = Model.from_spec(spec, data, sparse=backend.sparse)
+        m = Model.from_spec(spec, data)
     summed = m.expressions["summed"]
-    assert summed.is_sparse == backend.sparse
-    assert_linequal(summed, Model.from_spec(spec, data).expressions["summed"])
+    assert summed.is_sparse
+    assert_linequal(summed, eager(spec, data).expressions["summed"])
 
 
-def test_a_rhs_over_a_dimension_the_term_lacks_keeps_the_backing(
-    backend: Model,
-) -> None:
+def test_a_rhs_over_a_dimension_the_term_lacks_keeps_the_backing() -> None:
     """A sparse term met a rhs over another dimension by densifying."""
     spec = {
         "dimensions": {"t": {"dtype": "int", "ordered": True}, "e": {"dtype": "str"}},
@@ -691,10 +688,10 @@ def test_a_rhs_over_a_dimension_the_term_lacks_keeps_the_backing(
     data = {"t": TT, "e": E, "cap": cap}
     with warnings.catch_warnings():
         warnings.simplefilter("error", PerformanceWarning)
-        m = Model.from_spec(spec, data, sparse=backend.sparse)
+        m = Model.from_spec(spec, data)
     limit = m.constraints["limit"]
-    assert limit.lhs.is_sparse == backend.sparse
-    assert_conequal(limit, Model.from_spec(spec, data).constraints["limit"])
+    assert limit.lhs.is_sparse
+    assert_conequal(limit, eager(spec, data).constraints["limit"])
 
 
 # ---------------------------------------------------------------------------

@@ -191,6 +191,26 @@ def test_store_methods_agree(build: str, op: str) -> None:
     assert_equivalent(as_expr(dense), as_expr(sparse))
 
 
+@pytest.mark.parametrize("op", list(OPS))
+@pytest.mark.parametrize("build", list(BUILDS))
+def test_canonical_after_op(build: str, op: str) -> None:
+    derived = OPS[op](build_store(build, CSRStore).canonical())
+    assert isinstance(derived, CSRStore)
+    canonical = derived.canonical()
+    csr = canonical.csr
+    fresh = scipy.sparse.csr_array((csr.data, csr.indices, csr.indptr), shape=csr.shape)
+    assert fresh.has_canonical_format
+    assert canonical.canonical() is canonical
+    assert_equivalent(as_expr(canonical), as_expr(derived))
+
+
+@pytest.mark.parametrize("cls", STORE_CLASSES)
+@pytest.mark.parametrize("build", list(BUILDS))
+def test_prune_without_small_terms_keeps_store(build: str, cls: type[Store]) -> None:
+    store = build_store(build, cls)
+    assert store.prune() is store
+
+
 @pytest.mark.parametrize("cls", STORE_CLASSES)
 @pytest.mark.parametrize("op", list(SAME_GRID))
 @pytest.mark.parametrize("build", list(BUILDS))

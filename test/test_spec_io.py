@@ -206,16 +206,14 @@ def test_a_hand_added_variable_keeps_its_own_labels(
 
 @pytest.mark.parametrize("engine", ENGINES)
 def test_every_container_shares_the_master_coordinates(
-    tmp_path: Path, engine: str, backend: Model
+    tmp_path: Path, engine: str
 ) -> None:
     """The master coordinates are canonical: no container may disagree with them."""
-    if backend.sparse and engine == "scipy":
+    if engine == "scipy":
         pytest.skip(
             "netCDF3 holds no unicode-array attr, and a sparse constraint writes one"
         )
-    m = Model.from_spec(
-        EXAMPLE_DISPATCH, DISPATCH_DATA, store=True, sparse=backend.sparse
-    )
+    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA, store=True)
     m.solve(solver_name="highs", output_flag=False)
     p = roundtrip(m, tmp_path, engine)
 

@@ -202,6 +202,36 @@ class Grid:
         }
         return Grid({d: self.indexes[d] for d in dims}, aux)
 
+    def isel(
+        self, indexers: Mapping[Any, int | slice], drop: bool = False
+    ) -> tuple[Grid, np.ndarray]:
+        """
+        The grid at the positions ``indexers`` picks, as ``Dataset.isel``
+        gives it, and the flat cell of this grid each of its cells comes from.
+        """
+        at = tuple(indexers.get(d, slice(None)) for d in self.dims)
+        rows = np.arange(self.size).reshape(self.shape)[at].reshape(-1)
+        picked = {d: i for d, i in indexers.items() if not isinstance(i, slice)}
+        indexes = {
+            d: index[position]
+            for (d, index), position in zip(self.indexes.items(), at)
+            if d not in picked
+        }
+        aux: AuxCoords = {}
+        if not drop:
+            aux = {
+                d: ((), np.asarray(self.indexes[d].to_numpy()[i]))
+                for d, i in picked.items()
+            }
+        for name, (d, values) in self.aux.items():
+            if not isinstance(d, str) or d not in indexers:
+                aux[name] = (d, values)
+            elif d not in picked:
+                aux[name] = (d, values[indexers[d]])
+            elif not drop:
+                aux[name] = ((), np.asarray(values[indexers[d]]))
+        return Grid(indexes, aux), rows
+
     def with_indexes(self, indexers: Mapping[Any, Any]) -> Grid:
         """
         Replace the labels of the named dimensions; the rest, and the
@@ -271,6 +301,7 @@ class CSRStore(Store):
     _positional_cache: _PositionalCache | None = field(
         default=None, init=False, repr=False, compare=False
     )
+    _canonical: bool = field(default=False, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         csr = self.csr
@@ -489,7 +520,9 @@ class CSRStore(Store):
             else:
                 source = source[order]
         else:
-            bounds = np.searchsorted(rows, np.arange(grid.size + 1))
+            bounds = indptr_from_counts(
+                np.bincount(rows, minlength=grid.size), np.int64
+            )
         dtype = index_dtype(source.nnz, shape, self.model)
         indptr = source.indptr[bounds].astype(dtype, copy=False)
         indices = source.indices.astype(dtype, copy=False)
@@ -594,7 +627,17 @@ class CSRStore(Store):
         return self.csr @ np.nan_to_num(sol) + self.const
 
     def canonical(self) -> CSRStore:
-        return replace(self, csr=canonical(self.csr))
+        """
+        See :meth:`Store.canonical`; returns this store if it is canonical.
+        A store remembers being canonical, and so does one :meth:`with_grid`
+        or :meth:`prune` derives from it; any other store checks again.
+        """
+        if self._canonical:
+            return self
+        csr = canonical(self.csr)
+        store = self if csr is self.csr else replace(self, csr=csr)
+        object.__setattr__(store, "_canonical", True)
+        return store
 
     def nnz(self, active_rows: np.ndarray) -> int:
         return int(np.diff(self.csr.indptr)[active_rows].sum())
@@ -645,7 +688,9 @@ class CSRStore(Store):
         return positional
 
     def with_grid(self, grid: Grid) -> CSRStore:
-        return replace(self, grid=grid)
+        store = replace(self, grid=grid)
+        object.__setattr__(store, "_canonical", self._canonical)
+        return store
 
     def live_terms(self) -> np.ndarray:
         """
@@ -658,12 +703,15 @@ class CSRStore(Store):
     def prune(self, tol: float = 0.0) -> CSRStore:
         """
         Drop the coefficients of at most ``tol`` in magnitude; cell activeness
-        stays with ``const``.
+        stays with ``const``. Returns this store if none is that small.
         """
-        csr = self.csr.copy()
-        csr.data[np.abs(csr.data) <= tol] = 0
-        csr.eliminate_zeros()
-        return replace(self, csr=csr)
+        keep = ~(np.abs(self.csr.data) <= tol)
+        if keep.all():
+            return self
+        arrays = keep_entries(self.csr.data, self.csr.indices, self.csr.indptr, keep)
+        store = replace(self, csr=scipy.sparse.csr_array(arrays, shape=self.csr.shape))
+        object.__setattr__(store, "_canonical", self._canonical)
+        return store
 
     def scale(
         self,
@@ -770,16 +818,12 @@ class CSRStore(Store):
         Gather rows into the cells of ``grid``, cell ``i`` taking row
         ``rows[i]`` with its terms, explicit zeros included, and its constant;
         ``-1`` leaves the cell absent without terms. Auxiliary coordinates
-        are ``grid``'s. Returns this store when every row stays in place on
-        an equal grid.
+        are ``grid``'s. Where every row stays in place, only the grid
+        changes, and an equal grid returns this store.
         """
         n = self.n_cells
-        if (
-            rows.shape == (n,)
-            and grid == self.grid
-            and np.array_equal(rows, np.arange(n))
-        ):
-            return self
+        if rows.shape == (n,) and np.array_equal(rows, np.arange(n)):
+            return self if grid == self.grid else self.with_grid(grid)
         present = rows >= 0
         const = np.where(present, self.const[rows], np.nan)
         csr = self.csr[np.where(present, rows, 0)]
@@ -853,7 +897,7 @@ class CSRStore(Store):
 
     def rename(self, names: Mapping[str, str]) -> CSRStore:
         """Relabel grid dims; the CSR row layout is unchanged."""
-        return replace(self, grid=self.grid.rename(names))
+        return self.with_grid(self.grid.rename(names))
 
     def same_grid(self, other: CSRStore) -> bool:
         """Whether both live on the same cells, auxiliary coordinates aside."""
@@ -1079,7 +1123,7 @@ def coo_to_csr(
         order, indptr = _grouped(rows, shape[0])
         data, indices = data[order], indices[order]
     else:
-        indptr = np.searchsorted(rows, np.arange(shape[0] + 1))
+        indptr = indptr_from_counts(np.bincount(rows, minlength=shape[0]), dtype)
     csr_arrays = (data, indices, indptr.astype(dtype, copy=False))
     return scipy.sparse.csr_array(csr_arrays, shape=shape)
 

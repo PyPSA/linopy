@@ -155,6 +155,8 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
+    from xarray.core.types import ErrorOptionsWithWarn
+
     from linopy.constraints import (
         AnonymousScalarConstraint,
         Constraint,
@@ -910,6 +912,16 @@ def _grid_of(ds: Dataset | DataArray, dims: tuple[str, ...]) -> Grid | None:
         return None
     grid = Grid.from_dataset(ds, dims)
     return grid if set(ds.coords) == set(dims) | set(grid.aux) else None
+
+
+def _on_grid_positions(grid: Grid, indexers: Mapping[Any, Any]) -> bool:
+    """Whether ``indexers`` picks dims of ``grid`` by integer or slice only."""
+    return all(
+        d in grid.indexes
+        and isinstance(i, slice | int | np.integer)
+        and not isinstance(i, bool)
+        for d, i in indexers.items()
+    )
 
 
 def _const_grid(grid: Grid, const: DataArray) -> Grid | None:
@@ -2546,12 +2558,23 @@ class LinearExpression(BaseExpression):
         obj._attrs = dict(self.attrs)
         return obj
 
-    def isel(self, *args: Any, **kwargs: Any) -> Self:
+    def isel(
+        self,
+        indexers: Mapping[Any, Any] | None = None,
+        drop: bool = False,
+        missing_dims: ErrorOptionsWithWarn = "raise",
+        **indexers_kwargs: Any,
+    ) -> Self:
         """
         Select by position as ``Dataset.isel``. For a CSR-backed expression,
         returns a CSR-backed result when the selection stays on the grid.
         """
-        return self._gathered("isel", super().isel, *args, **kwargs)
+        picks = indexers or indexers_kwargs
+        sole = not (indexers and indexers_kwargs)
+        if self.is_sparse and sole and _on_grid_positions(self._store.grid, picks):
+            return type(self)._from_store(self._store.isel(picks, drop), self._model)
+        args = (indexers, drop, missing_dims)
+        return self._gathered("isel", super().isel, *args, **indexers_kwargs)
 
     def __getitem__(self, selector: int | slice | tuple[Any, ...] | DataArray) -> Self:
         return self._gathered("__getitem__", super().__getitem__, selector)
