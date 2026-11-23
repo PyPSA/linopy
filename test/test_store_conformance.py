@@ -128,6 +128,12 @@ def const_assigned(value: xr.DataArray) -> Callable[[LinearExpression], Any]:
     return op
 
 
+def picked(
+    indexers: dict[str, Any], drop: bool
+) -> Callable[[LinearExpression], LinearExpression]:
+    return lambda e: e.isel(indexers, drop=drop)
+
+
 def coeffs_assigned(e: LinearExpression) -> LinearExpression:
     e.coeffs = COEFFS
     return e
@@ -157,6 +163,9 @@ CASES: dict[str, Case] = {
     "sel": Case(grid, lambda e: e.sel(a=[0, 2]), KEPT),
     "isel": Case(grid, lambda e: e.isel(a=slice(0, 2)), KEPT),
     "isel-scalar": Case(grid, lambda e: e.isel(b=0), KEPT),
+    "isel-scalar-coord": Case(
+        grid, lambda e: e.assign_coords(s=5).isel(a=1, drop=True), KEPT
+    ),
     "getitem": Case(grid, lambda e: e[0:2], KEPT),
     "roll": Case(grid, lambda e: e.roll(a=1), KEPT),
     "roll-coords": Case(grid, lambda e: e.roll(a=1, roll_coords=True), KEPT),
@@ -479,6 +488,20 @@ CASES: dict[str, Case] = {
     "groupby-relation-empty": Case(
         grid, lambda e: e.groupby(RELATION_EMPTY).sum(), KEPT
     ),
+}
+
+ISEL_INDEXERS: dict[str, tuple[dict[str, Any], bool]] = {
+    "none": ({}, False),
+    "slice-step": ({"a": slice(None, None, -2)}, False),
+    "scalar-negative": ({"b": -1}, True),
+    "scalar-tagged": ({"a": 1}, False),
+    "scalar-tagged-drop": ({"a": 1}, True),
+    "scalars-drop": ({"a": np.int64(2), "b": 0}, True),
+    "scalar-and-slice": ({"a": 0, "b": slice(1, None)}, False),
+}
+CASES |= {
+    f"isel-{name}": Case(grid, picked(*args), KEPT)
+    for name, args in ISEL_INDEXERS.items()
 }
 
 CONST_REJECTED: dict[str, tuple[Any, str]] = {

@@ -259,9 +259,10 @@ variables:
     `where: c` on the constraint to make that visible in the spec.
 - Inside a sum, an absent term is left out. A row the data leaves without any
     variable term, such as a sum over variables a `where:` masked away
-    entirely, is refused rather than dropped: nothing is left to constrain, and
-    the row would leave the problem without saying so. Mask it with a `where:`
-    on the constraint ([\#993](https://github.com/PyPSA/linopy/issues/993)).
+    entirely, is the constant row it reads. linopy keeps it, as it keeps any
+    such row, so one that holds, such as `0 <= 5`, restricts nothing, and one
+    that does not, such as `0 >= 5`, beyond a rounding error of 1e-9, is
+    refused rather than built into an infeasible model. Mask it with a `where:` on the constraint ([\#993](https://github.com/PyPSA/linopy/issues/993)).
 - linopy carries a product of two variables in the objective only. A
     constraint whose spec multiplies two variables builds wherever the data
     leaves no such product on a row its `where:` keeps: its coefficient is

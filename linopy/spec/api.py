@@ -74,7 +74,8 @@ def build_into(
     SpecDataError
         The spec declares nothing, or the data does not fit it: a missing
         or malformed source, a label no dimension holds, an assumption the
-        numbers break, or a constraint row the data empties. A parameter
+        numbers break, or a constraint row the data leaves without a
+        variable term where that row does not hold. A parameter
         is read and checked when a built declaration first reads it, so the
         data of one that none reads is not checked, only its key. With
         *store*, every parameter is read, and a relation ``model.parameters``

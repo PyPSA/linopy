@@ -272,7 +272,10 @@ class Store(ABC):
 
     @abstractmethod
     def prune(self, tol: float = 0.0) -> Self:
-        """Drop the terms with a coefficient of at most ``tol`` in magnitude."""
+        """
+        Drop the terms with a coefficient of at most ``tol`` in magnitude;
+        this store itself if there is none.
+        """
 
     @abstractmethod
     def canonical(self) -> Self:
@@ -313,10 +316,10 @@ class Store(ABC):
         dims = tuple(map(str, positions.dims))
         return self.take(positions.values.ravel(), Grid.from_dataset(positions, dims))
 
-    def isel(self, indexers: Mapping[Hashable, slice]) -> Self:
-        """The cells at the positional slices ``indexers`` of grid dims."""
-        grid = self.grid
-        return self._take_positions(grid.dataarray(np.arange(grid.size)).isel(indexers))
+    def isel(self, indexers: Mapping[Any, int | slice], drop: bool = False) -> Self:
+        """The cells at the positions ``indexers`` picks on grid dims, as ``Dataset.isel``."""
+        grid, rows = self.grid.isel(indexers, drop)
+        return self.take(rows, grid)
 
     def transpose(self, dims: Sequence[str]) -> Self:
         """The cells on the grid dims reordered to ``dims``."""
@@ -935,8 +938,10 @@ class DenseStore(Store):
         vars_[~present] = -1
         return self.from_arrays(grid, coeffs, vars_, const, self.model)
 
-    def isel(self, indexers: Mapping[Hashable, slice]) -> DenseStore:
-        return DenseStore(self.ds.isel(indexers), self.model)
+    def isel(
+        self, indexers: Mapping[Any, int | slice], drop: bool = False
+    ) -> DenseStore:
+        return DenseStore(self.ds.isel(indexers, drop=drop), self.model)
 
     def transpose(self, dims: Sequence[str]) -> DenseStore:
         return DenseStore(self.ds.transpose(*dims, TERM_DIM), self.model)

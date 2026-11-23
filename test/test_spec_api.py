@@ -33,6 +33,7 @@ from spec_helpers import (  # noqa: E402
     WHERE_DATA,
     WHERE_SPEC,
     curve,
+    eager,
     solved,
     with_,
     yaml_dict,
@@ -165,6 +166,18 @@ def test_from_spec_passes_model_kwargs() -> None:
     assert m.force_dim_names
 
 
+@pytest.mark.parametrize("kwargs", [{}, {"sparse": True}], ids=["default", "sparse"])
+def test_from_spec_builds_a_sparse_model(kwargs: dict[str, Any]) -> None:
+    m = Model.from_spec(yaml_dict(), DISPATCH_DATA, **kwargs)
+    assert m.sparse
+    assert m.constraints["power_balance"].lhs.is_sparse
+
+
+def test_from_spec_refuses_a_dense_model() -> None:
+    with pytest.raises(ValueError, match="sparse model only"):
+        Model.from_spec(yaml_dict(), DISPATCH_DATA, sparse=False)
+
+
 PRICED = with_(
     yaml_dict(), expressions={"price": "dual(power_balance)", "spend": "sum(p * cost)"}
 )
@@ -254,12 +267,13 @@ def framed(default: tuple[Hashable, ...], order: list[str]) -> tuple[Hashable, .
 @pytest.mark.parametrize(
     "order", [["snapshot"], ["snapshot", "generator"], ["bp", "snapshot", "nowhere"]]
 )
+@pytest.mark.parametrize("build", [Model.from_spec, eager], ids=["terms", "eager"])
 def test_dim_order_lays_out_every_entry(
-    method: str, order: list[str], backend: Model
+    method: str, order: list[str], build: Callable[..., Model]
 ) -> None:
     spec = curves(method)
-    default = Model.from_spec(spec, CURVE_SOURCES, sparse=backend.sparse)
-    m = Model.from_spec(spec, CURVE_SOURCES, dim_order=order, sparse=backend.sparse)
+    default = build(spec, CURVE_SOURCES)
+    m = build(spec, CURVE_SOURCES, dim_order=order)
     for name, variable in default.variables.items():
         assert m.variables[name].labels.dims == framed(variable.labels.dims, order)
     for name, constraint in default.constraints.items():
@@ -272,23 +286,19 @@ def test_dim_order_lays_out_every_entry(
 
 @pytest.mark.parametrize("order", [None, [], ["nowhere"], ["bp", "generator"]])
 def test_a_dim_order_the_name_order_meets_builds_the_default(
-    order: list[str] | None, backend: Model
+    order: list[str] | None,
 ) -> None:
     spec = curves("sos2")
-    default = Model.from_spec(spec, CURVE_SOURCES, sparse=backend.sparse)
-    ordered = Model.from_spec(
-        spec, CURVE_SOURCES, dim_order=order, sparse=backend.sparse
-    )
+    default = Model.from_spec(spec, CURVE_SOURCES)
+    ordered = Model.from_spec(spec, CURVE_SOURCES, dim_order=order)
     assert_model_equal(ordered, default)
 
 
 @pytest.mark.parametrize("method", ["lp", "sos2"])
-def test_dim_order_solves_to_the_default_up_to_transposition(
-    method: str, backend: Model
-) -> None:
+def test_dim_order_solves_to_the_default_up_to_transposition(method: str) -> None:
     spec, order = curves(method), ["snapshot", "bp"]
-    default = solved(spec, CURVE_SOURCES, sparse=backend.sparse)
-    ordered = solved(spec, CURVE_SOURCES, sparse=backend.sparse, dim_order=order)
+    default = solved(spec, CURVE_SOURCES)
+    ordered = solved(spec, CURVE_SOURCES, dim_order=order)
     assert ordered.objective.value == pytest.approx(default.objective.value)
     pairs: list[tuple[Mapping[Any, xr.DataArray], Mapping[Any, xr.DataArray]]] = [
         (default.solution, ordered.solution),
