@@ -1975,8 +1975,14 @@ class Highs(Solver[None]):
         *,
         names: Printers | None,
         sos: list[SosSet],
+        options: dict[str, Any] | None = None,
     ) -> highspy.Highs:
-        """Build a highspy.Highs instance from the matrices ``M``."""
+        """
+        Build a highspy.Highs instance from the matrices ``M``.
+
+        ``options`` are set before the model is passed, so they apply to the
+        checks HiGHS runs on the incoming matrix entries.
+        """
         if sos:
             raise NotImplementedError(
                 "SOS constraints are not supported by the HiGHS direct API. "
@@ -1994,6 +2000,8 @@ class Highs(Solver[None]):
             else highspy.ObjSense.kMinimize
         )
         h = highspy.Highs()
+        for k, v in (options or {}).items():
+            h.setOptionValue(k, v)
         h.passModel(
             A.shape[1],
             A.shape[0],

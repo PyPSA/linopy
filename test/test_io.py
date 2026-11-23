@@ -695,6 +695,75 @@ def test_to_file_mps(model: Model, tmp_path: Path) -> None:
     gurobipy.read(str(fn))
 
 
+def read_mps_with_highs(fn: Path) -> Any:
+    """Read an MPS file with HiGHS, keeping every entry HiGHS can hold."""
+    import highspy
+
+    h = highspy.Highs()
+    h.setOptionValue("output_flag", False)
+    h.setOptionValue("small_matrix_value", 1e-12)
+    h.setOptionValue("large_matrix_value", np.inf)
+    h.readModel(str(fn))
+    return h
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+@pytest.mark.parametrize("coeff", [5e-10, 2e-12, 1e16])
+def test_to_file_mps_keeps_small_and_large_coefficients(
+    coeff: float, tmp_path: Path
+) -> None:
+    # HiGHS drops entries with |value| <= 1e-9 by default (#1182)
+    m = Model()
+    x = m.add_variables(lower=0, name="x")
+    y = m.add_variables(lower=0, name="y")
+    m.add_constraints(coeff * x + y >= 1e-3, name="c")
+    m.add_objective(1.0 * x + coeff * x * x + y * y)
+
+    fn = tmp_path / "test.mps"
+    m.to_file(fn, io_api="mps")
+
+    h = read_mps_with_highs(fn)
+    assert list(h.getLp().a_matrix_.value_) == [coeff, 1.0]
+    # x*x is stored as 0.5 * x' Q x, so the diagonal holds twice the coefficient
+    assert list(h.getModel().hessian_.value_) == [2 * coeff, 2.0]
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+@pytest.mark.parametrize("quadratic", [False, True])
+def test_to_file_mps_raises_on_unrepresentable_coefficient(
+    quadratic: bool, tmp_path: Path
+) -> None:
+    # 1e-12 is the lowest cut HiGHS allows; it cannot hold entries at or below it
+    m = Model()
+    x = m.add_variables(lower=0, name="x")
+    if quadratic:
+        m.add_constraints(x >= 1, name="c")
+        m.add_objective(x + 4e-13 * x * x)
+        match = "quadratic objective"
+    else:
+        m.add_constraints(5e-13 * x >= 1e-3, name="c")
+        m.add_objective(1.0 * x)
+        match = "constraint matrix"
+
+    with pytest.raises(ValueError, match=match):
+        m.to_file(tmp_path / "test.mps", io_api="mps")
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+def test_to_file_mps_keeps_row_with_zero_coefficient(tmp_path: Path) -> None:
+    m = Model()
+    x = m.add_variables(lower=0, name="x")
+    m.add_constraints(0 * x >= -1, name="c")
+    m.add_objective(1.0 * x)
+
+    fn = tmp_path / "test.mps"
+    m.to_file(fn, io_api="mps")
+
+    lp = read_mps_with_highs(fn).getLp()
+    assert lp.num_row_ == 1
+    assert list(lp.a_matrix_.value_) == []
+
+
 @pytest.mark.skipif("gurobi" not in available_solvers, reason="Gurobipy not installed")
 def test_to_file_invalid(model: Model, tmp_path: Path) -> None:
     with pytest.raises(ValueError):

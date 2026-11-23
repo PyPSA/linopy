@@ -59,6 +59,9 @@ TZ_ATTR = "_linopy_tz"
 
 TQDM_COLOR = "#80bfff"
 
+# Lowest value HiGHS accepts for its option `small_matrix_value`.
+HIGHS_MIN_SMALL_MATRIX_VALUE = 1e-12
+
 
 name_sanitizer = str.maketrans("-+*^[] ", "_______")
 
@@ -876,7 +879,31 @@ def matrices_to_file(M: Matrices, fn: Path, names: Printers, sos: list[SosSet]) 
             "Indicator constraints cannot be written with HiGHS, which "
             "linopy uses for MPS files. Use io_api='lp' or io_api='direct'."
         )
-    h = solvers.Highs._build_solver_model(M, names=names, sos=sos)
+    # On passing a model, HiGHS drops matrix and Hessian entries with
+    # |value| <= small_matrix_value (default 1e-9) and rejects ones above
+    # large_matrix_value (default 1e15). The file must hold the model as it is.
+    for values, what in ((M.A, "constraint matrix"), (M.Q, "quadratic objective")):
+        if values is None:
+            continue
+        tiny = np.abs(values.data)
+        tiny = tiny[(tiny > 0) & (tiny <= HIGHS_MIN_SMALL_MATRIX_VALUE)]
+        if tiny.size:
+            raise ValueError(
+                f"The {what} has {tiny.size} nonzero coefficient(s) with an "
+                f"absolute value in [{tiny.min():.3g}, {tiny.max():.3g}], at or "
+                f"below {HIGHS_MIN_SMALL_MATRIX_VALUE:g}. HiGHS, which linopy "
+                "uses for MPS files, cannot write them. Use io_api='lp' or "
+                "io_api='direct', or rescale the model."
+            )
+    h = solvers.Highs._build_solver_model(
+        M,
+        names=names,
+        sos=sos,
+        options={
+            "small_matrix_value": HIGHS_MIN_SMALL_MATRIX_VALUE,
+            "large_matrix_value": np.inf,
+        },
+    )
     h.writeModel(str(fn))
 
 
