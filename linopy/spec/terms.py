@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import math
 import operator
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
@@ -36,7 +36,7 @@ from mathspec import program as ms
 
 from linopy.csr import CSRStore, Grid, _grouped, coo_to_csr
 from linopy.expressions import LinearExpression
-from linopy.spec import operators
+from linopy.spec import attach
 from linopy.spec.context import Context, widened
 from linopy.spec.evaluator import (
     _data_under,
@@ -45,6 +45,7 @@ from linopy.spec.evaluator import (
     _off_rows,
     _regions,
     _sums_nothing,
+    _through,
     evaluate,
     refuse_made,
 )
@@ -227,6 +228,11 @@ def _data(node: ms.Expression, ctx: Context) -> Data:
 def _is_zero(values: np.ndarray) -> bool:
     """Whether *values* are zero wherever they are not NaN."""
     return not np.nan_to_num(values).any()
+
+
+def _positions(relation: attach.Table, roles: Mapping[str, str]) -> Positions:
+    """The position of each row of *relation* along each dimension of *roles*, as the relation holds it for the role that dimension names."""
+    return {d: relation.positions[r].to_numpy() for d, r in roles.items()}
 
 
 def _key(cols: Sequence[np.ndarray], shape: Sequence[int], n: int) -> np.ndarray:
@@ -468,7 +474,7 @@ class Evaluator:
         relation = ctx.relations[columns.name]
         return (
             join not in ctx.memo.values
-            and len(relation.rows) > 0
+            and len(relation) > 0
             and not any(r in relation.declared.key for r in columns.joined)
             and not set(join.operand.dims) & set(relation.key_dims)
             and bool(relation.defined.all())
@@ -489,7 +495,6 @@ class Evaluator:
     ) -> Table | None:
         """*table* times *data* read through a relation: each term gathers the row its key reads, where the data is finite and present throughout."""
         relation = self.ctx.relations[columns.name]
-        rows = relation.rows
         keys = dict(zip(relation.key_dims, relation.declared.key))
         read = {columns.dim(r): r for r in columns.joined}
         const_dims = () if table.const is None else table.const.dims
@@ -501,11 +506,7 @@ class Evaluator:
             or any(d in table.dims for d in read)
         ):
             return None
-        try:
-            on = self.positions({d: rows[r] for d, r in keys.items()})
-            add = self.positions({d: rows[r] for d, r in read.items()})
-        except Unsupported:
-            return None
+        on, add = _positions(relation, keys), _positions(relation, read)
         blocks = tuple(self.matched(b, on, add) for b in table.blocks)
         lifted = replace(table, dims=_union(table.dims, read), blocks=blocks)
         return replace(self.times(lifted, data), pending=columns)
@@ -560,20 +561,16 @@ class Evaluator:
 
     def through(self, table: Table, columns: ms.JoinColumns) -> Table:
         """*table* summed through the rows of a relation: each term goes to the group of every row it joins."""
-        ctx = self.ctx
-        rows = ctx.relations[columns.name].rows
-        joined = {columns.dim(r): rows[r].to_numpy() for r in columns.joined}
-        grouped = {columns.dim(r): rows[r].to_numpy() for r in columns.grouped}
+        relation = self.ctx.relations[columns.name]
+        joined = {columns.dim(r): r for r in columns.joined}
+        grouped = {columns.dim(r): r for r in columns.grouped}
         table = self.absorbed(table)
-        on, add = self.positions(joined), self.positions(grouped)
+        on, add = _positions(relation, joined), _positions(relation, grouped)
         blocks = tuple(self.matched(b, on, add, drop=on) for b in table.blocks)
         const = table.offset
         if const is not None:
-            onto = {d: ctx.coords[d] for d in grouped}
-            const = self.full(const, table.dims)
-            const = cast(
-                xr.DataArray, operators.grouped_sum(const, joined, grouped, onto)
-            )
+            full = self.full(const, table.dims)
+            const = cast(xr.DataArray, _through(full, columns, self.ctx))
         dims = _union([d for d in table.dims if d not in joined], grouped)
         return Table(dims, blocks, const, const is not None and _is_zero(const.values))
 
@@ -582,12 +579,10 @@ class Evaluator:
         table = self.table(node.operand, widened(node, ctx))
         columns = node.columns
         relation = ctx.relations[columns.name]
-        rows = relation.rows
-        if not len(rows):
+        if not len(relation):
             raise Unsupported("a lookup through an empty relation")
-        on = self.positions({columns.dim(r): rows[r] for r in columns.joined})
-        keys = zip(relation.key_dims, relation.declared.key)
-        add = self.positions({d: rows[r] for d, r in keys})
+        on = _positions(relation, {columns.dim(r): r for r in columns.joined})
+        add = _positions(relation, dict(zip(relation.key_dims, relation.declared.key)))
         blocks = tuple(self.matched(b, on, add, drop=on) for b in table.blocks)
         const = table.const
         if const is not None:
@@ -674,15 +669,6 @@ class Evaluator:
         if bool(present.all()):
             return table
         return replace(table, blocks=self.where(table.blocks, present))
-
-    def positions(self, labels: dict[str, np.ndarray]) -> Positions:
-        """The position of each of *labels* along its dimension."""
-        at = {
-            d: self.ctx.coords[d].get_indexer(np.asarray(v)) for d, v in labels.items()
-        }
-        if any((p < 0).any() for p in at.values()):
-            raise Unsupported("a relation row off the coordinates")
-        return at
 
     def aligned(self, data: Data) -> xr.DataArray:
         """*data* as an array without stray coordinates, which has to lie on the master coordinates."""
