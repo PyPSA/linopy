@@ -2001,7 +2001,8 @@ class Highs(Solver[None]):
         )
         h = highspy.Highs()
         for k, v in (options or {}).items():
-            h.setOptionValue(k, v)
+            if h.setOptionValue(k, v) != highspy.HighsStatus.kOk:
+                raise ValueError(f"HiGHS rejected the option {k}={v!r}.")
         h.passModel(
             A.shape[1],
             A.shape[0],

@@ -730,23 +730,46 @@ def test_to_file_mps_keeps_small_and_large_coefficients(
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
 @pytest.mark.parametrize("quadratic", [False, True])
-def test_to_file_mps_raises_on_unrepresentable_coefficient(
+def test_to_file_mps_warns_on_unrepresentable_coefficient(
     quadratic: bool, tmp_path: Path
 ) -> None:
     # 1e-12 is the lowest cut HiGHS allows; it cannot hold entries at or below it
     m = Model()
     x = m.add_variables(lower=0, name="x")
+    y = m.add_variables(lower=0, name="y")
+    m.add_constraints(x + y >= 1, name="c")
     if quadratic:
-        m.add_constraints(x >= 1, name="c")
-        m.add_objective(x + 4e-13 * x * x)
+        m.add_objective(x + 4e-13 * x * x + y * y)
         match = "quadratic objective"
     else:
-        m.add_constraints(5e-13 * x >= 1e-3, name="c")
+        m.add_constraints(5e-13 * x + y >= 1e-3, name="d")
         m.add_objective(1.0 * x)
         match = "constraint matrix"
 
-    with pytest.raises(ValueError, match=match):
-        m.to_file(tmp_path / "test.mps", io_api="mps")
+    fn = tmp_path / "test.mps"
+    with pytest.warns(UserWarning, match=match):
+        m.to_file(fn, io_api="mps")
+
+    h = read_mps_with_highs(fn)
+    if quadratic:
+        assert [v for v in h.getModel().hessian_.value_ if v] == [2.0]
+    else:
+        assert list(h.getLp().a_matrix_.value_) == [1.0, 1.0, 1.0]
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")
+def test_highs_build_raises_on_rejected_option() -> None:
+    from linopy.solvers import Highs
+
+    m = Model()
+    x = m.add_variables(lower=0, name="x")
+    m.add_constraints(x >= 1, name="c")
+    m.add_objective(1.0 * x)
+
+    with pytest.raises(ValueError, match="small_matrix_value"):
+        Highs._build_solver_model(
+            m.matrices, names=None, sos=[], options={"small_matrix_value": 1e-13}
+        )
 
 
 @pytest.mark.skipif("highs" not in available_solvers, reason="Highspy not installed")

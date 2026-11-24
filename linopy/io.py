@@ -33,6 +33,7 @@ from linopy.constants import SOS_DIM_ATTR, SOS_TYPE_ATTR
 from linopy.constraints import Constraint
 from linopy.objective import Objective, linear_part
 from linopy.scaling import constraint_scaling_lookup, variable_scaling_lookup
+from linopy.semantics import warn_outside_linopy
 from linopy.store import Store
 
 if TYPE_CHECKING:
@@ -881,19 +882,21 @@ def matrices_to_file(M: Matrices, fn: Path, names: Printers, sos: list[SosSet]) 
         )
     # On passing a model, HiGHS drops matrix and Hessian entries with
     # |value| <= small_matrix_value (default 1e-9) and rejects ones above
-    # large_matrix_value (default 1e15). The file must hold the model as it is.
+    # large_matrix_value (default 1e15). The file must hold the model as it is,
+    # down to the lowest cut HiGHS allows.
     for values, what in ((M.A, "constraint matrix"), (M.Q, "quadratic objective")):
         if values is None:
             continue
         tiny = np.abs(values.data)
         tiny = tiny[(tiny > 0) & (tiny <= HIGHS_MIN_SMALL_MATRIX_VALUE)]
         if tiny.size:
-            raise ValueError(
+            warn_outside_linopy(
                 f"The {what} has {tiny.size} nonzero coefficient(s) with an "
                 f"absolute value in [{tiny.min():.3g}, {tiny.max():.3g}], at or "
                 f"below {HIGHS_MIN_SMALL_MATRIX_VALUE:g}. HiGHS, which linopy "
-                "uses for MPS files, cannot write them. Use io_api='lp' or "
-                "io_api='direct', or rescale the model."
+                "uses for MPS files, cannot write them, so the file omits them. "
+                "Use io_api='lp' or io_api='direct' to keep them.",
+                UserWarning,
             )
     h = solvers.Highs._build_solver_model(
         M,
