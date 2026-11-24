@@ -412,7 +412,8 @@ def test_sanitize_missings_refreshes_label_index() -> None:
     m = Model()
     x = m.add_variables(lower=0, coords=[range(3)], name="x")
     con = m.add_constraints(x <= 5, name="up")
-    con.update(lhs=x.where(xr.DataArray([True, False, True], coords=x.coords)))
+    keep = xr.DataArray([True, False, True], coords=x.coords)
+    con.update(lhs=(1 * x).where(keep).fillna(0))
 
     assert m.constraints.label_index.n_active_cons == 3
     m.constraints.sanitize_missings()

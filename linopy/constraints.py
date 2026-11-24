@@ -77,7 +77,7 @@ from linopy.constants import (
 from linopy.containers import LabelContainer
 from linopy.csr import CSRStore, _densify_notice
 from linopy.scaling import scalar_scaling, validate_scaling
-from linopy.semantics import assign_flat_coords
+from linopy.semantics import assign_flat_coords, check_user_nan
 from linopy.store import NETCDF_STORE_ATTRS, DenseStore, Reason, Store, as_sparse
 from linopy.types import (
     ConstantLike,
