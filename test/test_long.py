@@ -12,6 +12,8 @@ import pandas as pd
 import polars as pl
 import pytest
 import xarray as xr
+from arrow_helpers import ArrowStream
+from dateutil.tz import gettz, tzutc
 from test_store_conformance import RELATION, RELATION_FRAME, A, B, assert_same
 
 from linopy import (
@@ -24,7 +26,7 @@ from linopy import (
     from_long,
 )
 from linopy.constants import _emitted_evolving_warnings
-from linopy.long import Column
+from linopy.long import Column, Missing
 from linopy.testing import assert_equivalent
 
 
@@ -35,19 +37,20 @@ def to_polars(frame: pd.DataFrame) -> pl.DataFrame:
 FRAME_LIBS: dict[str, Callable[[pd.DataFrame], Any]] = {
     "pandas": lambda f: f,
     "polars": to_polars,
+    "arrow": lambda f: ArrowStream(to_polars(f)),
 }
 FRAME_AB = pd.DataFrame(
     {"a": [0, 2, 1, 0], "b": ["p", "p", "q", "q"], "v": [1.0, 2, 3, 4]}
 )
 FRAME_A = pd.DataFrame({"a": [2, 0, 1], "v": [1.0, 2, 3]})
 
-CONSTANTS: dict[str, tuple[pd.DataFrame, float, xr.DataArray]] = {
-    "all-keys-default": (
+CONSTANTS: dict[str, tuple[pd.DataFrame, Missing, xr.DataArray]] = {
+    "gaps-filled": (
         FRAME_AB,
         5.0,
         xr.DataArray([[1.0, 4], [5, 3], [2, 5]], coords=[A, B]),
     ),
-    "missing-key-column": (FRAME_A, np.nan, xr.DataArray([2.0, 3, 1], coords=[A])),
+    "missing-key-column": (FRAME_A, "absent", xr.DataArray([2.0, 3, 1], coords=[A])),
     "column-order": (
         pd.DataFrame({"b": ["q", "p"], "a": [1, 1], "v": [3.0, 4]}),
         1.0,
@@ -59,8 +62,8 @@ CONSTANTS: dict[str, tuple[pd.DataFrame, float, xr.DataArray]] = {
 @pytest.mark.parametrize("lib", list(FRAME_LIBS))
 @pytest.mark.parametrize("case", list(CONSTANTS))
 def test_from_long(case: str, lib: str) -> None:
-    frame, default, want = CONSTANTS[case]
-    res = from_long(FRAME_LIBS[lib](frame), coords=[A, B], default=default)
+    frame, missing, want = CONSTANTS[case]
+    res = from_long(FRAME_LIBS[lib](frame), coords=[A, B], missing=missing)
     xr.testing.assert_identical(res, want.rename("v"))
 
 
@@ -68,8 +71,8 @@ def test_from_long(case: str, lib: str) -> None:
 def test_from_long_variable_coords(lib: str) -> None:
     frame = FRAME_AB.rename(columns={"v": "cost"})
     var = x(Model())
-    res = from_long(FRAME_LIBS[lib](frame), coords=var.coords, default=np.nan)
-    want = from_long(frame, coords=[A, B], default=np.nan)
+    res = from_long(FRAME_LIBS[lib](frame), coords=var.coords, missing="absent")
+    want = from_long(frame, coords=[A, B], missing="absent")
     assert res.name == "cost"
     xr.testing.assert_identical(res, want)
 
@@ -88,7 +91,7 @@ KEY_COORDS: dict[str, pd.Index] = {
 def test_from_long_key_dtypes(dtype: str, lib: str) -> None:
     coord = KEY_COORDS[dtype]
     frame = pd.DataFrame({"k": coord[[2, 0]], "v": [1.0, 2.0]})
-    res = from_long(FRAME_LIBS[lib](frame), coords=[coord], default=0)
+    res = from_long(FRAME_LIBS[lib](frame), coords=[coord], missing=0)
     want = xr.DataArray([2.0, 0, 1], coords=[coord], name="v")
     xr.testing.assert_identical(res, want)
 
@@ -101,8 +104,8 @@ def test_from_long_sorted_full_cube_matches_scatter(fill: float) -> None:
     rows = cube.sample(frac=fill, random_state=0).sort_index()
     frame = to_polars(rows)
     shuffled = frame.sample(fraction=1.0, shuffle=True, seed=0)
-    res = from_long(frame, coords=coords, default=-1)
-    xr.testing.assert_identical(res, from_long(shuffled, coords=coords, default=-1))
+    res = from_long(frame, coords=coords, missing=-1)
+    xr.testing.assert_identical(res, from_long(shuffled, coords=coords, missing=-1))
     want = cube.v.where(cube.index.isin(rows.index), -1.0).to_numpy()
     np.testing.assert_array_equal(res.values, want.reshape(40, 30))
 
@@ -135,11 +138,11 @@ POSITIONS: dict[str, Callable[[Model, Any], Any]] = {
 }
 
 
-@pytest.mark.parametrize("case", ["all-keys-default", "missing-key-column"])
+@pytest.mark.parametrize("case", ["gaps-filled", "missing-key-column"])
 @pytest.mark.parametrize("position", list(POSITIONS))
 def test_from_long_positions(backend: Model, position: str, case: str) -> None:
-    frame, default, want = CONSTANTS[case]
-    const = from_long(frame, coords=[A, B], default=default)
+    frame, missing, want = CONSTANTS[case]
+    const = from_long(frame, coords=[A, B], missing=missing)
     if position == "penalty":
         const = const.fillna(1.0)
         want = want.fillna(1.0)
@@ -178,7 +181,7 @@ INVALID: dict[str, tuple[pd.DataFrame, type[Exception], str]] = {
         pd.DataFrame({"a": [0], "b": ["q"], "v": [1.0]}),
         ValueError,
         r"misses 5 of 6 key combinations over \['a', 'b'\], first \[0, 'p'\]; "
-        "pass `default=`",
+        "pass `missing=`",
     ),
     "key-outside-coords": (
         pd.DataFrame({"a": [7, 1, 9], "v": [1.0, 2, 3]}),
@@ -218,6 +221,13 @@ DAY = pl.Series([dt.date(2030, 1, 1)])
 DAYS = pd.Index([dt.date(2030, 1, 1), dt.date(2030, 1, 2)], name="k", dtype=object)
 DATE_STRINGS = pd.Index(["2030-01-01", "2030-01-02"], name="k")
 MS = pl.Series([dt.datetime(2030, 1, 1)], dtype=pl.Datetime("ms"))
+US = pl.Series([dt.datetime(2030, 1, 2)], dtype=pl.Datetime("us"))
+NS = pd.date_range("2030-01-01", periods=2, name="k", unit="ns")
+SUB_US = pd.Series(NS[[1]] + pd.Timedelta(1, "ns"))
+UTC = pd.date_range("2030-01-01", periods=2, freq="h", name="k", tz=tzutc())
+BERLIN_TZFILE = BERLIN.tz_convert(gettz("Europe/Berlin"))
+FIXED = pd.to_datetime(["2030-01-01T00:00+01:00", "2030-01-01T01:00+01:00"])
+MIXED = pd.Index(["p", 1], name="k", dtype=object)
 NOT_IN = (ValueError, "not in the coordinates")
 NO_MATCH = (TypeError, "does not match")
 
@@ -245,8 +255,22 @@ KEY_DTYPES: dict[str, tuple[Column, pd.Index, list[float] | tuple[type, str]]] =
     "date-string-pandas": (pd.Series(DAY.to_list()), DATE_STRINGS, NO_MATCH),
     "ms-sub-ms": (MS, SUB_MS, [np.nan, 1]),
     "ms-us": (MS, MIDNIGHT, [1, np.nan]),
+    "us-ns": (US, NS, [np.nan, 1]),
+    "us-ns-pandas": (US.to_pandas(), NS, [np.nan, 1]),
+    "ns-us": (pl.Series(NS[[1]]), MIDNIGHT.as_unit("us"), [np.nan, 1]),
+    "sub-us-us": (pl.from_pandas(SUB_US), MIDNIGHT.as_unit("us"), NOT_IN),
+    "sub-us-us-pandas": (SUB_US, MIDNIGHT.as_unit("us"), NOT_IN),
     "tz": (MS.dt.replace_time_zone("Europe/Berlin"), BERLIN, [1, np.nan]),
     "tz-pandas": (pd.Series(BERLIN[[1]]), BERLIN, [np.nan, 1]),
+    "tz-other-zone": (MS.dt.replace_time_zone("UTC"), BERLIN, [np.nan, 1]),
+    "tz-other-zone-pandas": (
+        pd.Series(BERLIN[[1]].tz_convert("UTC")),
+        BERLIN,
+        [np.nan, 1],
+    ),
+    "tz-tzfile": (MS.dt.replace_time_zone("Europe/Berlin"), BERLIN_TZFILE, [1, np.nan]),
+    "tz-tzutc": (MS.dt.replace_time_zone("UTC"), UTC, [1, np.nan]),
+    "tz-fixed-offset": (pl.Series(FIXED[[1]]), FIXED, [np.nan, 1]),
     "tz-naive": (MS.dt.replace_time_zone("UTC"), MIDNIGHT, NO_MATCH),
     "naive-tz-pandas": (pd.Series(MIDNIGHT[[0]]), BERLIN, NO_MATCH),
     "duration": (pl.Series([1], dtype=pl.Duration("ns")), MIDNIGHT, NO_MATCH),
@@ -258,6 +282,25 @@ KEY_DTYPES: dict[str, tuple[Column, pd.Index, list[float] | tuple[type, str]]] =
         [np.nan, 1],
     ),
     "categorical-int-str-pandas": (pd.Series(pd.Categorical([1])), B, NO_MATCH),
+    "object-int-pandas": (
+        pd.Series([20], dtype=object),
+        pd.Index([10, 20]),
+        [np.nan, 1],
+    ),
+    "object-int-str-pandas": (pd.Series([1], dtype=object), B, NO_MATCH),
+    "object-mixed-pandas": (
+        pd.Series([20, "p"], dtype=object),
+        pd.Index([10, 20]),
+        NOT_IN,
+    ),
+    "object-datetime64-pandas": (
+        pd.Series([np.datetime64("2030-01-02")], dtype=object),
+        MIDNIGHT,
+        [np.nan, 1],
+    ),
+    "mixed-index": (pl.Series(["p"]), MIXED, [1, np.nan]),
+    "mixed-index-pandas": (pd.Series([1]), MIXED, [np.nan, 1]),
+    "mixed-index-stray": (pl.Series(["1"]), MIXED, NOT_IN),
 }
 
 
@@ -269,10 +312,16 @@ def test_from_long_column_dtypes(case: str) -> None:
     frame = pl.DataFrame(data) if isinstance(column, pl.Series) else pd.DataFrame(data)
     if isinstance(want, tuple):
         with pytest.raises(want[0], match=want[1]):
-            from_long(frame, coords=[index], default=np.nan)
+            from_long(frame, coords=[index], missing="absent")
     else:
-        res = from_long(frame, coords=[index], default=np.nan)
+        res = from_long(frame, coords=[index], missing="absent")
         xr.testing.assert_identical(res, xr.DataArray(want, coords=[index], name="v"))
+
+
+@pytest.mark.parametrize("missing", ["zero", None, True, np.True_, [0]])
+def test_from_long_refuses_unknown_missing(missing: Any) -> None:
+    with pytest.raises(ValueError, match="'refused', 'absent' or a number"):
+        from_long(FRAME_A, coords=[A], missing=missing)
 
 
 @pytest.mark.parametrize(
@@ -282,8 +331,19 @@ def test_from_long_column_dtypes(case: str) -> None:
         FRAME_A.set_index("a").v,
         FRAME_A.set_index("a"),
         FRAME_AB.set_index(["a", "b"]),
+        to_polars(FRAME_A)["v"],
+        ArrowStream(to_polars(FRAME_A)["v"]),
+        xr.DataArray([1.0, 2.0], coords=[A[:2]], name="v"),
     ],
-    ids=["lazyframe", "series", "named-index", "multiindex"],
+    ids=[
+        "lazyframe",
+        "series",
+        "named-index",
+        "multiindex",
+        "polars-series",
+        "arrow-array",
+        "dataarray",
+    ],
 )
 def test_from_long_rejects_frame_forms(frame: Any) -> None:
     with pytest.raises(TypeError):
@@ -312,6 +372,18 @@ def test_relation_groupby_matches_incidence_matmul(
     want = expr @ incidence(frame).reindex(a=A, fill_value=0.0)
     transposed = want._store.transpose([str(d) for d in res.coord_dims])
     assert_equivalent(res, LinearExpression._from_store(transposed, backend))
+
+
+@pytest.mark.parametrize("lib", list(FRAME_LIBS))
+def test_relation_groups_keep_their_time_zone(backend: Model, lib: str) -> None:
+    member = pd.Index(["x", "y"], name="m")
+    groups = BERLIN.rename("g")
+    frame = pd.DataFrame({"m": member, "g": groups[::-1]})
+    relation = Relation(FRAME_LIBS[lib](frame), "m", "g", groups=groups)
+    res = (1 * backend.add_variables(coords=[member], name="x")).groupby(relation).sum()
+    assert res.indexes["g"].equals(groups)
+    assert res.vars.values.tolist() == [[1], [0]]
+    assert pd.Index(relation.group_of([member]).values).equals(groups[::-1])
 
 
 @pytest.mark.parametrize("lib", list(FRAME_LIBS))

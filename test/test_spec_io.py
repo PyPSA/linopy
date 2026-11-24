@@ -206,16 +206,14 @@ def test_a_hand_added_variable_keeps_its_own_labels(
 
 @pytest.mark.parametrize("engine", ENGINES)
 def test_every_container_shares_the_master_coordinates(
-    tmp_path: Path, engine: str, backend: Model
+    tmp_path: Path, engine: str
 ) -> None:
     """The master coordinates are canonical: no container may disagree with them."""
-    if backend.sparse and engine == "scipy":
+    if engine == "scipy":
         pytest.skip(
             "netCDF3 holds no unicode-array attr, and a sparse constraint writes one"
         )
-    m = Model.from_spec(
-        EXAMPLE_DISPATCH, DISPATCH_DATA, store=True, sparse=backend.sparse
-    )
+    m = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA, store=True)
     m.solve(solver_name="highs", output_flag=False)
     p = roundtrip(m, tmp_path, engine)
 
@@ -296,11 +294,10 @@ def test_a_stored_relation_reads_back_as_its_rows_at_their_dtype(
     program = lower(RELATION_SPEC)
     given, read = attach(program, sources), attach(program, stored)
     for name, into in RELATION_INTO.items():
-        rows = read.relations[name].rows
-        pd.testing.assert_frame_equal(
-            rows, given.relations[name].rows, check_dtype=False, check_index_type=False
-        )
-        assert rows[into.name].dtype.kind == into.dtype.kind
+        table = read.relations[name]
+        for role in table.declared.roles:
+            assert table.labels(role).equals(given.relations[name].labels(role))
+        assert table.labels(into.name).dtype.kind == into.dtype.kind
 
 
 def copied(deep: bool) -> Callable[[Model, Path, str], Model]:

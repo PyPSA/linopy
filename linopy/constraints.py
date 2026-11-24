@@ -36,7 +36,7 @@ from xarray.core.indexes import Indexes
 from xarray.core.utils import Frozen
 
 from linopy import expressions, variables
-from linopy.alignment import as_dataarray, broadcast_to_coords
+from linopy.alignment import broadcast_to_coords
 from linopy.common import (
     ConstraintLabelIndex,
     LocIndexer,
@@ -150,34 +150,6 @@ def _sparse_if(store: Store, sparse: bool, reason: Reason | None = None) -> Stor
 def model_store(store: Store, model: Model) -> Store:
     """``store`` on the store class of ``model`` where it converts, without a notice."""
     return _sparse_if(store, model.store_cls is CSRStore)
-
-
-def rhs_on_grid(store: CSRStore, rhs: Any) -> DataArray | Reason:
-    """
-    The constant ``rhs`` as a DataArray on the grid of ``store``, with dense
-    parity: NaN in the rhs raises (§5) and a reordered or differing index on
-    a shared dim raises (§8). An rhs with helper dims or dims outside the
-    grid returns the reason to fall back to the dense path. An expression
-    rhs is moved to the lhs before, see :meth:`LinearExpression.to_constraint`.
-    """
-    da = as_dataarray(rhs)
-    grid = store.grid
-    if set(da.dims) & set(HELPER_DIMS) or not set(da.dims) <= set(grid.dims):
-        return "to_constraint(rhs over dimensions outside the grid)"
-    if bool(da.isnull().any()):
-        check_user_nan()
-    for d in da.dims:
-        if not da.get_index(d).equals(grid.indexes[str(d)]):
-            raise ValueError(
-                f"Coordinate mismatch on shared dimension {d!r} between "
-                "the rhs and the grouped result. Align the rhs with "
-                ".sel(...) / .reindex(...) before combining (§8)."
-            )
-    missing = {d: i for d, i in grid.indexes.items() if d not in da.dims}
-    if missing:
-        da = da.expand_dims(missing)
-    values = da.transpose(*grid.dims).to_numpy().reshape(-1)
-    return grid.dataarray(values.astype(float), name="rhs")
 
 
 class Slack(NamedTuple):
@@ -746,6 +718,26 @@ class Constraint:
         check_has_nulls(df, name=f"{self.type} {self.name}")
         return df
 
+    def _check_rhs(self, rhs: DataArray, user: bool = False) -> None:
+        """
+        Raise if ``rhs`` is NaN at a present row: one with a label, or one
+        with an rhs before the constraint is added to a model. ``user`` tells
+        a NaN of a constant the user passed from one an absent cell left.
+        """
+        mask = self.mask
+        present = self.rhs.notnull() if mask is None else mask
+        if not bool((rhs.isnull() & present).any()):
+            return
+        if user:
+            check_user_nan("constraint rhs")
+        raise ValueError(
+            "Constraint.update would leave a NaN right-hand side on a row "
+            "with a label, e.g. where the new expression is absent. An update "
+            "does not switch a row off: keep the expression present on every "
+            "labelled row, or remove the constraint and add it again with "
+            "mask=."
+        )
+
     def _assign_lhs(
         self,
         expr: expressions.LinearExpression,
@@ -758,7 +750,10 @@ class Constraint:
         with a densify notice naming ``reason`` if given. Sets ``_coef_dirty``.
         """
         base_rhs = self.rhs if rhs is None else rhs
-        fields = self._fields() | {"rhs": base_rhs - expr.const}
+        new_rhs = base_rhs - expr.const
+        if self.is_assigned:
+            self._check_rhs(new_rhs)
+        fields = self._fields() | {"rhs": new_rhs}
         store = _sparse_if(expr.reset_const()._store, self._lhs.is_sparse, reason)
         self._rebind(store, fields)
         self._coef_dirty = True
@@ -922,7 +917,9 @@ class Constraint:
             if residual.nterm != 0:
                 self._assign_lhs(self.lhs - residual, rhs=expr.const)
             else:
-                self._rhs = _on_grid(expr.const, self._grid_template(), "rhs")
+                new_rhs = _on_grid(expr.const, self._grid_template(), "rhs")
+                self._check_rhs(new_rhs, user=constraint is None)
+                self._rhs = new_rhs
 
         if coeffs is not None or variables is not None:
             self._assign_terms(coeffs, variables)

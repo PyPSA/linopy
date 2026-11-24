@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
@@ -15,6 +16,7 @@ import xarray as xr
 
 pytest.importorskip("mathspec")
 
+from arrow_helpers import ArrowStream  # noqa: E402
 from spec_helpers import table, with_  # noqa: E402
 
 from linopy.spec import SpecDataError  # noqa: E402
@@ -123,6 +125,7 @@ CAP_SHAPES = {
     "table-dims-reordered": table(CAP.transpose("t", "f").to_series(), "cap"),
     "table-unnamed-index": CAP_TABLE.set_axis(range(10, 19)),
     "polars-table": polars(CAP_TABLE),
+    "arrow-table": ArrowStream(polars(CAP_TABLE)),
 }
 
 
@@ -141,6 +144,8 @@ COST_SHAPES = {
     "whole-numbers": table(COST.astype(int), "cost"),
     "polars-table": polars(COST_TABLE),
     "polars-whole-numbers": polars(table(COST.astype(int), "cost")),
+    "arrow-table": ArrowStream(polars(COST_TABLE)),
+    "polars-decimal": polars(COST_TABLE).cast({"cost": pl.Decimal(10, 2)}),
 }
 
 
@@ -232,6 +237,7 @@ RELATION_SHAPES = {
     ),
     "table-unnamed-index": GRP_TABLE.set_axis([7, 3, 5]),
     "polars-table": polars(GRP_TABLE),
+    "arrow-table": ArrowStream(polars(GRP_TABLE)),
 }
 
 
@@ -471,6 +477,26 @@ REFUSALS = [
         id="unknown-label",
     ),
     pytest.param(
+        {"cost": pd.DataFrame({"f": ["a", None], "cost": [1.0, 2.0]})},
+        r"parameter 'cost' carries 1 row\(s\) with a null label in 'f': f=",
+        id="null-label",
+    ),
+    pytest.param(
+        {"cost": pl.DataFrame({"f": [None], "cost": [1.0]})},
+        r"parameter 'cost' carries 1 row\(s\) with a null label in 'f'",
+        id="null-label-of-polars-dtype-null",
+    ),
+    pytest.param(
+        {"cost": pl.DataFrame({"f": [["a"]], "cost": [1.0]})},
+        r"parameter 'cost' has label\(s\) of dtype List\(String\) in dimension 'f'",
+        id="list-label",
+    ),
+    pytest.param(
+        {"grp": pl.DataFrame({"f": [["a"]], "g": ["n"]})},
+        r"relation 'grp' has label\(s\) of dtype List\(String\) in dimension 'f'",
+        id="list-label-in-a-relation",
+    ),
+    pytest.param(
         {"cap": CAP.assign_coords(t=[0, 1, 9])},
         r"parameter 'cap'.*'t'.*\b9\b",
         id="unknown-label-dense",
@@ -585,7 +611,8 @@ REFUSALS = [
     ),
     pytest.param(
         {"cap": CAP.assign_coords(t=["0", "1", "2"])},
-        r"parameter 'cap' has 'str' label\(s\) in dimension 't'.*differ in type, not spelling",
+        r"parameter 'cap' has 'string' label\(s\) of dtype \w+ in dimension 't', and 't' holds "
+        r"'numeric' labels: '0', '1', '2' differ in type",
         id="str-labels-on-an-int-dimension",
     ),
     pytest.param(
@@ -698,6 +725,11 @@ REFUSALS = [
         {"grp": None}, r"no data provided for relation 'grp'", id="missing-relation"
     ),
     pytest.param(
+        {"f": ArrowStream(pl.Series("f", list(F)))},
+        r"index for dimension 'f': cannot read labels out of ArrowStream",
+        id="dimension-arrow-array",
+    ),
+    pytest.param(
         {"grp": pd.Series(["n", "e", "n"], index=F)},
         r"relation 'grp': cannot read rows out of Series; pass a pandas or polars "
         r"DataFrame with exactly the columns \['f', 'g'\]",
@@ -725,7 +757,7 @@ REFUSALS = [
     ),
     pytest.param(
         {"grp": pd.DataFrame({"f": [1], "g": ["n"]})},
-        r"relation 'grp' has 'int' label\(s\) in dimension 'f'.*differ in type",
+        r"relation 'grp' has 'numeric' label\(s\) of dtype int64 in dimension 'f'.*differ in type",
         id="relation-int-key-on-a-str-dimension",
     ),
     pytest.param(
@@ -834,6 +866,14 @@ def test_sources_are_read_by_key_once_never_iterated(
     source = Unlisted(good)
     read_all(program, source)
     assert Counter(source.reads) == dict.fromkeys(good, 1)
+
+
+def test_an_arrow_table_is_read_once_however_often_its_parameter_is(
+    program: Any, good: dict[str, Any]
+) -> None:
+    attached = attach(program, {**good, "cost": ArrowStream(polars(COST_TABLE))})
+    first, second = (filled(attached, "cost") for _ in range(2))
+    xr.testing.assert_equal(first, second)
 
 
 def test_a_source_key_close_to_a_declared_name_warns(
@@ -1000,9 +1040,7 @@ def test_datetime_labels_given_as_text_are_a_type_mismatch() -> None:
         {"snapshot": SNAPSHOTS.astype(str), "load": [1.0, 2.0, 3.0]}
     )
     attached = attach(lower(LOAD_SPEC), {"snapshot": SNAPSHOTS, "load": from_sql})
-    with pytest.raises(
-        SpecDataError, match=r"differ in type, not spelling.*pd\.to_datetime"
-    ):
+    with pytest.raises(SpecDataError, match=r"differ in type.*pd\.to_datetime"):
         attached.read("load")
 
 
@@ -1015,6 +1053,152 @@ def test_polars_datetimes_attach_like_pandas_ones() -> None:
         "load": polars(load),
     }
     xr.testing.assert_equal(filled(attach(program, from_polars), "load"), expected)
+
+
+US_SNAPSHOTS = SNAPSHOTS.as_unit("us")
+NS_SNAPSHOTS = SNAPSHOTS.as_unit("ns")
+BERLIN_SNAPSHOTS = SNAPSHOTS.tz_localize("Europe/Berlin")
+FAMILY_KEYS: dict[str, tuple[str, pd.Index, pd.Series]] = {
+    "int32-on-int64": (
+        "int",
+        pd.Index([10, 20, 30]),
+        pd.Series([30, 10, 20], dtype="int32"),
+    ),
+    "object-int-on-int64": (
+        "int",
+        pd.Index([10, 20, 30]),
+        pd.Series([30, 10, 20], dtype=object),
+    ),
+    "us-on-ns": ("datetime", NS_SNAPSHOTS, pd.Series(US_SNAPSHOTS[[2, 0, 1]])),
+    "ns-on-us": ("datetime", US_SNAPSHOTS, pd.Series(NS_SNAPSHOTS[[2, 0, 1]])),
+    "utc-on-berlin": (
+        "datetime",
+        BERLIN_SNAPSHOTS,
+        pd.Series(BERLIN_SNAPSHOTS[[2, 0, 1]].tz_convert("UTC")),
+    ),
+    "categorical-on-str": (
+        "str",
+        pd.Index(["a", "b", "c"]),
+        pd.Series(pd.Categorical(list("cab"))),
+    ),
+}
+
+
+@pytest.mark.parametrize("lib", ["pandas", "polars"])
+@pytest.mark.parametrize("into", ["parameter", "relation"])
+@pytest.mark.parametrize("case", FAMILY_KEYS)
+def test_a_table_label_of_its_dimensions_dtype_family_attaches(
+    case: str, into: str, lib: str
+) -> None:
+    dtype, index, keys = FAMILY_KEYS[case]
+    program = lower(
+        {
+            "dimensions": {"d": {"dtype": dtype}, "h": {"dtype": "str"}},
+            "relations": {"r": {"key": "h", "values": "d"}},
+            "parameters": {"p": {"dims": ["d"]}},
+        }
+    )
+    frames = {
+        "p": pd.DataFrame({"d": keys, "p": [3.0, 1.0, 2.0]}),
+        "r": pd.DataFrame({"h": ["w", "u", "v"], "d": keys}),
+    }
+    convert = pl.from_pandas if lib == "polars" else (lambda f: f)
+    sources = {
+        "d": index,
+        "h": ["u", "v", "w"],
+        **{k: convert(f) for k, f in frames.items()},
+    }
+    attached = attach(program, sources)
+    if into == "parameter":
+        values = filled(attached, "p")
+        assert values.indexes["d"].equals(index)
+        assert values.values.tolist() == [1.0, 2.0, 3.0]
+    else:
+        assert pd.Index(attached.relations["r"].column("d").values).equals(index)
+
+
+DAYS = pl.Series("snapshot", [dt.date(2025, 1, 3), dt.date(2025, 1, 1)])
+
+
+@pytest.mark.parametrize("into", ["parameter", "relation"])
+@pytest.mark.parametrize(
+    ("dtype", "labels", "want"),
+    [
+        ("datetime", DAYS.sort(), [2.0, 1.0]),
+        (
+            "int",
+            [1, 2, 3],
+            "datetime.date(2025, 1, 3), datetime.date(2025, 1, 1) differ",
+        ),
+    ],
+    ids=["datetime", "int"],
+)
+def test_polars_dates_attach_like_a_dimension_of_them(
+    dtype: str, labels: Any, want: Any, into: str
+) -> None:
+    program = lower(
+        {
+            "dimensions": {"snapshot": {"dtype": dtype}, "h": {"dtype": "str"}},
+            "relations": {"r": {"key": "h", "values": "snapshot", "missing": "absent"}},
+            "parameters": {"p": {"dims": ["snapshot"], "missing": "absent"}},
+        }
+    )
+    sources = {
+        "snapshot": labels,
+        "h": ["u", "v"],
+        "p": pl.DataFrame({"snapshot": DAYS, "p": [1.0, 2.0]}),
+        "r": pl.DataFrame({"h": ["v", "u"], "snapshot": DAYS}),
+    }
+    read = (
+        (lambda a: filled(a, "p").values)
+        if into == "parameter"
+        else (lambda a: a.relations["r"].column("snapshot").values)
+    )
+    if isinstance(want, str):
+        with pytest.raises(SpecDataError, match=re.escape(want)):
+            read(attach(program, sources))
+    elif into == "parameter":
+        np.testing.assert_array_equal(read(attach(program, sources)), want)
+    else:
+        assert pd.Index(read(attach(program, sources))).equals(
+            pd.DatetimeIndex(DAYS.to_list()[::-1], dtype="datetime64[ms]")
+        )
+
+
+@pytest.mark.parametrize("lib", ["pandas", "polars"])
+def test_a_table_label_finer_than_its_dimension_is_a_stray(lib: str) -> None:
+    keys = pd.Series(NS_SNAPSHOTS[[0]] + pd.Timedelta(1, "ns"))
+    load = pd.DataFrame({"snapshot": keys, "load": [1.0]})
+    frame = pl.from_pandas(load) if lib == "polars" else load
+    attached = attach(lower(LOAD_SPEC), {"snapshot": US_SNAPSHOTS, "load": frame})
+    with pytest.raises(SpecDataError, match="not coordinates of it"):
+        attached.read("load")
+
+
+@pytest.mark.parametrize("lib", ["pandas", "polars"])
+@pytest.mark.parametrize(
+    ("labels", "want"),
+    [(["a"], [1.0, np.nan]), (["a", "b"], "not coordinates of it: 'b'")],
+    ids=["label", "stray"],
+)
+def test_a_table_label_of_a_mixed_type_dimension_matches_by_value(
+    labels: list[str], want: Any, lib: str
+) -> None:
+    program = lower(
+        {
+            "dimensions": {"d": {"dtype": "str"}},
+            "parameters": {"p": {"dims": ["d"], "missing": "absent"}},
+        }
+    )
+    rows = pd.DataFrame({"d": labels, "p": [1.0] * len(labels)})
+    frame = pl.from_pandas(rows) if lib == "polars" else rows
+    mixed = pd.Index(["a", 1], dtype=object)
+    attached = attach(program, {"d": mixed, "p": frame})
+    if isinstance(want, str):
+        with pytest.raises(SpecDataError, match=want):
+            attached.read("p")
+    else:
+        np.testing.assert_array_equal(filled(attached, "p").values, want)
 
 
 def test_a_stray_relation_value_over_an_int_target_is_shown_as_written() -> None:
@@ -1088,5 +1272,5 @@ def test_a_table_label_equal_to_a_coordinate_in_value_only_is_refused() -> None:
     )
     rows = pd.DataFrame({"y": pd.Series([True], dtype=object), "p": [1.0]})
     attached = attach(program, {"y": pd.Index([1, 2], name="y"), "p": rows})
-    with pytest.raises(SpecDataError, match="in value but not in type: True"):
+    with pytest.raises(SpecDataError, match="True differ in type from 1, 2"):
         attached.read("p")

@@ -15,7 +15,8 @@ while a table says a row is missing by leaving it out. Read leaves a missing
 row a hole, and :func:`fill` applies ``missing:``.
 
 Each kind of data takes one shape, and anything else is refused rather than
-guessed at. A table is a pandas or polars DataFrame carrying its labels in
+guessed at. A table is a pandas or polars DataFrame, or a table exporting the
+Arrow stream interface read into polars once, carrying its labels in
 columns named after the dimensions or roles, never in its index, and no
 column beyond those it is read for. A grid is a DataArray over the declared
 dimensions. A dimension is a flat sequence of unique labels.
@@ -26,7 +27,7 @@ from __future__ import annotations
 import difflib
 import functools
 import warnings
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, KeysView, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
@@ -37,6 +38,19 @@ import xarray as xr
 from mathspec import program as ms
 from pandas.api.extensions import ExtensionArray
 
+from linopy.long import (
+    Column,
+    Frame,
+    _alike,
+    _as_frame,
+    _distinct,
+    _family,
+    _grid,
+    _is_arrow_table,
+    _lookup,
+    _ravel,
+    _strays,
+)
 from linopy.spec.errors import (
     SpecDataError,
     coordinate,
@@ -112,11 +126,46 @@ def attach(program: ms.Program, sources: Mapping[str, Any] | xr.Dataset) -> Atta
         )
     if isinstance(sources, xr.Dataset):
         sources = _from_dataset(program, sources)
+    sources = _ArrowRead(sources)
     keys = frozenset(sources.keys())
     _warn_near_misses(keys, program)
     coords = _master_coords(program, sources, keys)
     relations = _relations(program, sources, keys, coords)
     return Attached(program, coords, relations, sources, keys)
+
+
+class _ArrowRead(Mapping[str, Any]):
+    """
+    *sources* read by key, a table exporting the Arrow stream interface read
+    into polars on its first lookup and kept, as a stream may be read once.
+    Anything polars does not read as a table stays as it is, for its reader
+    to refuse.
+    """
+
+    def __init__(self, sources: Mapping[str, Any]) -> None:
+        self.sources = sources
+        self.tables: dict[str, Frame] = {}
+
+    def __getitem__(self, key: str) -> Any:
+        if key in self.tables:
+            return self.tables[key]
+        obj = self.sources[key]
+        if not _is_arrow_table(obj):
+            return obj
+        try:
+            self.tables[key] = _as_frame(obj)
+        except TypeError:
+            return obj
+        return self.tables[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.sources)
+
+    def __len__(self) -> int:
+        return len(self.sources)
+
+    def keys(self) -> KeysView[str]:
+        return self.sources.keys()
 
 
 @dataclass(frozen=True, eq=False)
@@ -135,7 +184,8 @@ class Attached:
     relations
         By relation name, its rows checked against the master coordinates.
     sources
-        The caller's data, read by key on demand, one ``__getitem__`` per read.
+        The caller's data, read by key on demand, one ``__getitem__`` per read,
+        an Arrow table only on its first, into polars.
     keys
         The keys of ``sources``, read once at attach time.
     """
@@ -316,15 +366,19 @@ def _index(dim: str, obj: Any, declared: ms.Dimension) -> pd.Index:
 
 
 def _pandas(obj: Any) -> Any:
-    """*obj*, a polars DataFrame or Series, as its pandas counterpart; anything else as it is."""
-    if isinstance(obj, (pl.DataFrame, pl.Series)):
+    """*obj*, a polars Series, as a pandas one; anything else as it is."""
+    if isinstance(obj, pl.Series):
         return obj.to_pandas()
     return obj
 
 
-def _check_table(what: str, df: pd.DataFrame, columns: Sequence[str]) -> None:
+def _check_table(what: str, df: Frame, columns: Sequence[str]) -> None:
     """Refuse a table carrying labels in a named index, or whose columns are not exactly *columns*."""
-    named = [n for n in df.index.names if n is not None]
+    named = (
+        [n for n in df.index.names if n is not None]
+        if isinstance(df, pd.DataFrame)
+        else []
+    )
     if named:
         raise SpecDataError(
             f"{what} arrived as a DataFrame indexed by {named}, and a table carries its labels in "
@@ -346,43 +400,52 @@ def _check_table(what: str, df: pd.DataFrame, columns: Sequence[str]) -> None:
 @dataclass(frozen=True)
 class Table:
     """
-    A relation's rows as the data gives them: one column per role of the
-    declaration, each holding labels of the role's dimension, one row per
-    key tuple.
+    A relation's rows in the order the data gives them: per role of the
+    declaration, the position of each row's label in the role's dimension,
+    one row per key tuple.
 
     The rows are the relation: a bare relation is never laid out as a grid
     over its key, which for two columns over one dimension is that dimension
-    squared. A value column reads over the key's dimensions through
-    :meth:`column`.
+    squared. A role's labels are its dimension's, taken at the positions
+    through :meth:`labels`, and a value column reads over the key's
+    dimensions through :meth:`column`.
     """
 
     declared: ms.Relation
-    rows: pd.DataFrame
+    positions: Mapping[str, pl.Series] = field(compare=False, repr=False)
     coords: Mapping[str, pd.Index]
+    at: pl.Series = field(compare=False, repr=False)
     _columns: dict[str, xr.DataArray] = field(
         default_factory=dict, init=False, compare=False, repr=False
     )
+
+    def __len__(self) -> int:
+        return len(self.at)
 
     @property
     def key_dims(self) -> list[str]:
         return [self.declared.dim(role) for role in self.declared.key]
 
+    def labels(self, role: str) -> pd.Index:
+        """The label of each row in *role*, from the coordinates of its dimension."""
+        index = self.coords[self.declared.dim(role)]
+        return index.take(self.positions[role].to_numpy())
+
     def column(self, role: str) -> xr.DataArray:
         """The value column *role* over the key's dimensions, NaN where the key has no row."""
         if role not in self._columns:
-            self._columns[role] = self._on_key(self.rows[role])
+            values = self.labels(role).to_numpy()
+            self._columns[role] = _scattered(self.at, values, self._on_key)
         return self._columns[role]
 
     @functools.cached_property
     def defined(self) -> xr.DataArray:
         """Where the relation has a row, over the key's dimensions."""
-        return self._on_key(pd.Series(np.ones(len(self.rows)))).notnull()
+        return _present(self.at, self._on_key)
 
-    def _on_key(self, values: pd.Series) -> xr.DataArray:
-        dims = self.key_dims
-        key = pd.MultiIndex.from_frame(self.rows[list(self.declared.key)], names=dims)
-        arr = _numpy(xr.DataArray.from_series(values.set_axis(key)))
-        return arr.reindex({d: self.coords[d] for d in dims})
+    @property
+    def _on_key(self) -> dict[str, pd.Index]:
+        return {d: self.coords[d] for d in self.key_dims}
 
 
 def _relations(
@@ -400,8 +463,8 @@ def _relations(
                 f"none for one it does not."
             )
         rows = _relation_rows(name, rel, sources[name])
-        _check_relation(rows, name, rel, coords)
-        out[name] = Table(rel, rows, coords)
+        positions, at = _check_relation(rows, name, rel, coords)
+        out[name] = Table(rel, positions, coords, at)
         _refuse_unmapped(name, out[name])
     return out
 
@@ -432,6 +495,37 @@ def _twice(index: pd.Index) -> list[Any]:
     return index[index.duplicated()].unique().tolist()
 
 
+def _holes(column: Column) -> np.ndarray:
+    """Where *column* holds no value: null, NaN or NaT."""
+    if isinstance(column, pd.Series):
+        return column.isna().to_numpy()
+    if column.dtype.is_float():
+        column = column.fill_nan(None)
+    return column.is_null().to_numpy()
+
+
+def _rows_at(frame: Frame, columns: Sequence[str], mask: np.ndarray) -> list[tuple]:
+    """The rows of *columns* of *frame* where *mask* holds, as tuples of labels."""
+    if isinstance(frame, pl.DataFrame):
+        return frame.select(columns).filter(pl.Series(mask)).rows()
+    return list(frame.loc[mask, list(columns)].itertuples(index=False, name=None))
+
+
+def _coordinates_of(flat: np.ndarray, axes: Sequence[pd.Index]) -> list[tuple]:
+    """The coordinates of the flat positions *flat* in the grid over *axes*."""
+    at = np.unravel_index(flat, tuple(len(i) for i in axes))
+    return list(zip(*(index.take(i).tolist() for index, i in zip(axes, at))))
+
+
+def _looked_up(
+    what: str, dim: str, column: Column, known: pd.Index
+) -> tuple[pl.Series, list[Any]]:
+    """The positions of *column* in *known*, null for a label it lacks, and those labels; a label of another type is refused."""
+    _refuse_label_type(what, dim, column, known)
+    pos = _lookup(known, column)
+    return pos, _strays(column, pos)
+
+
 def _outside(labels: pd.Index, known: pd.Index) -> list[Any]:
     """
     The distinct *labels* that are not in *known*.
@@ -446,10 +540,12 @@ def _outside(labels: pd.Index, known: pd.Index) -> list[Any]:
     return labels[~labels.isin(known)].unique().tolist()
 
 
-def _relation_rows(name: str, rel: ms.Relation, obj: Any) -> pd.DataFrame:
+def _relation_rows(name: str, rel: ms.Relation, obj: Any) -> Frame:
     """*obj* as the relation's rows, one column per role."""
     roles = list(rel.roles)
-    obj = _pandas(obj)
+    if isinstance(obj, pl.DataFrame):
+        _check_table(f"relation '{name}'", obj, roles)
+        return obj.select(roles)
     if not isinstance(obj, pd.DataFrame):
         raise SpecDataError(
             f"relation '{name}': cannot read rows out of {type(obj).__name__}; pass "
@@ -460,16 +556,17 @@ def _relation_rows(name: str, rel: ms.Relation, obj: Any) -> pd.DataFrame:
 
 
 def _check_relation(
-    rows: pd.DataFrame,
+    rows: Frame,
     name: str,
     rel: ms.Relation,
     coords: Mapping[str, pd.Index],
-) -> None:
+) -> tuple[dict[str, pl.Series], pl.Series]:
+    """Refuse a null, a label its dimension lacks or a key tuple taking two rows; the position of each row's label per role and the flat position of its key tuple."""
     key = list(rel.key)
     for role in rel.roles:
-        holes = rows[role].isna()
+        holes = _holes(rows[role])
         if holes.any():
-            nulls = rows.loc[holes, key].head(5).itertuples(index=False, name=None)
+            nulls = _rows_at(rows, key, holes)[:5]
             raise SpecDataError(
                 f"relation '{name}' carries {int(holes.sum())} row(s) with a null in "
                 f"'{role}': {coordinates_shown(key, nulls)}. A relation is partial by "
@@ -477,33 +574,37 @@ def _check_relation(
                 f"unmapped, which is what every operator reading the relation already "
                 f"means by it."
             )
-    keys = (
-        pd.MultiIndex.from_frame(rows[key]) if len(key) > 1 else pd.Index(rows[key[0]])
-    )
-    if keys.has_duplicates:
-        twice = _twice(keys)
+    positions = {}
+    for role in rel.roles:
+        dim = rel.dim(role)
+        pos, strays = _looked_up(f"relation '{name}'", dim, rows[role], coords[dim])
+        _refuse_stray_labels(strays, name, rel, role, coords)
+        positions[role] = pos
+    axes = [coords[rel.dim(role)] for role in key]
+    at = _ravel([positions[role] for role in key], [len(i) for i in axes])
+    if at.n_unique() != len(at):
+        flat = at.filter(~at.is_first_distinct()).unique(maintain_order=True)
+        twice = _coordinates_of(flat.to_numpy(), axes)
+        labels = twice if len(key) > 1 else [k for (k,) in twice]
         raise SpecDataError(
-            f"relation '{name}' maps {len(twice)} {_named(key)} label(s) more than once: "
-            f"{shown(twice)}. A relation has one row per key tuple, so each label it maps "
+            f"relation '{name}' maps {len(labels)} {_named(key)} label(s) more than once: "
+            f"{shown(labels)}. A relation has one row per key tuple, so each label it maps "
             f"takes exactly one row."
         )
-    for role in rel.roles:
-        _refuse_stray_labels(rows[role], name, rel, role, coords)
+    return positions, at
 
 
 def _refuse_stray_labels(
-    column: pd.Series,
+    strays: list[Any],
     name: str,
     rel: ms.Relation,
     role: str,
     coords: Mapping[str, pd.Index],
 ) -> None:
-    dim = rel.dim(role)
-    labels, known = pd.Index(column), coords[dim]
-    strays = _outside(labels, known)
     if not strays:
         return
-    _refuse_label_type(f"relation '{name}'", dim, labels, known)
+    dim = rel.dim(role)
+    known = coords[dim]
     if role in rel.key:
         raise SpecDataError(
             f"relation '{name}' maps {shown(strays)}, which are not labels of '{dim}'. "
@@ -524,7 +625,7 @@ def _refuse_unmapped(name: str, table: Table) -> None:
     """Refuse a ``missing: refused`` relation lacking a key tuple, a keyed one naming the first few."""
     rel = table.declared
     grid = int(np.prod([len(table.coords[d]) for d in table.key_dims]))
-    lacking = grid - len(table.rows)
+    lacking = grid - len(table)
     if rel.missing != "refused" or not lacking:
         return
     first = (
@@ -552,7 +653,7 @@ def _as_array(
     dims = declared.dims
     if isinstance(obj, xr.DataArray):
         return _from_dense(name, declared, obj, coords)
-    if dims and isinstance(obj, pd.DataFrame):
+    if dims and isinstance(obj, (pd.DataFrame, pl.DataFrame)):
         return _from_table(name, declared, obj, coords)
     if not dims and isinstance(obj, _SCALARS):
         return _from_scalar(name, declared, obj)
@@ -607,7 +708,10 @@ def _from_dense(
             )
         _refuse_duplicate_coordinates(name, (d,), arr.indexes[d])
         if not arr.indexes[d].equals(coords[d]):
-            _refuse_strangers(name, d, arr.indexes[d], coords[d])
+            strangers = _outside(arr.indexes[d], coords[d])
+            if strangers:
+                _refuse_label_type(f"parameter '{name}'", d, arr.indexes[d], coords[d])
+            _refuse_strangers(name, d, strangers, coords[d])
     onto = {d: coords[d] for d in dims}
     return functools.partial(_aligned, arr.transpose(*dims), onto)
 
@@ -632,7 +736,7 @@ def _check_dense_dtype(name: str, declared: str, arr: xr.DataArray) -> None:
 def _from_table(
     name: str,
     declared: ms.Parameter,
-    df: pd.DataFrame,
+    df: Frame,
     coords: Mapping[str, pd.Index],
 ) -> Callable[[], Parameter]:
     """
@@ -643,73 +747,104 @@ def _from_table(
     """
     dims = declared.dims
     _check_table(f"parameter '{name}'", df, [*dims, name])
-    series = df.set_index(list(dims))[name]
-    if series.empty:
-        series = series.astype(_EMPTY_DTYPES[declared.dtype])
-    holes = series.isna()
+    for d in dims:
+        unlabelled = _holes(df[d])
+        if unlabelled.any():
+            raise SpecDataError(
+                f"parameter '{name}' carries {int(unlabelled.sum())} row(s) with a null label "
+                f"in '{d}': {coordinates_shown(dims, _rows_at(df, dims, unlabelled)[:3])}. A row "
+                f"without a label belongs to no coordinate: drop it, or supply the label."
+            )
+    holes = _holes(df[name])
     if holes.any():
         raise SpecDataError(
             f"parameter '{name}' carries {int(holes.sum())} row(s) with no value, null or NaN: "
-            f"{coordinates_shown(dims, series.index[holes][:3])}. In a table the absence of a "
-            f"value is the absence of the row, and such a row says the coordinate exists and denies "
-            f"it in the same breath. Drop those rows, or supply the values."
+            f"{coordinates_shown(dims, _rows_at(df, dims, holes)[:3])}. In a table the absence "
+            f"of a value is the absence of the row, and such a row says the coordinate exists and "
+            f"denies it in the same breath. Drop those rows, or supply the values."
         )
-    _check_value_dtype(name, declared.dtype, series.dtype)
-    _refuse_duplicate_coordinates(name, dims, series.index)
+    column = df[name]
+    if isinstance(column.dtype, pl.Decimal):
+        column = column.cast(pl.Float64)
+    values = column.to_numpy()
+    if not len(values):
+        values = values.astype(_EMPTY_DTYPES[declared.dtype])
+    _check_value_dtype(name, declared.dtype, values.dtype)
     onto = {d: coords[d] for d in dims}
     positions = []
     for d, index in onto.items():
-        labels = series.index.get_level_values(d)
-        _refuse_strangers(name, d, labels, index)
-        positions.append(_positions(name, d, labels, index))
-    at = np.ravel_multi_index(positions, tuple(len(i) for i in onto.values()))
-    return functools.partial(_on_grid, at, series.to_numpy(), onto)
-
-
-def _positions(name: str, dim: str, labels: pd.Index, index: pd.Index) -> np.ndarray:
-    """The position of each of *labels* in *index*, refusing a label equal to a coordinate in value only."""
-    found = index.get_indexer(labels)
-    if (found >= 0).all():
-        return found
-    raise SpecDataError(
-        f"parameter '{name}' has label(s) in dimension '{dim}' that equal coordinates of it in "
-        f"value but not in type: {shown(labels[found < 0].unique().tolist())}, and '{dim}' holds "
-        f"'{_kind_name(index.dtype)}' labels. Cast them to the dimension's type."
-    )
+        pos, strays = _looked_up(f"parameter '{name}'", d, df[d], index)
+        _refuse_strangers(name, d, strays, index)
+        positions.append(pos)
+    at = _ravel(positions, [len(i) for i in onto.values()])
+    if at.n_unique() != len(at):
+        _refuse_duplicate_rows(name, at, onto)
+    return functools.partial(_on_grid, at, values, onto)
 
 
 def _on_grid(
-    at: np.ndarray, values: np.ndarray, onto: Mapping[str, pd.Index]
+    at: pl.Series, values: np.ndarray, onto: Mapping[str, pd.Index]
 ) -> Parameter:
     """
-    The *values* placed at the flat positions *at* of the grid *onto*, a cell no value reaches a hole.
+    The *values* placed at the flat positions *at* of the grid *onto*, beside where a row is.
 
     One array the size of the grid is allocated, beside the mask of where a
     row is: the grid of a table is its dims' full product, whatever few rows
     it holds.
     """
+    return Parameter(_scattered(at, values, onto), _present(at, onto))
+
+
+def _scattered(
+    at: pl.Series,
+    values: np.ndarray,
+    onto: Mapping[str, pd.Index],
+    hole: tuple[Any, Any] | None = None,
+) -> xr.DataArray:
+    """The *values* placed at the flat positions *at* of the grid *onto*, a cell no value reaches a *hole*, by default :func:`_hole`."""
     shape = tuple(len(index) for index in onto.values())
-    present = np.zeros(int(np.prod(shape)), dtype=bool)
-    present[at] = True
-    if len(at) == present.size:
-        grid = np.empty(present.size, dtype=values.dtype)
-    else:
-        grid = np.full(present.size, *_hole(values.dtype))
-    grid[at] = values
-    dims = list(onto)
-    return Parameter(
-        xr.DataArray(grid.reshape(shape), coords=onto, dims=dims),
-        xr.DataArray(present.reshape(shape), coords=onto, dims=dims),
-    )
+    fill, dtype = _hole(values.dtype) if hole is None else hole
+    grid = _grid(at, values, int(np.prod(shape)), fill, dtype)
+    return xr.DataArray(grid.reshape(shape), coords=onto, dims=list(onto))
 
 
-def _hole(dtype: np.dtype) -> tuple[float, Any]:
-    """A hole, NaN, and the dtype of an array holding *dtype*'s values beside one: float for a number, object for a string."""
+def _present(at: pl.Series, onto: Mapping[str, pd.Index]) -> xr.DataArray:
+    """Where the flat positions *at* of the grid *onto* have a row."""
+    return _scattered(at, np.ones(len(at), dtype=bool), onto, (False, bool))
+
+
+def _hole(dtype: np.dtype) -> tuple[Any, Any]:
+    """A hole and the dtype of an array holding *dtype*'s values beside one: NaN as float for a number, NaT for a time, NaN as object for anything else."""
     if dtype.kind == "f":
         return np.nan, dtype
     if dtype.kind in "iub":
         return np.nan, np.float64
+    if dtype.kind in "mM":
+        return dtype.type("NaT", np.datetime_data(dtype)[0]), dtype
     return np.nan, object
+
+
+def _refuse_duplicate_rows(
+    name: str, at: pl.Series, onto: Mapping[str, pd.Index]
+) -> None:
+    counts = (
+        at.to_frame("at")
+        .group_by("at", maintain_order=True)
+        .len()
+        .filter(pl.col("len") > 1)
+        .sort("len", descending=True, maintain_order=True)
+        .head(3)
+    )
+    keys = _coordinates_of(counts["at"].to_numpy(), list(onto.values()))
+    shown = "; ".join(
+        f"{coordinate(tuple(onto), key)} ({n} rows)"
+        for key, n in zip(keys, counts["len"].to_list())
+    )
+    raise SpecDataError(
+        f"parameter '{name}' has more than one row for a coordinate: {shown}. A parameter is a "
+        f"function of its dims, so which value applies is undefined; aggregate the source to one "
+        f"row per {list(onto)} before attaching it."
+    )
 
 
 def _refuse_duplicate_coordinates(
@@ -729,11 +864,11 @@ def _refuse_duplicate_coordinates(
     )
 
 
-def _refuse_strangers(name: str, dim: str, labels: pd.Index, known: pd.Index) -> None:
-    strangers = _outside(labels, known)
+def _refuse_strangers(
+    name: str, dim: str, strangers: list[Any], known: pd.Index
+) -> None:
     if not strangers:
         return
-    _refuse_label_type(f"parameter '{name}'", dim, labels, known)
     raise SpecDataError(
         f"parameter '{name}' has label(s) in dimension '{dim}' that are not coordinates of it: "
         f"{shown(strangers)}.\n  {dim} has: {shown(known.tolist(), 10)}\n"
@@ -742,19 +877,39 @@ def _refuse_strangers(name: str, dim: str, labels: pd.Index, known: pd.Index) ->
     )
 
 
-def _refuse_label_type(what: str, dim: str, labels: pd.Index, known: pd.Index) -> None:
-    arrived, expected = _kind_name(labels.dtype), _kind_name(known.dtype)
-    if arrived == expected or labels.isin(known).any():
+def _refuse_label_type(
+    what: str, dim: str, labels: Column | pd.Index, known: pd.Index
+) -> None:
+    """
+    Refuse *labels* of another dtype family than *known*: numeric, datetime,
+    tz-aware datetime, date, duration, string or boolean.
+
+    Polars dates are read as datetimes the way a dimension of them is, at
+    midnight.
+    """
+    if not len(labels):
+        return
+    try:
+        arrived, expected = _family(labels), _family(known)
+    except TypeError:
+        raise SpecDataError(
+            f"{what} has label(s) of dtype {labels.dtype} in dimension '{dim}', a dtype no "
+            f"label has: they match none of {shown(known.tolist())}. Cast them to the "
+            f"dimension's type."
+        ) from None
+    dates = isinstance(labels, pl.Series) and labels.dtype == pl.Date
+    if _alike(arrived, expected) or (dates and expected == "datetime"):
         return
     hint = (
         " Parse them with pd.to_datetime, or with parse_dates= when reading the table."
-        if expected == "datetime"
+        if "datetime" in expected
         else ""
     )
     raise SpecDataError(
-        f"{what} has '{arrived}' label(s) in dimension '{dim}', and '{dim}' holds '{expected}' "
-        f"labels: {shown(_outside(labels, known))} match none of {shown(known.tolist())}, as "
-        f"they differ in type, not spelling.{hint}"
+        f"{what} has '{arrived}' label(s) of dtype {labels.dtype} in dimension '{dim}', and "
+        f"'{dim}' holds '{expected}' labels: {shown(_distinct(labels))} differ in type from "
+        f"{shown(known.tolist())}, and a label of another type matches no coordinate, even one "
+        f"equal in value. Cast them to the dimension's type.{hint}"
     )
 
 

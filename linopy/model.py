@@ -516,7 +516,9 @@ class Model:
             with exactly one column per dimension and its values under its
             own name, a ``DataArray`` over its dimensions, or one number if
             it has none. A relation is a pandas or polars ``DataFrame`` with
-            exactly its declared columns. See :doc:`spec-data`.
+            exactly its declared columns. A table exporting the Arrow stream
+            interface, e.g. a pyarrow Table or a DuckDB relation, is read into
+            polars once. See :doc:`spec-data`.
         store : bool, default False
             Write the spec's parameters, unfilled with a missing row a NaN
             hole, and its relations into ``model.parameters`` under their
@@ -549,7 +551,8 @@ class Model:
             ``(snapshot, store)``. Pass the same *dim_order* to
             :func:`linopy.spec.evaluate`.
         **model_kwargs
-            Passed to :class:`Model`, such as ``sparse=True``.
+            Passed to :class:`Model`, such as ``solver_dir``. The model is
+            always sparse, ``Model(sparse=True)``.
 
         Returns
         -------
@@ -559,6 +562,8 @@ class Model:
         ------
         ValueError
             If *spec* is a one-line ``str`` ending in ``.yaml`` or ``.yml``.
+        ValueError
+            If *model_kwargs* holds ``sparse=False``.
         linopy.spec.SpecDataError
             If the data does not fit the spec.
         KeyError
@@ -578,7 +583,11 @@ class Model:
         """
         from linopy.spec.api import build_into
 
-        model = cls(**model_kwargs)
+        if not model_kwargs.pop("sparse", True):
+            raise ValueError(
+                "Model.from_spec builds a sparse model only: drop sparse=False."
+            )
+        model = cls(sparse=True, **model_kwargs)
         build_into(model, spec, sources, store, expressions, rename, dim_order)
         return model
 
