@@ -1308,7 +1308,7 @@ def test_matmul_operand_errors_match_multiplication(kind: str) -> None:
 
 
 def test_matmul_falls_back_to_dense_on_non_unique_labels() -> None:
-    m = Model()
+    m = Model(sparse=True)
     x = m.add_variables(coords=[pd.Index(["a", "a", "b"], name="d")], name="x")
     expr = 1.0 * x
     operand = xr.DataArray(
@@ -1319,6 +1319,21 @@ def test_matmul_falls_back_to_dense_on_non_unique_labels() -> None:
 
     assert not res.is_sparse
     assert_linequal(res, (expr * operand).sum("d"))
+
+
+def test_product_over_non_unique_labels(backend: Model) -> None:
+    d = pd.Index(["a", "a", "b"], name="d")
+    x = backend.add_variables(coords=[d], name="x")
+    operand = xr.DataArray(
+        np.arange(6.0).reshape(3, 2), coords={"d": d, "s": [0, 1]}, dims=["d", "s"]
+    )
+
+    res = (1.0 * x) * operand
+
+    coeffs = res.coeffs.squeeze(TERM_DIM).transpose("d", "s")
+    vars_ = res.vars.squeeze(TERM_DIM).transpose("d", "s")
+    np.testing.assert_array_equal(coeffs, operand)
+    np.testing.assert_array_equal(vars_, [[0, 0], [1, 1], [2, 2]])
 
 
 @pytest.mark.parametrize("empty", ["kept", "contracted"], ids=["kept", "contracted"])
@@ -1557,10 +1572,6 @@ DENSIFY_OPS: dict[str, tuple[Callable[[LinearExpression, Case], Any], str]] = {
     "matmul": (
         lambda e, c: e @ loc_operand(c.gbus.index),
         r"matmul\(operand sharing no dimension",
-    ),
-    "rhs": (
-        lambda e, c: e <= xr.DataArray([1.0, 2.0], dims="pt"),
-        r"to_constraint\(rhs over dimensions outside the grid\)",
     ),
     "set-blocks": (set_blocks, "`set_blocks`"),
     "update-coeffs": (

@@ -169,9 +169,9 @@ def _sum(
 
 def _through(array: Array, columns: ms.JoinColumns, ctx: Context) -> Array:
     """*array* summed through the rows of the relation *columns* name, joined and grouped as the call says."""
-    rows = ctx.relations[columns.name].rows
-    joined = {columns.dim(r): rows[r].to_numpy() for r in columns.joined}
-    grouped = {columns.dim(r): rows[r].to_numpy() for r in columns.grouped}
+    table = ctx.relations[columns.name]
+    joined = {columns.dim(r): table.labels(r) for r in columns.joined}
+    grouped = {columns.dim(r): table.labels(r) for r in columns.grouped}
     onto = {d: ctx.coords[d] for d in grouped}
     return operators.grouped_sum(array, joined, grouped, onto)
 
@@ -327,13 +327,20 @@ def refuse_made(
     left: xr.DataArray,
     right: xr.DataArray,
     ctx: Context,
+    widen: Callable[[xr.DataArray], xr.DataArray] | None = None,
 ) -> xr.DataArray:
-    """*op* of *left* and *right*, refused wherever it is not finite though both are present, the parameters *nodes* read named."""
-    made = cast(xr.DataArray, op(left, right))
+    """
+    *op* of *left* and *right*, refused wherever it is not finite though both
+    are present, the parameters *nodes* read named. *widen* puts the refused
+    coordinates on the rows of the expression the operands stand in for.
+    """
+    made = cast(xr.DataArray, operators.binary(op, left, right))
     if made.dtype.kind not in "fc" or bool(np.isfinite(made.values).all()):
         return made
     nan_made = made.isnull() & left.notnull() & right.notnull()
     bad = nan_made | (np.isinf(made) & _finite(left) & _finite(right))
+    if widen is not None:
+        bad = widen(bad)
     if ctx.rows is not None and bool(bad.any()):
         ctx.memo.masked += 1
         bad = bad & ctx.rows

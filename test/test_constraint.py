@@ -631,6 +631,65 @@ def test_constraint_update_rhs_broadcasts_missing_dim() -> None:
     assert (con.rhs.sel(i=1) == 2.0).all()
 
 
+def _labelled_rows(backend: Model) -> tuple[linopy.Variable, Constraint]:
+    x = backend.add_variables(0, 10, coords=[pd.RangeIndex(3, name="i")], name="x")
+    con = backend.add_constraints(
+        x >= 5, name="con", mask=xr.DataArray([True, True, False], dims="i")
+    )
+    return x, con
+
+
+@pytest.mark.parametrize(
+    "rhs",
+    [np.nan, np.array([1.0, np.nan, 2.0]), xr.DataArray([np.nan, 1.0, 2.0], dims="i")],
+    ids=["scalar", "array", "dataarray"],
+)
+def test_constraint_update_rhs_nan_raises(backend: Model, rhs: Any) -> None:
+    """A NaN rhs on a labelled row raises as in add_constraints (#1181)."""
+    _, con = _labelled_rows(backend)
+    with pytest.raises(ValueError, match="NaN found in a user-supplied"):
+        con.update(rhs=rhs)
+    assert (con.rhs == 5).all()
+    assert con.labels.values.tolist() == [0, 1, -1]
+
+
+def test_constraint_update_rhs_nan_at_masked_row(backend: Model) -> None:
+    """A NaN rhs is accepted where the row has no label, as a variable bound is."""
+    _, con = _labelled_rows(backend)
+    con.update(rhs=xr.DataArray([1.0, 2.0, np.nan], dims="i"))
+    assert con.rhs.values[:2].tolist() == [1.0, 2.0]
+    assert con.labels.values.tolist() == [0, 1, -1]
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        lambda con, absent: con.update(absent >= 5),
+        lambda con, absent: con.update(lhs=absent),
+        lambda con, absent: con.update(rhs=absent + 5),
+    ],
+    ids=["positional", "lhs", "rhs-expr"],
+)
+def test_constraint_update_absent_cell_on_labelled_row_raises(
+    backend: Model, update: Callable
+) -> None:
+    """An absent cell of the new expression leaves no NaN rhs on a labelled row."""
+    x, con = _labelled_rows(backend)
+    absent = x.where(xr.DataArray([True, False, True], dims="i"))
+    with pytest.raises(ValueError, match="NaN right-hand side on a row with a label"):
+        update(con, absent)
+    assert (con.rhs == 5).all()
+    assert con.lhs.nterm == 1
+
+
+def test_constraint_update_rhs_nan_before_assignment(backend: Model) -> None:
+    """Before it is added, a constraint takes no NaN rhs on a present row either."""
+    x = backend.add_variables(0, 10, coords=[pd.RangeIndex(3, name="i")], name="x")
+    con = x >= 5
+    with pytest.raises(ValueError, match="NaN found in a user-supplied"):
+        con.update(rhs=np.nan)
+
+
 def test_constraint_labels_setter_invalid(c: linopy.constraints.Constraint) -> None:
     with pytest.raises(AttributeError):
         c.labels = c.labels  # type: ignore

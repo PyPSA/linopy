@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import glob
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 import xarray as xr
 
@@ -36,6 +38,7 @@ from spec_helpers import (  # noqa: E402
     RAGGED_Y,
     UNITS,
     curve,
+    eager,
     needs_examples,
     solved,
     with_,
@@ -356,9 +359,16 @@ def test_an_absent_row_masks_the_row_it_reaches(
 
 
 def test_a_row_of_nothing_but_an_absent_window_is_refused_like_sum() -> None:
-    spec = absent_row("sum_back(a * x, along=t, window=2) <= 4")
-    with pytest.raises(SpecDataError, match="1 row.*hold no variable term.*at t=0"):
+    spec = absent_row("sum_back(a * x, along=t, window=2) >= 4")
+    with pytest.raises(SpecDataError, match="1 row.*do not hold.*at t=0.*0 >= 4"):
         Model.from_spec(spec, ABSENT_DATA)
+
+
+def test_a_row_of_nothing_but_an_absent_window_is_kept_where_it_holds() -> None:
+    spec = absent_row("sum_back(a * x, along=t, window=2) <= 4")
+    row = Model.from_spec(spec, ABSENT_DATA).constraints["row"]
+    assert (row.labels != -1).values.tolist() == [True, True, True]
+    assert row.lhs.has_terms.values.tolist() == [False, True, True]
 
 
 def test_an_absent_summand_is_dropped() -> None:
@@ -565,12 +575,24 @@ def test_an_edge_value_stands_in_for_the_vacated_row() -> None:
     assert float(first.rhs) == 0.0
 
 
-def test_a_row_the_data_emptied_of_variables_is_refused() -> None:
-    """A zero absence leaves ``0 <= relmax`` standing, which linopy cannot carry and a solver would never see."""
+@pytest.mark.parametrize(
+    ("missing", "expression", "reads"),
+    [
+        (0, "size >= relmax", "0 >= 0.5"),
+        (0, "relmax <= size", "0 >= 0.5"),
+        (5, "size <= relmax", "5 <= 0.5"),
+        (0, "size == relmax", "0 == 0.5"),
+    ],
+)
+def test_a_row_the_data_empties_of_variables_is_refused_where_it_does_not_hold(
+    missing: float, expression: str, reads: str
+) -> None:
+    """A missing value leaves a constant row standing, which makes the model infeasible."""
     with pytest.raises(
-        SpecDataError, match=r"(?s)constraint 'sized'.*Supply the rows of the variables"
+        SpecDataError,
+        match=rf"(?s)constraint 'sized': 1 row.*at f='b', which reads {reads}",
     ):
-        Model.from_spec(sized(0, "size <= relmax"), ENVELOPE_DATA)
+        Model.from_spec(sized(missing, expression), ENVELOPE_DATA)
 
 
 def quotient(expression: str, where: str | None = None) -> dict[str, Any]:
@@ -715,8 +737,9 @@ def test_a_case_value_is_refused_where_it_is_read(
         ),
     ],
 )
+@pytest.mark.parametrize("build", [Model.from_spec, eager], ids=["terms", "eager"])
 def test_a_case_that_applies_nowhere_is_not_evaluated(
-    row: str, dims: list[str], case: str, rhs: list[float]
+    row: str, dims: list[str], case: str, rhs: list[float], build: Callable[..., Model]
 ) -> None:
     """No ``b`` is negative, so a window wider than ``t`` is never read, and the case is zero over its dimensions."""
     spec = with_(
@@ -731,7 +754,7 @@ def test_a_case_that_applies_nowhere_is_not_evaluated(
             }
         },
     )
-    built = Model.from_spec(spec, {**INF_AT_0, "s": GROUPS}).constraints["row"]
+    built = build(spec, {**INF_AT_0, "s": GROUPS}).constraints["row"]
     assert built.rhs.values.tolist() == rhs
 
 
@@ -908,15 +931,50 @@ def test_a_where_guards_a_reader_along_the_axes_it_does_not_move(
 
 
 @pytest.mark.parametrize(
-    ("missing", "expression"), [(0, "size >= 0"), (5, "size >= 5")]
+    ("missing", "expression"),
+    [(0, "size >= 0"), (5, "size >= 5"), (0, "size <= relmax")],
 )
-def test_a_dead_row_of_missing_values_whose_sides_are_equal_is_only_warned_about(
+def test_a_row_the_data_empties_of_variables_is_kept_where_it_holds(
     missing: float, expression: str
 ) -> None:
-    with pytest.warns(UserWarning, match=r"constraint 'sized'.*trivially true"):
-        m = solved(sized(missing, expression), ENVELOPE_DATA)
+    m = solved(sized(missing, expression), ENVELOPE_DATA)
     assert m.termination_condition == "optimal"
-    assert (m.constraints["sized"].vars.sel(f="b") == -1).all()
+    sized_row = m.constraints["sized"]
+    assert (sized_row.labels != -1).values.tolist() == [True, True]
+    assert sized_row.lhs.has_terms.values.tolist() == [True, False]
+
+
+def rounded(at_b: float) -> dict[str, Any]:
+    """:data:`ENVELOPE_DATA` with ``relmax`` *at_b* at ``f='b'``, where :func:`sized` empties the row."""
+    return {**ENVELOPE_DATA, "relmax": xr.DataArray([0.5, at_b], coords=[F])}
+
+
+@pytest.mark.parametrize("build", [Model.from_spec, eager], ids=["terms", "eager"])
+@pytest.mark.parametrize(
+    "expression", ["size == relmax", "size >= relmax", "size <= -relmax"]
+)
+def test_a_row_the_data_empties_of_variables_holds_within_a_rounding_error(
+    expression: str, build: Callable[..., Model]
+) -> None:
+    sized_row = build(sized(0, expression), rounded(0.1 + 0.2 - 0.3))
+    assert (sized_row.constraints["sized"].labels != -1).values.tolist() == [True, True]
+
+
+def test_a_row_the_data_empties_of_variables_is_refused_beyond_a_rounding_error() -> (
+    None
+):
+    with pytest.raises(
+        SpecDataError, match=r"at f='b', which reads 0 == 1e-06.*cannot hold"
+    ):
+        Model.from_spec(sized(0, "size == relmax"), rounded(1e-6))
+
+
+@pytest.mark.parametrize("build", [Model.from_spec, eager], ids=["terms", "eager"])
+def test_a_row_a_masked_variable_leaves_is_absent_and_not_refused(
+    build: Callable[..., Model],
+) -> None:
+    sized_row = build(sized("absent", "size >= 5"), ENVELOPE_DATA).constraints["sized"]
+    assert (sized_row.labels != -1).values.tolist() == [True, False]
 
 
 def test_a_coefficient_needs_no_row_where_its_variable_is_absent() -> None:
@@ -986,15 +1044,48 @@ def test_a_constraint_is_framed_in_the_name_order_of_its_dims(expression: str) -
     assert m.constraints["k"].lhs.coord_dims == ("g", "t")
 
 
-@pytest.mark.parametrize("row", ["sum(x, over=t) >= 5", "sum(x, over=t) <= 0"])
-def test_a_dimension_with_no_members_empties_a_summed_row(row: str) -> None:
+@pytest.mark.parametrize("expression", ["x * z", "z * x"])
+def test_a_quadratic_expression_is_framed_in_the_name_order_of_its_dims(
+    expression: str,
+) -> None:
+    spec = {
+        "dimensions": {"t": {"dtype": "int"}, "g": {"dtype": "str"}},
+        "variables": {"x": {"dims": ["t"]}, "z": {"dims": ["g"]}},
+        "expressions": {"k": {"dims": ["t", "g"], "expression": expression}},
+    }
+    k = Model.from_spec(spec, {"t": T, "g": ["a", "b"]}).expressions["k"]
+    assert isinstance(k, linopy.QuadraticExpression)
+    assert k.coord_dims == ("g", "t")
+    assert k.data["vars"].dims[:2] == ("g", "t")
+
+
+def without_members(row: str, build: Callable[..., Model] = Model.from_spec) -> Model:
+    """:data:`SPARSE_SPEC` with a scalar row *row*, built with *build* over a ``t`` without members."""
     spec = with_(SPARSE_SPEC, constraints={"budget": {"dims": [], "expression": row}})
     empty = pd.Index([], name="t", dtype=int)
     none = xr.DataArray(np.array([], dtype=float), coords=[empty])
+    return build(spec, {"t": empty, "w": none, "c": none})
+
+
+@pytest.mark.parametrize("row", ["sum(x, over=t) >= 5", "sum(x, over=t) == 1"])
+def test_a_summed_row_a_dimension_without_members_empties_is_refused_where_it_does_not_hold(
+    row: str,
+) -> None:
     with pytest.raises(
-        SpecDataError, match="constraint 'budget'.*hold no variable term"
+        SpecDataError, match="constraint 'budget'.*do not hold.*the only row"
     ):
-        Model.from_spec(spec, {"t": empty, "w": none, "c": none})
+        without_members(row)
+
+
+@pytest.mark.parametrize("build", [Model.from_spec, eager], ids=["terms", "eager"])
+@pytest.mark.parametrize("row", ["sum(x, over=t) <= 0", "sum(x, over=t) == 0"])
+def test_a_summed_row_a_dimension_without_members_empties_is_kept_where_it_holds(
+    row: str, build: Callable[..., Model]
+) -> None:
+    budget = without_members(row, build).constraints["budget"]
+    assert int(budget.labels) != -1
+    assert not np.signbit(budget.rhs.values)
+    assert not budget.lhs.has_terms
 
 
 @pytest.mark.parametrize(("missing", "kept"), [("absent", False), (0, True)])
@@ -1282,7 +1373,7 @@ def test_an_objective_is_quadratic_only_where_the_data_keeps_a_product(
     ],
 )
 def test_a_sparse_objective_builds_without_a_densify_notice(
-    backend: Model, product: str, k: list[float], quadratic: bool
+    product: str, k: list[float], quadratic: bool
 ) -> None:
     """A linear term met a quadratic one, which has no sparse backing, and warned of densifying."""
     spec = with_(
@@ -1293,14 +1384,14 @@ def test_a_sparse_objective_builds_without_a_densify_notice(
     data = {"t": T, "k": xr.DataArray(k, coords=[T])}
     with warnings.catch_warnings():
         warnings.simplefilter("error", linopy.PerformanceWarning)
-        m = Model.from_spec(spec, data, sparse=backend.sparse)
+        m = Model.from_spec(spec, data)
     objective = m.objective.expression
-    want = Model.from_spec(spec, data).objective.expression
+    want = eager(spec, data).objective.expression
     assert isinstance(objective, linopy.QuadraticExpression) is quadratic
     if quadratic:
         assert_quadequal(objective, want)
     else:
-        assert objective.is_sparse == backend.sparse
+        assert objective.is_sparse
         assert_linequal(objective, want)
 
 
@@ -1552,6 +1643,16 @@ def test_a_declaration_without_a_row_reads_no_parameter() -> None:
     assert list(m.constraints) == []
 
 
+def test_a_variable_its_where_admits_nowhere_is_masked_with_its_bounds_unread() -> None:
+    gated = {"dims": ["g"], "where": "on", "bounds": {"lower": "floor", "upper": "cap"}}
+    spec = DEAD_ROWS | {"variables": DEAD_ROWS["variables"] | {"z": gated}}
+    data = dead_rows_data()
+    m = Model.from_spec(spec, data)
+    assert set(data.read) & set(DEAD_ROWS["parameters"]) == {"on"}
+    assert (m.variables["z"].labels == -1).all()
+    assert m._xCounter == 4
+
+
 SUMMED_TERM = {
     "objective": {"sense": "minimize", "expression": "sum(x) + sum(y * limit)"}
 }
@@ -1650,3 +1751,53 @@ def test_a_spec_built_again_from_its_kept_program_builds_the_same_model() -> Non
     first = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
     second = Model.from_spec(EXAMPLE_DISPATCH, DISPATCH_DATA)
     assert_model_equal(first, second)
+
+
+ZONED = pd.date_range("2030-01-01", periods=3, freq="h", tz="Europe/Berlin", name="b")
+ZONED_SPEC: dict[str, Any] = {
+    "dimensions": {"g": {}, "b": {"dtype": "datetime"}, "p": {}},
+    "relations": {
+        "gen_bus": {"key": "g", "values": "b", "missing": "absent"},
+        "period_of": {"key": "b", "values": "p"},
+    },
+    "parameters": {"price": {"dims": ["b"]}},
+    "variables": {
+        "x": {"dims": ["g"], "bounds": {"lower": 0}},
+        "y": {"dims": ["b"], "bounds": {"lower": 0}},
+    },
+    "constraints": {
+        "k": {"dims": ["g"], "expression": "x <= at(price, by=gen_bus[b])"},
+        "s": {"dims": ["b"], "expression": "sum(x, over=g, by=gen_bus[b]) <= 10"},
+        "q": {"dims": ["p"], "expression": "sum(y, over=b, by=period_of[p]) <= 1"},
+    },
+    "objective": {"sense": "maximize", "expression": "sum(x) + sum(y)"},
+}
+
+
+def zoned_sources(zone: str, convert: Any) -> dict[str, Any]:
+    labels = ZONED.tz_convert(zone)
+    gen_bus = pd.DataFrame({"g": ["w", "s", "v"], "b": labels[[2, 0, 1]]})
+    period_of = pd.DataFrame({"b": labels, "p": ["e", "e", "l"]})
+    return {
+        "g": ["w", "s", "v"],
+        "b": ZONED,
+        "p": ["e", "l"],
+        "price": pd.DataFrame({"b": ZONED, "price": [1.0, 2.0, 3.0]}),
+        "gen_bus": convert(gen_bus),
+        "period_of": convert(period_of),
+    }
+
+
+@pytest.mark.parametrize("zone", ["Europe/Berlin", "UTC"])
+@pytest.mark.parametrize("lib", ["pandas", "polars"])
+def test_tz_aware_relation_labels_build_the_model_of_their_instants(
+    lib: str, zone: str
+) -> None:
+    convert = pl.from_pandas if lib == "polars" else (lambda f: f)
+    m = Model.from_spec(ZONED_SPEC, zoned_sources(zone, convert), store=True)
+    assert m.constraints["k"].rhs.values.tolist() == [3.0, 1.0, 2.0]
+    assert m.constraints["s"].lhs.vars.values.tolist() == [[1], [2], [0]]
+    assert m.constraints["q"].lhs.vars.values.tolist() == [[3, 4], [5, -1]]
+    pandas = zoned_sources("Europe/Berlin", lambda f: f)
+    assert_model_equal(m, Model.from_spec(ZONED_SPEC, pandas, store=True))
+    assert_model_equal(Model.from_spec(ZONED_SPEC, m.parameters, store=True), m)

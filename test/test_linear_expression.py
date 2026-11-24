@@ -1661,13 +1661,19 @@ def test_linear_expression_groupby_multikey_is_sorted(v: Variable) -> None:
     assert keys == [(1, "x"), (1, "y"), (2, "y"), (3, "x")]
 
 
-def test_linear_expression_groupby_with_dataframe_on_aux_coords(u: Variable) -> None:
+def test_linear_expression_groupby_with_dataframe_on_aux_coords(
+    backend: Model,
+) -> None:
+    index = pd.RangeIndex(4, name="dim_3")
+    u = backend.add_variables(coords=[index], name="u").assign_coords(
+        level1=("dim_3", [1, 1, 2, 2]), level2=("dim_3", ["a", "b", "a", "b"])
+    )
     expr = 1 * u
-    n = len(u.data["dim_3"])
-    groups = pd.DataFrame({"a": [1] * n}, index=u.indexes["dim_3"])
+    n = len(index)
+    groups = pd.DataFrame({"a": [1] * n}, index=index)
     grouped = expr.groupby(groups).sum()
     assert not isinstance(grouped.indexes["group"], pd.MultiIndex)
-    assert set(grouped.data.a.values) == {1}
+    assert set(grouped.coords["a"].values) == {1}
     assert grouped.nterm == n
 
 
@@ -2293,7 +2299,8 @@ def test_linear_expression_from_dataset_selects_on_full_coordinates(
     assert_linequal(expr.sel(full), expr)
 
 
-def test_constant_linear_expression_to_polars_2D(m: Model) -> None:
+def test_constant_linear_expression_to_polars_2D(backend: Model) -> None:
+    m = backend
     index_a = pd.Index([0, 1], name="a")
     index_b = pd.Index([0, 1, 2], name="b")
     arr = np.array([[10, 20, 30], [40, 50, 60]])
@@ -2311,6 +2318,36 @@ def test_constant_linear_expression_to_polars_2D(m: Model) -> None:
     assert all(const_pol["const"] == var_pol["const"])
     assert all(const_pol["coeffs"].is_null())
     assert all(const_pol["vars"].is_null())
+
+
+@pytest.mark.parametrize(
+    ("mask", "expected"),
+    [([True, False, True], [1.0, 3.0]), ([False, False, False], [])],
+    ids=["partly-masked", "fully-masked"],
+)
+def test_masked_constant_linear_expression_to_polars_drops_absent_rows(
+    backend: Model, mask: list[bool], expected: list[float]
+) -> None:
+    t = pd.Index([0, 1, 2], name="t")
+    const = pd.Series([1.0, 2.0, 3.0], index=t)
+    expr = LinearExpression.from_constant(model=backend, constant=const)
+    df = expr.where(xr.DataArray(mask, coords=[t])).to_polars()
+    assert df.columns == ["vars", "coeffs", "const"]
+    assert df["const"].to_list() == expected
+
+
+def test_reindex_from_non_unique_index_raises(backend: Model) -> None:
+    x = backend.add_variables(coords=[pd.Index(["a", "a", "b"], name="d")], name="x")
+    with pytest.raises(ValueError, match="duplicate values"):
+        (2 * x).reindex(d=["a", "b"])
+
+
+def test_reindex_onto_non_unique_index(backend: Model) -> None:
+    x = backend.add_variables(coords=[pd.Index(["a", "b"], name="d")], name="x")
+    res = (2 * x).reindex(d=["a", "a", "b"])
+    assert res.indexes["d"].tolist() == ["a", "a", "b"]
+    assert res.vars.values.ravel().tolist() == [0, 0, 1]
+    assert res.coeffs.values.ravel().tolist() == [2.0, 2.0, 2.0]
 
 
 def test_merge(x: Variable, y: Variable, z: Variable) -> None:
