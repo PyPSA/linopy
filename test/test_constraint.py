@@ -631,6 +631,65 @@ def test_constraint_update_rhs_broadcasts_missing_dim() -> None:
     assert (con.rhs.sel(i=1) == 2.0).all()
 
 
+def _labelled_rows(backend: Model) -> tuple[linopy.Variable, Constraint]:
+    x = backend.add_variables(0, 10, coords=[pd.RangeIndex(3, name="i")], name="x")
+    con = backend.add_constraints(
+        x >= 5, name="con", mask=xr.DataArray([True, True, False], dims="i")
+    )
+    return x, con
+
+
+@pytest.mark.parametrize(
+    "rhs",
+    [np.nan, np.array([1.0, np.nan, 2.0]), xr.DataArray([np.nan, 1.0, 2.0], dims="i")],
+    ids=["scalar", "array", "dataarray"],
+)
+def test_constraint_update_rhs_nan_raises(backend: Model, rhs: Any) -> None:
+    """A NaN rhs on a labelled row raises as in add_constraints (#1181)."""
+    _, con = _labelled_rows(backend)
+    with pytest.raises(ValueError, match="NaN found in a user-supplied"):
+        con.update(rhs=rhs)
+    assert (con.rhs == 5).all()
+    assert con.labels.values.tolist() == [0, 1, -1]
+
+
+def test_constraint_update_rhs_nan_at_masked_row(backend: Model) -> None:
+    """A NaN rhs is accepted where the row has no label, as a variable bound is."""
+    _, con = _labelled_rows(backend)
+    con.update(rhs=xr.DataArray([1.0, 2.0, np.nan], dims="i"))
+    assert con.rhs.values[:2].tolist() == [1.0, 2.0]
+    assert con.labels.values.tolist() == [0, 1, -1]
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        lambda con, absent: con.update(absent >= 5),
+        lambda con, absent: con.update(lhs=absent),
+        lambda con, absent: con.update(rhs=absent + 5),
+    ],
+    ids=["positional", "lhs", "rhs-expr"],
+)
+def test_constraint_update_absent_cell_on_labelled_row_raises(
+    backend: Model, update: Callable
+) -> None:
+    """An absent cell of the new expression leaves no NaN rhs on a labelled row."""
+    x, con = _labelled_rows(backend)
+    absent = x.where(xr.DataArray([True, False, True], dims="i"))
+    with pytest.raises(ValueError, match="NaN right-hand side on a row with a label"):
+        update(con, absent)
+    assert (con.rhs == 5).all()
+    assert con.lhs.nterm == 1
+
+
+def test_constraint_update_rhs_nan_before_assignment(backend: Model) -> None:
+    """Before it is added, a constraint takes no NaN rhs on a present row either."""
+    x = backend.add_variables(0, 10, coords=[pd.RangeIndex(3, name="i")], name="x")
+    con = x >= 5
+    with pytest.raises(ValueError, match="NaN found in a user-supplied"):
+        con.update(rhs=np.nan)
+
+
 def test_constraint_labels_setter_invalid(c: linopy.constraints.Constraint) -> None:
     with pytest.raises(AttributeError):
         c.labels = c.labels  # type: ignore
@@ -669,6 +728,15 @@ def test_constraint_to_polars(c: linopy.constraints.Constraint) -> None:
     assert isinstance(c.to_polars(), pl.DataFrame)
 
 
+def test_constraint_to_polars_has_no_term_for_an_empty_row(
+    m: Model, x: linopy.Variable
+) -> None:
+    coeffs = xr.DataArray(np.arange(10) % 2, coords=[x.indexes["first"]])
+    df = m.add_constraints(coeffs * x >= 5, name="half").to_polars()
+    assert df["labels"].n_unique() == 5
+    assert (df["coeffs"] == 1).all()
+
+
 def test_constraint_to_polars_mixed_signs(m: Model, x: linopy.Variable) -> None:
     """Test to_polars when a constraint has mixed sign values across dims."""
     # Use Constraint so sign data can be patched
@@ -688,23 +756,6 @@ def test_constraint_assignment_with_anonymous_constraints(
     m.add_constraints(x + y == 0, name="c2")
     assert m.constraints["c2"].vars.notnull().all()
     assert m.constraints["c2"].coeffs.notnull().all()
-
-
-@pytest.mark.parametrize("coeff", [0.0, 1e-12])
-@pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
-def test_constraint_assignment_sanitize_zeros(
-    m: Model, x: linopy.Variable, y: linopy.Variable, sparse: bool, coeff: float
-) -> None:
-    con = m.add_constraints(coeff * x + y == 0, name="c2")
-    if sparse:
-        con.to_sparse()
-    m.constraints.sanitize_zeros()
-    c2 = m.constraints["c2"]
-    assert c2.nterm == 1
-    assert c2.has_variable(y)
-    assert not c2.has_variable(x)
-    csr, _ = c2.to_matrix(m.variables.label_index)
-    assert (csr.data == 1).all()
 
 
 def test_constraint_assignment_with_args(

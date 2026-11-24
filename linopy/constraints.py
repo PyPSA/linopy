@@ -12,9 +12,11 @@ from collections.abc import (
     Callable,
     Generator,
     Hashable,
+    Iterator,
     Mapping,
     Sequence,
 )
+from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import product
 from typing import (
@@ -36,7 +38,7 @@ from xarray.core.indexes import Indexes
 from xarray.core.utils import Frozen
 
 from linopy import expressions, variables
-from linopy.alignment import as_dataarray, broadcast_to_coords
+from linopy.alignment import broadcast_to_coords
 from linopy.common import (
     ConstraintLabelIndex,
     LocIndexer,
@@ -150,34 +152,6 @@ def _sparse_if(store: Store, sparse: bool, reason: Reason | None = None) -> Stor
 def model_store(store: Store, model: Model) -> Store:
     """``store`` on the store class of ``model`` where it converts, without a notice."""
     return _sparse_if(store, model.store_cls is CSRStore)
-
-
-def rhs_on_grid(store: CSRStore, rhs: Any) -> DataArray | Reason:
-    """
-    The constant ``rhs`` as a DataArray on the grid of ``store``, with dense
-    parity: NaN in the rhs raises (§5) and a reordered or differing index on
-    a shared dim raises (§8). An rhs with helper dims or dims outside the
-    grid returns the reason to fall back to the dense path. An expression
-    rhs is moved to the lhs before, see :meth:`LinearExpression.to_constraint`.
-    """
-    da = as_dataarray(rhs)
-    grid = store.grid
-    if set(da.dims) & set(HELPER_DIMS) or not set(da.dims) <= set(grid.dims):
-        return "to_constraint(rhs over dimensions outside the grid)"
-    if bool(da.isnull().any()):
-        check_user_nan()
-    for d in da.dims:
-        if not da.get_index(d).equals(grid.indexes[str(d)]):
-            raise ValueError(
-                f"Coordinate mismatch on shared dimension {d!r} between "
-                "the rhs and the grouped result. Align the rhs with "
-                ".sel(...) / .reindex(...) before combining (§8)."
-            )
-    missing = {d: i for d, i in grid.indexes.items() if d not in da.dims}
-    if missing:
-        da = da.expand_dims(missing)
-    values = da.transpose(*grid.dims).to_numpy().reshape(-1)
-    return grid.dataarray(values.astype(float), name="rhs")
 
 
 class Slack(NamedTuple):
@@ -578,7 +552,7 @@ class Constraint:
 
     @property
     def ncons(self) -> int:
-        """Get the number of active constraints (non-masked, with at least one valid variable)."""
+        """Get the number of active constraints: rows with a label, also those without a term."""
         return int(self.active_row_mask().sum())
 
     @property
@@ -746,6 +720,26 @@ class Constraint:
         check_has_nulls(df, name=f"{self.type} {self.name}")
         return df
 
+    def _check_rhs(self, rhs: DataArray, user: bool = False) -> None:
+        """
+        Raise if ``rhs`` is NaN at a present row: one with a label, or one
+        with an rhs before the constraint is added to a model. ``user`` tells
+        a NaN of a constant the user passed from one an absent cell left.
+        """
+        mask = self.mask
+        present = self.rhs.notnull() if mask is None else mask
+        if not bool((rhs.isnull() & present).any()):
+            return
+        if user:
+            check_user_nan("constraint rhs")
+        raise ValueError(
+            "Constraint.update would leave a NaN right-hand side on a row "
+            "with a label, e.g. where the new expression is absent. An update "
+            "does not switch a row off: keep the expression present on every "
+            "labelled row, or remove the constraint and add it again with "
+            "mask=."
+        )
+
     def _assign_lhs(
         self,
         expr: expressions.LinearExpression,
@@ -758,7 +752,10 @@ class Constraint:
         with a densify notice naming ``reason`` if given. Sets ``_coef_dirty``.
         """
         base_rhs = self.rhs if rhs is None else rhs
-        fields = self._fields() | {"rhs": base_rhs - expr.const}
+        new_rhs = base_rhs - expr.const
+        if self.is_assigned:
+            self._check_rhs(new_rhs)
+        fields = self._fields() | {"rhs": new_rhs}
         store = _sparse_if(expr.reset_const()._store, self._lhs.is_sparse, reason)
         self._rebind(store, fields)
         self._coef_dirty = True
@@ -922,7 +919,9 @@ class Constraint:
             if residual.nterm != 0:
                 self._assign_lhs(self.lhs - residual, rhs=expr.const)
             else:
-                self._rhs = _on_grid(expr.const, self._grid_template(), "rhs")
+                new_rhs = _on_grid(expr.const, self._grid_template(), "rhs")
+                self._check_rhs(new_rhs, user=constraint is None)
+                self._rhs = new_rhs
 
         if coeffs is not None or variables is not None:
             self._assign_terms(coeffs, variables)
@@ -1004,8 +1003,8 @@ class Constraint:
         return csr, self._label_values()[active]
 
     def active_row_mask(self) -> np.ndarray:
-        """Boolean mask over raveled rows: label set and at least one variable present."""
-        return (self._label_values() != -1) & self._lhs._store.has_terms()
+        """Boolean mask over raveled rows: label set, with or without a term."""
+        return self._label_values() != -1
 
     def active_labels(self) -> np.ndarray:
         """Active constraint labels in build order, without building the CSR."""
@@ -1027,15 +1026,11 @@ class Constraint:
         sense = self.sign.values.ravel()[active].astype("U1")
         return csr, con_labels, b, sense
 
-    def sanitize_zeros(self) -> Constraint:
-        """Remove terms with zero or near-zero coefficients."""
-        self._replace_store(self._lhs._store.prune(1e-10))
-        return self
-
     def sanitize_missings(self) -> Constraint:
         """Mask out rows where all variables are missing (-1)."""
         has_terms = self._lhs._store.dataarray(self._lhs._store.has_terms(), "labels")
         self._labels = self.labels.where(has_terms, -1)
+        self.model.constraints._invalidate_label_position_index()
         return self
 
     def sanitize_infinities(self) -> Constraint:
@@ -1044,6 +1039,7 @@ class Constraint:
             (self.sign == GREATER_EQUAL) & (self.rhs == -np.inf)
         )
         self._labels = self.labels.where(~valid_infinity_values, -1)
+        self.model.constraints._invalidate_label_position_index()
         return self
 
     def to_dense(self) -> Constraint:
@@ -1252,13 +1248,19 @@ class Constraint:
         rhs = DataArray(array([c.rhs for c in cons]).reshape(shape), coords)
         return cls(lhs, sign, rhs, model)
 
-    def to_polars(self) -> pl.DataFrame:
+    def to_polars(self, *, empty_var: int | None = None) -> pl.DataFrame:
         """
         Convert the constraint to a polars DataFrame.
 
         The resulting DataFrame represents a long table format of the all
         non-masked constraints with non-zero coefficients. It typically
         contains the columns `labels`, `coeffs`, `vars`, `rhs`, `sign`.
+
+        Parameters
+        ----------
+        empty_var : int, optional
+            Variable label for rows without a term. Each such row gets the
+            single term ``0 * empty_var``, so a file writer keeps it.
 
         Returns
         -------
@@ -1267,6 +1269,12 @@ class Constraint:
         labels_flat = self._label_values()
         mask = labels_flat != -1
         counts, vars_, coeffs = self._lhs._store.terms(active=mask)
+        empty = mask & (counts == 0)
+        if empty_var is not None and empty.any():
+            starts = (np.cumsum(counts) - counts)[empty]
+            vars_ = np.insert(vars_, starts, empty_var)
+            coeffs = np.insert(coeffs, starts, 0.0)
+            counts = np.where(empty, 1, counts)
         long = pl.DataFrame(
             {"labels": np.repeat(labels_flat, counts), "coeffs": coeffs, "vars": vars_}
         )
@@ -1463,8 +1471,8 @@ class Constraints(LabelContainer[Constraint]):
         """
         Get the number all constraints effectively used by the model.
 
-        This excludes constraints with missing labels or where all variables
-        are masked (vars == -1).
+        This excludes rows with missing labels (-1). A row with a label but
+        without a term counts.
         """
         return sum(con.ncons for con in self.data.values() if not con.is_indicator)
 
@@ -1496,13 +1504,6 @@ class Constraints(LabelContainer[Constraint]):
         """
         return self[[n for n, c in self.items() if not c.is_indicator]]
 
-    def sanitize_zeros(self) -> None:
-        """
-        Filter out terms with zero and close-to-zero coefficient.
-        """
-        for con in self.data.values():
-            con.sanitize_zeros()
-
     def sanitize_missings(self) -> None:
         """
         Set constraints labels to -1 where all variables in the lhs are
@@ -1521,6 +1522,26 @@ class Constraints(LabelContainer[Constraint]):
         """
         for con in self.data.values():
             con.sanitize_infinities()
+
+    @contextmanager
+    def infinities_masked(self) -> Iterator[None]:
+        """
+        Mask the rows with an invalid infinite RHS for the duration of the block.
+
+        Rows ``<= inf`` and ``>= -inf`` hold for any value and are left out of
+        what the solver sees, as with :meth:`sanitize_infinities`. On exit each
+        constraint gets its labels back, so the model is unchanged and a later
+        finite RHS on such a row reaches the next solve.
+        """
+        saved = {name: con._labels for name, con in self.data.items()}
+        self.sanitize_infinities()
+        try:
+            yield
+        finally:
+            for name, labels in saved.items():
+                if name in self.data:
+                    self.data[name]._labels = labels
+            self._invalidate_label_position_index()
 
     def format_labels(
         self, values: Sequence[int], display_max_terms: int | None = None

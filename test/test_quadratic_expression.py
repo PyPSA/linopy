@@ -193,6 +193,27 @@ def test_quadratic_expression_rsubtraction(x: Variable, y: Variable) -> None:
     assert expr2.nterm == 1
 
 
+@pytest.mark.parametrize("method", ["add", "sub"])
+@pytest.mark.parametrize("linear_first", [True, False])
+def test_mixing_linear_and_quadratic_with_join(
+    x: Variable, y: Variable, method: str, linear_first: bool
+) -> None:
+    lin, quad = 2 * x, x * y
+    a, b = (lin, quad) if linear_first else (quad, lin)
+    res = getattr(a, method)(b, join="outer")
+    want = getattr(a, f"__{method}__")(b)
+    assert isinstance(res, QuadraticExpression)
+    cols = list(res.flat.columns)
+    pd.testing.assert_frame_equal(
+        res.flat.sort_values(cols, ignore_index=True),
+        want.flat.sort_values(cols, ignore_index=True),
+    )
+
+    left = getattr(a, method)(b.sel(dim_0=[0]), join="left")
+    assert isinstance(left, QuadraticExpression)
+    assert list(left.indexes["dim_0"]) == [0, 1]
+
+
 def test_quadratic_expression_sum(x: Variable, y: Variable) -> None:
     base_expr = x * y + x + 5
 
@@ -299,8 +320,8 @@ def test_quadratic_expression_linear_terms(
     assert sorted(zip(labels.tolist(), coeffs.tolist())) == [(0, 3.0), (1, 3.0)]
 
 
-def test_quadratic_expression_constant_to_polars() -> None:
-    m = Model()
+def test_quadratic_expression_constant_to_polars(backend: Model) -> None:
+    m = backend
     arr = pd.Series(index=pd.Index([0, 1], name="t"), data=[10, 20])
     lin_expr = LinearExpression.from_constant(model=m, constant=arr)
     quad_expr = lin_expr.to_quadexpr()
@@ -313,6 +334,13 @@ def test_quadratic_expression_constant_to_polars() -> None:
     assert all(df["vars2"].is_null())
     assert all(df["coeffs"].is_null())
     assert all(arr.to_numpy() == df["const"].to_numpy())
+
+
+def test_masked_quadratic_expression_to_polars_is_empty(backend: Model) -> None:
+    t = pd.Index([0, 1, 2], name="t")
+    x = backend.add_variables(coords=[t], name="x")
+    expr = (x * x).where(DataArray([False] * 3, coords=[t]))
+    assert expr.to_polars().is_empty()
 
 
 def test_quadratic_expression_to_matrix(model: Model, x: Variable, y: Variable) -> None:

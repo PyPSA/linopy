@@ -11,6 +11,7 @@ import os
 import re
 import warnings
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
@@ -94,7 +95,7 @@ from linopy.piecewise import (
 from linopy.remote import RemoteHandler
 from linopy.restrict.matrix import DROPPED_ROW_TOL
 from linopy.scaling import scalar_scaling, validate_scaling
-from linopy.semantics import check_user_nan, enforce_no_multiindex
+from linopy.semantics import check_user_nan, enforce_no_multiindex, warn_outside_linopy
 from linopy.solver_capabilities import solver_supports
 from linopy.solvers import (
     IO_APIS,
@@ -520,7 +521,9 @@ class Model:
             with exactly one column per dimension and its values under its
             own name, a ``DataArray`` over its dimensions, or one number if
             it has none. A relation is a pandas or polars ``DataFrame`` with
-            exactly its declared columns. See :doc:`spec-data`.
+            exactly its declared columns. A table exporting the Arrow stream
+            interface, e.g. a pyarrow Table or a DuckDB relation, is read into
+            polars once. See :doc:`spec-data`.
         store : bool, default False
             Write the spec's parameters, unfilled with a missing row a NaN
             hole, and its relations into ``model.parameters`` under their
@@ -553,7 +556,8 @@ class Model:
             ``(snapshot, store)``. Pass the same *dim_order* to
             :func:`linopy.spec.evaluate`.
         **model_kwargs
-            Passed to :class:`Model`, such as ``sparse=True``.
+            Passed to :class:`Model`, such as ``solver_dir``. The model is
+            always sparse, ``Model(sparse=True)``.
 
         Returns
         -------
@@ -563,6 +567,8 @@ class Model:
         ------
         ValueError
             If *spec* is a one-line ``str`` ending in ``.yaml`` or ``.yml``.
+        ValueError
+            If *model_kwargs* holds ``sparse=False``.
         linopy.spec.SpecDataError
             If the data does not fit the spec.
         KeyError
@@ -582,7 +588,11 @@ class Model:
         """
         from linopy.spec.api import build_into
 
-        model = cls(**model_kwargs)
+        if not model_kwargs.pop("sparse", True):
+            raise ValueError(
+                "Model.from_spec builds a sparse model only: drop sparse=False."
+            )
+        model = cls(sparse=True, **model_kwargs)
         build_into(model, spec, sources, store, expressions, rename, dim_order)
         return model
 
@@ -2095,7 +2105,6 @@ class Model:
         warmstart_fn: str | Path | None = None,
         keep_files: bool = False,
         env: Any = None,
-        sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
         slice_size: int = 2_000_000,
         remote: RemoteHandler | None = None,
@@ -2158,12 +2167,10 @@ class Model:
         env : gurobi.Env, optional
             Existing environment passed to the solver (e.g. `gurobipy.Env`).
             Currently only in use for Gurobi. The default is None.
-        sanitize_zeros : bool, optional
-            Whether to set terms with zero coefficient as missing.
-            This will remove unneeded overhead in the lp file writing.
-            The default is True.
         sanitize_infinities : bool, optional
-            Whether to filter out constraints that are subject to `<= inf` or `>= -inf`.
+            Whether to leave constraint rows subject to `<= inf` or `>= -inf`
+            out of this solve. Their labels are kept, so the model is
+            unchanged afterwards, and their dual is NaN.
         slice_size : int, optional
             Size of the slice to use for writing the lp file. The slice size
             is used to split large variables and constraints into smaller
@@ -2205,10 +2212,16 @@ class Model:
         call, but not by garbage collection: a model that merely goes out of
         scope leaves its solver open.
         """
-        if mock_solve:
-            return self._mock_solve(
-                sanitize_zeros=sanitize_zeros, sanitize_infinities=sanitize_infinities
+        if solver_options.pop("sanitize_zeros", None) is not None:
+            warn_outside_linopy(
+                "`sanitize_zeros` is no longer supported and has no effect. linopy "
+                "skips terms with a zero coefficient; the solver handles near-zero "
+                "ones.",
+                FutureWarning,
             )
+
+        if mock_solve:
+            return self._mock_solve(sanitize_infinities=sanitize_infinities)
 
         # check io_api
         if io_api is not None and io_api not in IO_APIS:
@@ -2236,7 +2249,6 @@ class Model:
                 basis_fn=basis_fn,
                 warmstart_fn=warmstart_fn,
                 keep_files=keep_files,
-                sanitize_zeros=sanitize_zeros,
                 reformulate_sos=reformulate_sos,
                 **solver_options,
             )
@@ -2287,12 +2299,12 @@ class Model:
             else:
                 solution_fn = self.get_solution_file()
 
-        with sos_reformulation_context(self, solver_name, reformulate_sos):
-            if sanitize_zeros:
-                self.constraints.sanitize_zeros()
-            if sanitize_infinities:
-                self.constraints.sanitize_infinities()
-
+        with (
+            sos_reformulation_context(self, solver_name, reformulate_sos),
+            self.constraints.infinities_masked()
+            if sanitize_infinities
+            else nullcontext(),
+        ):
             try:
                 self.solver = None  # closes any previous solver
                 if io_api == "direct":
@@ -2625,7 +2637,6 @@ class Model:
 
     def _mock_solve(
         self,
-        sanitize_zeros: bool = True,
         sanitize_infinities: bool = True,
     ) -> tuple[str, str]:
         solver_name = "mock"
@@ -2635,21 +2646,20 @@ class Model:
         # reset result
         self.reset_solution()
 
-        if sanitize_zeros:
-            self.constraints.sanitize_zeros()
+        with (
+            self.constraints.infinities_masked()
+            if sanitize_infinities
+            else nullcontext()
+        ):
+            self.objective._value = 0.0
+            self.status = "ok"
+            self.termination_condition = TerminationCondition.optimal.value
 
-        if sanitize_infinities:
-            self.constraints.sanitize_infinities()
+            for name, var in self.variables.items():
+                var.solution = xr.DataArray(0.0, var.coords)
 
-        self.objective._value = 0.0
-        self.status = "ok"
-        self.termination_condition = TerminationCondition.optimal.value
-
-        for name, var in self.variables.items():
-            var.solution = xr.DataArray(0.0, var.coords)
-
-        for name, con in self.constraints.items():
-            con.dual = xr.DataArray(0.0, con.labels.coords)
+            for name, con in self.constraints.items():
+                con.dual = xr.DataArray(0.0, con.labels.coords)
 
         return "ok", "none"
 

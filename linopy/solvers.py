@@ -936,8 +936,8 @@ class Solver(ABC, Generic[EnvType]):
         Dispatch to direct or file build based on ``io_api``.
 
         The Solver never mutates ``self.model``. Constraint sanitization
-        (``model.constraints.sanitize_zeros()`` /
-        ``.sanitize_infinities()`` / ``.sanitize_missings()``) and SOS reformulation
+        (``model.constraints.sanitize_infinities()`` /
+        ``.sanitize_missings()``) and SOS reformulation
         (``model.apply_sos_reformulation()``) are Model-level operations
         the caller applies first; this builder consumes whatever shape it
         is handed.
@@ -1725,6 +1725,8 @@ class GLPK(Solver[None]):
             "integer optimal": "optimal",
             "integer undefined": "infeasible_or_unbounded",
             "undefined": "infeasible_or_unbounded",
+            "infeasible (final)": "infeasible",
+            "integer empty": "infeasible",
         }
         sense = read_sense_from_problem_file(problem_fn)
         io_api = read_io_api_from_problem_file(problem_fn)
@@ -1973,8 +1975,14 @@ class Highs(Solver[None]):
         *,
         names: Printers | None,
         sos: list[SosSet],
+        options: dict[str, Any] | None = None,
     ) -> highspy.Highs:
-        """Build a highspy.Highs instance from the matrices ``M``."""
+        """
+        Build a highspy.Highs instance from the matrices ``M``.
+
+        ``options`` are set before the model is passed, so they apply to the
+        checks HiGHS runs on the incoming matrix entries.
+        """
         if sos:
             raise NotImplementedError(
                 "SOS constraints are not supported by the HiGHS direct API. "
@@ -1992,6 +2000,9 @@ class Highs(Solver[None]):
             else highspy.ObjSense.kMinimize
         )
         h = highspy.Highs()
+        for k, v in (options or {}).items():
+            if h.setOptionValue(k, v) != highspy.HighsStatus.kOk:
+                raise ValueError(f"HiGHS rejected the option {k}={v!r}.")
         h.passModel(
             A.shape[1],
             A.shape[0],

@@ -57,8 +57,10 @@ Each kind of data takes exactly one shape for tables and one for grids, and
 anything else is refused with `SpecDataError` naming the shape to pass,
 rather than guessed at. A **table** is a `pandas.DataFrame` or a
 `polars.DataFrame` that carries its labels in columns, never in its index,
-and has no column beyond those it is read for. A **grid** is an
-`xarray.DataArray` over the declared dimensions.
+and has no column beyond those it is read for. Any other table exporting the
+Arrow stream interface, such as a pyarrow `Table` or a DuckDB relation, is
+read into polars once, on its first lookup, and is then a polars table. A
+**grid** is an `xarray.DataArray` over the declared dimensions.
 
 linopy reads the keys once, off `keys()`, and never iterates the mapping
 beyond that. Each declared name is then read with one `__getitem__`. A mapping
@@ -173,11 +175,17 @@ that the list names, or `SpecDataError` names it.
 
 ### Label types
 
-Labels must have the type of the dimension they belong to. An `int`
-dimension given the text `"0"`, `"1"` is refused with a message saying the
-labels differ in type, not spelling. For a datetime dimension the message
-points to `pd.to_datetime` or `parse_dates=`, since dates read from text
-files and databases often arrive as strings.
+The labels of a table must have the dtype family of the dimension they
+belong to: numeric, datetime, tz-aware datetime, date, duration, string or
+boolean, the rule `linopy.from_long` follows. Within a family they match by
+value, so `int32` labels fit an `int64` dimension and microsecond timestamps
+a nanosecond one. Tz-aware labels match a tz-aware dimension by instant,
+whatever their time zone: a UTC table fits a `Europe/Berlin` dimension.
+Naive and tz-aware datetimes never match each other. An `int` dimension
+given the text `"0"`, `"1"` is refused with a message saying the labels
+differ in type. For a datetime dimension the message points to
+`pd.to_datetime` or `parse_dates=`, since dates read from text files and
+databases often arrive as strings.
 
 ## A mapping over a database
 
@@ -253,9 +261,10 @@ variables:
     `where: c` on the constraint to make that visible in the spec.
 - Inside a sum, an absent term is left out. A row the data leaves without any
     variable term, such as a sum over variables a `where:` masked away
-    entirely, is refused rather than dropped: nothing is left to constrain, and
-    the row would leave the problem without saying so. Mask it with a `where:`
-    on the constraint ([\#993](https://github.com/PyPSA/linopy/issues/993)).
+    entirely, is the constant row it reads. linopy keeps it, as it keeps any
+    such row, so one that holds, such as `0 <= 5`, restricts nothing, and one
+    that does not, such as `0 >= 5`, beyond a rounding error of 1e-9, is
+    refused rather than built into an infeasible model. Mask it with a `where:` on the constraint ([\#993](https://github.com/PyPSA/linopy/issues/993)).
 - linopy carries a product of two variables in the objective only. A
     constraint whose spec multiplies two variables builds wherever the data
     leaves no such product on a row its `where:` keeps: its coefficient is

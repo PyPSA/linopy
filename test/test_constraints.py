@@ -13,9 +13,12 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from xarray.core.types import JoinOptions
 
-from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, Model
+from linopy import EQUAL, GREATER_EQUAL, LESS_EQUAL, Model, available_solvers
 from linopy.testing import assert_conequal
+
+T = pd.Index([0, 1, 2], name="t")
 
 # Test model functions
 
@@ -167,9 +170,9 @@ def test_constraint_rhs_lower_dim(rhs_factory: Any) -> None:
     assert c.shape == (10, 10)
 
 
-def test_constraint_rhs_unlabeled_lower_dim_ambiguous_raises() -> None:
+def test_constraint_rhs_unlabeled_lower_dim_ambiguous_raises(backend: Model) -> None:
     """Both dims are size 10, so a length-10 rhs cannot be paired by size."""
-    m = Model()
+    m = backend
     naxis = np.arange(10, dtype=float)
     maxis = np.arange(10).astype(str)
     x = m.add_variables(coords=[naxis, maxis])
@@ -177,6 +180,23 @@ def test_constraint_rhs_unlabeled_lower_dim_ambiguous_raises() -> None:
 
     with pytest.raises(ValueError, match=r"sizes alone cannot decide"):
         m.add_constraints(x - y >= naxis)
+
+
+@pytest.mark.parametrize("join", [None, "outer"])
+@pytest.mark.parametrize(
+    "rhs",
+    [
+        pytest.param(0.0, id="scalar"),
+        pytest.param(xr.DataArray([0.0, 0.0, 0.0], coords=[T]), id="dataarray"),
+        pytest.param(pd.Series([0.0, 0.0, 0.0], index=T), id="series"),
+    ],
+)
+def test_constraint_zero_rhs_is_unsigned(
+    backend: Model, rhs: Any, join: JoinOptions | None
+) -> None:
+    x = backend.add_variables(coords=[T])
+    c = (2 * x).to_constraint(LESS_EQUAL, rhs, join=join)
+    assert not np.signbit(c.rhs.values).any()
 
 
 @pytest.mark.parametrize(
@@ -372,6 +392,106 @@ def test_sanitize_infinities() -> None:
         m.add_constraints(x >= np.inf, name="con_wrong_inf")
     with pytest.raises(ValueError):
         m.add_constraints(y <= -np.inf, name="con_wrong_neg_inf")
+
+
+def test_sanitize_infinities_refreshes_label_index() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, coords=[range(3)], name="x")
+    m.add_constraints(x <= np.array([np.inf, 5.0, np.inf]), name="up")
+    m.add_constraints(x >= 1, name="lo")
+
+    assert m.constraints.label_index.n_active_cons == 6
+    m.constraints.sanitize_infinities()
+    np.testing.assert_array_equal(m.constraints.label_index.clabels, [1, 3, 4, 5])
+    np.testing.assert_array_equal(
+        m.constraints.label_index.label_to_pos, [-1, 0, -1, 1, 2, 3]
+    )
+
+
+def test_sanitize_missings_refreshes_label_index() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, coords=[range(3)], name="x")
+    con = m.add_constraints(x <= 5, name="up")
+    keep = xr.DataArray([True, False, True], coords=x.coords)
+    con.update(lhs=(1 * x).where(keep).fillna(0))
+
+    assert m.constraints.label_index.n_active_cons == 3
+    m.constraints.sanitize_missings()
+    np.testing.assert_array_equal(m.constraints.label_index.clabels, [0, 2])
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS is not installed")
+@pytest.mark.parametrize("io_api", ["direct", "lp"])
+def test_matrices_before_solve_with_infinite_rhs(io_api: str) -> None:
+    # https://github.com/PyPSA/linopy/issues/1178
+    m = Model()
+    x = m.add_variables(lower=0, coords=[range(3)], name="x")
+    m.add_constraints(x <= np.array([np.inf, 5.0, np.inf]), name="up")
+    m.add_constraints(x >= 1, name="lo")
+    m.add_objective(x.sum())
+
+    assert m.matrices.A is not None
+    m.solve("highs", io_api=io_api)
+
+    np.testing.assert_allclose(m.constraints["lo"].dual, [1, 1, 1])
+    np.testing.assert_allclose(m.constraints["up"].dual.values[1], 0)
+
+
+def test_infinities_masked_restores_labels() -> None:
+    m = Model()
+    x = m.add_variables(lower=0, coords=[range(3)], name="x")
+    up = m.add_constraints(x <= np.array([np.inf, 5.0, np.inf]), name="up")
+    m.add_constraints(x >= 1, name="lo")
+
+    assert m.constraints.label_index.n_active_cons == 6
+    with pytest.raises(RuntimeError, match="boom"):
+        with m.constraints.infinities_masked():
+            np.testing.assert_array_equal(up.labels, [-1, 1, -1])
+            assert m.constraints.label_index.n_active_cons == 4
+            raise RuntimeError("boom")
+
+    np.testing.assert_array_equal(up.labels, [0, 1, 2])
+    np.testing.assert_array_equal(m.constraints.label_index.clabels, [0, 1, 2, 3, 4, 5])
+
+
+def _model_with_infinite_row() -> tuple[Model, Any]:
+    m = Model()
+    x = m.add_variables(lower=0, upper=10, coords=[range(3)], name="x")
+    m.add_constraints(x >= np.array([1.0, -np.inf, 3.0]), name="c")
+    m.add_objective(x.sum())
+    return m, x
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS is not installed")
+@pytest.mark.parametrize("io_api", ["direct", "lp"])
+def test_solve_keeps_infinite_row_for_next_solve(io_api: str) -> None:
+    m, x = _model_with_infinite_row()
+    c = m.constraints["c"]
+
+    m.solve("highs", io_api=io_api)
+    np.testing.assert_array_equal(c.labels, [0, 1, 2])
+    np.testing.assert_allclose(x.solution, [1, 0, 3])
+    assert np.isnan(c.dual.values[1])
+
+    c.update(rhs=np.array([1.0, 2.0, 3.0]))
+    m.solve("highs", io_api=io_api)
+    np.testing.assert_allclose(x.solution, [1, 2, 3])
+
+
+@pytest.mark.skipif("highs" not in available_solvers, reason="HiGHS is not installed")
+def test_persistent_update_after_model_solve_with_infinite_row() -> None:
+    from linopy.solvers import Solver
+
+    m, x = _model_with_infinite_row()
+    c = m.constraints["c"]
+    solver = Solver.from_name("highs", model=m, io_api="direct", track_updates=True)
+
+    m.solve("highs", io_api="direct")
+    c.update(rhs=np.array([1.0, 2.0, 3.0]))
+    solver.update(m)
+    assert solver._rebuilds == 0
+    solver.solve(assign=True)
+    np.testing.assert_allclose(x.solution, [1, 2, 3])
 
 
 def test_masked_incorrect_infinities() -> None:
