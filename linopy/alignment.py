@@ -92,7 +92,9 @@ def _coords_to_dict(
 
     - ``xarray.Coordinates``  → kept dim entries only (auxiliary coords
       dropped).
-    - ``Mapping``             → returned as a shallow ``dict`` copy.
+    - ``Mapping``             → returned as a shallow ``dict`` copy; read as
+      ``xarray.Coordinates`` when a value is a ``(dims, values)`` tuple,
+      so auxiliary coords stay off the dims.
     - sequence-of-entries     → each entry handled per the rules below.
 
     Sequence-entry rules (``i`` is the position in ``coords``, ``dims[i]``
@@ -131,6 +133,8 @@ def _coords_to_dict(
             {d: coords[d] for d in coords.dims if d in coords}
         )
     if isinstance(coords, Mapping):
+        if any(isinstance(v, tuple) for v in coords.values()):
+            return _coords_to_dict(Coordinates(coords))
         return _reject_multiindex_coords(dict(coords))
     dim_names: list[Any] | None = None
     if dims is not None:

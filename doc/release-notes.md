@@ -124,6 +124,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 *Model building*
 
 - `add_constraints` no longer raises on invalid infinite right-hand sides at positions excluded by `mask`. ([\#1116](https://github.com/PyPSA/linopy/issues/1116))
+- `add_variables` keeps auxiliary coordinates of `coords`, both as `xarray.Coordinates` and as a dict entry `{"aux": ("snapshot", values)}`; the dict entry built an extra dimension. ([\#1084](https://github.com/PyPSA/linopy/issues/1084))
 - `add_constraints` rejects dimensions named after reserved fields (`sign`, `rhs`, ...), like `add_variables`.
 - Multiplying a constant or one-term expression by a multi-term expression no longer raises a `TypeError`. ([\#1055](https://github.com/PyPSA/linopy/issues/1055))
 - `QuadraticExpression.groupby(...).sum()` and `.map` return a `QuadraticExpression`. ([\#1064](https://github.com/PyPSA/linopy/issues/1064))

@@ -72,6 +72,18 @@ def test_variable_type() -> None:
     assert sc.type == "Semi-continuous Variable"
 
 
+_AUX = {"snapshot": np.arange(4), "aux": ("snapshot", [1, 1, 2, 2])}
+
+
+@pytest.mark.parametrize("coords", [_AUX, xr.Coordinates(_AUX)])
+@pytest.mark.parametrize("lower", [0, np.zeros(4)])
+def test_add_variables_keeps_non_dimension_coords(coords: Any, lower: Any) -> None:
+    x = Model().add_variables(lower=lower, coords=coords, name="x")
+    assert x.dims == ("snapshot",)
+    assert x.coords["aux"].dims == ("snapshot",)
+    assert x.coords["aux"].values.tolist() == [1, 1, 2, 2]
+
+
 def test_variable_labels(x: linopy.Variable) -> None:
     isinstance(x.labels, xr.DataArray)
 
