@@ -718,6 +718,26 @@ class Constraint:
         check_has_nulls(df, name=f"{self.type} {self.name}")
         return df
 
+    def _check_rhs(self, rhs: DataArray, user: bool = False) -> None:
+        """
+        Raise if ``rhs`` is NaN at a present row: one with a label, or one
+        with an rhs before the constraint is added to a model. ``user`` tells
+        a NaN of a constant the user passed from one an absent cell left.
+        """
+        mask = self.mask
+        present = self.rhs.notnull() if mask is None else mask
+        if not bool((rhs.isnull() & present).any()):
+            return
+        if user:
+            check_user_nan("constraint rhs")
+        raise ValueError(
+            "Constraint.update would leave a NaN right-hand side on a row "
+            "with a label, e.g. where the new expression is absent. An update "
+            "does not switch a row off: keep the expression present on every "
+            "labelled row, or remove the constraint and add it again with "
+            "mask=."
+        )
+
     def _assign_lhs(
         self,
         expr: expressions.LinearExpression,
@@ -730,7 +750,10 @@ class Constraint:
         with a densify notice naming ``reason`` if given. Sets ``_coef_dirty``.
         """
         base_rhs = self.rhs if rhs is None else rhs
-        fields = self._fields() | {"rhs": base_rhs - expr.const}
+        new_rhs = base_rhs - expr.const
+        if self.is_assigned:
+            self._check_rhs(new_rhs)
+        fields = self._fields() | {"rhs": new_rhs}
         store = _sparse_if(expr.reset_const()._store, self._lhs.is_sparse, reason)
         self._rebind(store, fields)
         self._coef_dirty = True
@@ -894,7 +917,9 @@ class Constraint:
             if residual.nterm != 0:
                 self._assign_lhs(self.lhs - residual, rhs=expr.const)
             else:
-                self._rhs = _on_grid(expr.const, self._grid_template(), "rhs")
+                new_rhs = _on_grid(expr.const, self._grid_template(), "rhs")
+                self._check_rhs(new_rhs, user=constraint is None)
+                self._rhs = new_rhs
 
         if coeffs is not None or variables is not None:
             self._assign_terms(coeffs, variables)

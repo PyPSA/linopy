@@ -151,6 +151,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 *Solvers*
 
 - A constraint row without a nonzero term, e.g. `0 * x >= 5`, reaches the solver instead of being dropped. ([\#1170](https://github.com/PyPSA/linopy/issues/1170), [\#1183](https://github.com/PyPSA/linopy/pull/1183))
+- `Constraint.update` raises a `ValueError` for a NaN right-hand side on a row with a label, e.g. `c.update(rhs=np.nan)` or an update with an expression that is absent there, as `add_constraints` does for a NaN constant. It left a row that HiGHS and SCIP ignored and that failed in Gurobi. ([\#1181](https://github.com/PyPSA/linopy/issues/1181))
 - With `add_objective(..., scaling=...)`, the solve log reports objective and dual bound in model units. ([\#1077](https://github.com/PyPSA/linopy/issues/1077))
 - GLPK: an infeasible MIP, or an infeasible LP solved without presolve, is reported as `infeasible` instead of `ok`. ([\#1183](https://github.com/PyPSA/linopy/pull/1183))
 - CPLEX: "optimal with unscaled infeasibilities" is reported as `imprecise` and its solution is imported. ([\#368](https://github.com/PyPSA/linopy/issues/368))
