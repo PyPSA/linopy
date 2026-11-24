@@ -494,6 +494,7 @@ def test_model_to_netcdf_aux_coords(tmp_path: Path, backend: Model) -> None:
         }
     )
     x = m.add_variables(lower=0, coords=coords, name="x")
+    assert {"time", "period"} <= set(x.coords)
     m.add_constraints(x >= 1, name="c")
     m.add_expressions(2 * x, name="e")
     m.add_constraints(x.sel(snapshot=0) >= 2, name="c-first")
