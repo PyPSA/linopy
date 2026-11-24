@@ -61,6 +61,7 @@ AT_R = xr.DataArray([2, 0, 2], coords=[R])
 MULTI_R = xr.Coordinates.from_pandas_multiindex(
     pd.MultiIndex.from_tuples([("x", 1), ("y", 2)], names=["k1", "k2"]), "r"
 )
+PAIRS = pd.Index([(2020, 0), (2030, 0), (2040, 1)], name="a", tupleize_cols=False)
 
 
 def var(e: LinearExpression, name: str) -> Variable:
@@ -97,6 +98,10 @@ def zero_size(m: Model) -> LinearExpression:
     return 1 * m.add_variables(coords=[pd.Index([], dtype=int, name="a")], name="n")
 
 
+def tupled(m: Model) -> LinearExpression:
+    return 2 * m.add_variables(coords=[PAIRS, B], name="x")
+
+
 def without_tag(e: LinearExpression) -> LinearExpression:
     return e.drop_vars("tag")
 
@@ -128,6 +133,12 @@ def const_assigned(value: xr.DataArray) -> Callable[[LinearExpression], Any]:
     return op
 
 
+def picked(
+    indexers: dict[str, Any], drop: bool
+) -> Callable[[LinearExpression], LinearExpression]:
+    return lambda e: e.isel(indexers, drop=drop)
+
+
 def coeffs_assigned(e: LinearExpression) -> LinearExpression:
     e.coeffs = COEFFS
     return e
@@ -157,6 +168,13 @@ CASES: dict[str, Case] = {
     "sel": Case(grid, lambda e: e.sel(a=[0, 2]), KEPT),
     "isel": Case(grid, lambda e: e.isel(a=slice(0, 2)), KEPT),
     "isel-scalar": Case(grid, lambda e: e.isel(b=0), KEPT),
+    "isel-scalar-coord": Case(
+        grid, lambda e: e.assign_coords(s=5).isel(a=1, drop=True), KEPT
+    ),
+    "isel-scalar-tuple": Case(tupled, lambda e: e.isel(a=1), KEPT),
+    "isel-scalar-tuple-coord": Case(
+        grid, lambda e: e.assign_coords(pair=("a", PAIRS.to_numpy())).isel(a=1), KEPT
+    ),
     "getitem": Case(grid, lambda e: e[0:2], KEPT),
     "roll": Case(grid, lambda e: e.roll(a=1), KEPT),
     "roll-coords": Case(grid, lambda e: e.roll(a=1, roll_coords=True), KEPT),
@@ -236,6 +254,9 @@ CASES: dict[str, Case] = {
     ),
     "reindex-off-grid": Case(
         grid, lambda e: e.reindex(c=C), "reindex(indexers off the grid)"
+    ),
+    "reindex-non-unique": Case(
+        grid, lambda e: e.reindex(a=[0, 0, 1]), "reindex(non-unique index)"
     ),
     "rename-dim": Case(grid, lambda e: e.rename(a="d"), KEPT),
     "rename-aux": Case(grid, lambda e: e.rename(tag="label"), RENAME),
@@ -394,7 +415,7 @@ CASES: dict[str, Case] = {
     "to-constraint-rhs-unlabelled-off-grid": Case(
         grid,
         lambda e: e.to_constraint("<=", xr.DataArray([1.0, 2.0], dims="c")),
-        "to_constraint(rhs over dimensions outside the grid)",
+        KEPT,
     ),
     "groupby-series": Case(grid, lambda e: e.groupby(SERIES).sum(), KEPT),
     "groupby-dataframe": Case(grid, lambda e: e.groupby(FRAME).sum(), KEPT),
@@ -476,6 +497,20 @@ CASES: dict[str, Case] = {
     "groupby-relation-empty": Case(
         grid, lambda e: e.groupby(RELATION_EMPTY).sum(), KEPT
     ),
+}
+
+ISEL_INDEXERS: dict[str, tuple[dict[str, Any], bool]] = {
+    "none": ({}, False),
+    "slice-step": ({"a": slice(None, None, -2)}, False),
+    "scalar-negative": ({"b": -1}, True),
+    "scalar-tagged": ({"a": 1}, False),
+    "scalar-tagged-drop": ({"a": 1}, True),
+    "scalars-drop": ({"a": np.int64(2), "b": 0}, True),
+    "scalar-and-slice": ({"a": 0, "b": slice(1, None)}, False),
+}
+CASES |= {
+    f"isel-{name}": Case(grid, picked(*args), KEPT)
+    for name, args in ISEL_INDEXERS.items()
 }
 
 CONST_REJECTED: dict[str, tuple[Any, str]] = {
@@ -783,3 +818,23 @@ def test_sparse_positional_csr_cached_while_held(rows: str) -> None:
     rebuilt = store.positional_csr(m.variables.label_index, active, "c")
     assert rebuilt.indices is not first.indices
     np.testing.assert_array_equal(rebuilt.indices, first.indices)
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        pd.Index(["x", "y"], name="a"),
+        pd.date_range("2020-01-01", periods=2, tz="Europe/Berlin", name="a"),
+        PAIRS,
+    ],
+    ids=["str", "tz-aware", "tuple"],
+)
+def test_isel_scalar_label_matches_dense(labels: pd.Index) -> None:
+    picked = [
+        (1 * Model(sparse=sparse).add_variables(coords=[labels], name="x"))
+        .isel(a=1)
+        .coords["a"]
+        for sparse in (False, True)
+    ]
+    assert picked[0].dtype == picked[1].dtype
+    assert picked[0].item() == picked[1].item()

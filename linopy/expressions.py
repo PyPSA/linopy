@@ -113,7 +113,7 @@ from linopy.constants import (
     PerformanceWarning,
 )
 from linopy.csr import CSRStore, Grid, _densify_notice
-from linopy.long import Relation, _positions
+from linopy.long import Relation, _is_arrow_table, _positions, _to_numpy
 from linopy.semantics import (
     AbsentType,
     FillValueLike,
@@ -155,6 +155,8 @@ from linopy.types import (
 )
 
 if TYPE_CHECKING:
+    from xarray.core.types import ErrorOptionsWithWarn
+
     from linopy.constraints import (
         AnonymousScalarConstraint,
         Constraint,
@@ -228,8 +230,10 @@ def _resolve_group(group: Any, data: Dataset) -> Any:
     like ``groupby(data["name"])``, mirroring xarray. Other inputs (Series,
     DataFrame, DataArray, multi-key lists) are returned unchanged.
     """
-    if isinstance(group, pl.DataFrame) or (
-        isinstance(group, pd.DataFrame) and group.index.name is None
+    if (
+        isinstance(group, pl.DataFrame)
+        or (isinstance(group, pd.DataFrame) and group.index.name is None)
+        or _is_arrow_table(group)
     ):
         raise TypeError(
             "Grouping by a frame needs a pandas index named after a dimension, "
@@ -713,7 +717,7 @@ class LinearExpressionGroupby:
                     f"relation member column {m!r} must name a dimension "
                     f"of {list(dims)}."
                 )
-        labels = relation.frame[group].to_numpy()
+        labels = _to_numpy(relation.frame[group])
         codes, _ = pd.factorize(labels, sort=True)
         order = np.argsort(codes, kind="stable")
         rows = pd.RangeIndex(len(order), name=RELATION_DIM)
@@ -876,6 +880,17 @@ class LinearExpressionRolling:
         return LinearExpression(ds, self.model)
 
 
+def _constant_polars(const: DataArray, columns: list[str]) -> pl.DataFrame:
+    """
+    The present cells of a constant expression in the long format of
+    ``to_polars``: one row per non-NaN ``const``, the term ``columns`` null.
+    """
+    values = const.values.reshape(-1)
+    df = pl.DataFrame({"const": values[~np.isnan(values)]})
+    nulls = [pl.lit(None).alias(c) for c in columns if c != "const"]
+    return df.with_columns(nulls).select(columns)
+
+
 def _log_extra_rhs_dims(rhs: DataArray, dims: Iterable[Hashable]) -> None:
     """Log the dims a constant rhs adds to the expression's, each a copy of its rows."""
     if extra_dims := set(rhs.dims) - set(dims):
@@ -884,12 +899,6 @@ def _log_extra_rhs_dims(rhs: DataArray, dims: Iterable[Hashable]) -> None:
             f"in the expression, which might lead to inefficiencies. "
             f"Consider collapsing the dimensions by taking min/max."
         )
-
-
-def _over_new_dims(const: DataArray, dims: Iterable[str]) -> bool:
-    """Whether ``const`` adds labelled dims to ``dims``, which the sparse arithmetic spreads the cells over."""
-    new = set(const.dims) - set(dims)
-    return bool(new) and not new & set(HELPER_DIMS) and new <= set(const.indexes)
 
 
 def _grid_of(ds: Dataset | DataArray, dims: tuple[str, ...]) -> Grid | None:
@@ -905,6 +914,16 @@ def _grid_of(ds: Dataset | DataArray, dims: tuple[str, ...]) -> Grid | None:
         return None
     grid = Grid.from_dataset(ds, dims)
     return grid if set(ds.coords) == set(dims) | set(grid.aux) else None
+
+
+def _on_grid_positions(grid: Grid, indexers: Mapping[Any, Any]) -> bool:
+    """Whether ``indexers`` picks dims of ``grid`` by integer or slice only."""
+    return all(
+        d in grid.indexes
+        and isinstance(i, slice | int | np.integer)
+        and not isinstance(i, bool)
+        for d, i in indexers.items()
+    )
 
 
 def _const_grid(grid: Grid, const: DataArray) -> Grid | None:
@@ -1043,7 +1062,8 @@ class BaseExpression(ABC):
     @property
     def is_constant(self) -> bool:
         """True if the expression contains no variables."""
-        return self.data.sizes[TERM_DIM] == 0
+        vars_ = self.data.vars.values
+        return not self.data.sizes[TERM_DIM] or bool(vars_.size and vars_.max() < 0)
 
     def print(self, display_max_rows: int = 20, display_max_terms: int = 20) -> None:
         """
@@ -1840,7 +1860,7 @@ class BaseExpression(ABC):
         return constraints.Constraint(
             all_to_lhs.reset_const(),
             sign,
-            const.copy(deep=False, data=-const.values),
+            const.copy(deep=False, data=0.0 - const.values),
             self.model,
         )
 
@@ -2540,12 +2560,23 @@ class LinearExpression(BaseExpression):
         obj._attrs = dict(self.attrs)
         return obj
 
-    def isel(self, *args: Any, **kwargs: Any) -> Self:
+    def isel(
+        self,
+        indexers: Mapping[Any, Any] | None = None,
+        drop: bool = False,
+        missing_dims: ErrorOptionsWithWarn = "raise",
+        **indexers_kwargs: Any,
+    ) -> Self:
         """
         Select by position as ``Dataset.isel``. For a CSR-backed expression,
         returns a CSR-backed result when the selection stays on the grid.
         """
-        return self._gathered("isel", super().isel, *args, **kwargs)
+        picks = indexers or indexers_kwargs
+        sole = not (indexers and indexers_kwargs)
+        if self.is_sparse and sole and _on_grid_positions(self._store.grid, picks):
+            return type(self)._from_store(self._store.isel(picks, drop), self._model)
+        args = (indexers, drop, missing_dims)
+        return self._gathered("isel", super().isel, *args, **indexers_kwargs)
 
     def __getitem__(self, selector: int | slice | tuple[Any, ...] | DataArray) -> Self:
         return self._gathered("__getitem__", super().__getitem__, selector)
@@ -2693,30 +2724,17 @@ class LinearExpression(BaseExpression):
         self, sign: SignLike, rhs: SideLike, join: JoinOptions | None = None
     ) -> Constraint:
         store = self._store
-        if isinstance(store, DenseStore) and join is None:
+        if isinstance(store, CSRStore) and not isinstance(sign, str):
+            dense = self._fallback("to_constraint(non-scalar sign)")
+            return dense.to_constraint(sign, rhs, join)
+        if join is None:
             operand = store.on_cells(rhs)
             if operand is not None:
                 lhs, moved = store.moved(operand)
                 return constraints.Constraint(
                     type(self)._from_store(lhs, self.model), sign, moved, self.model
                 )
-        if not isinstance(store, CSRStore):
-            return super().to_constraint(sign, rhs, join)
-        if not isinstance(sign, str):
-            dense = self._fallback("to_constraint(non-scalar sign)")
-            return dense.to_constraint(sign, rhs, join)
-        rhs = as_constant(rhs)
-        if join is not None or not isinstance(rhs, CONSTANT_TYPES):
-            return self.sub(rhs, join=join).to_constraint(sign, 0)
-        if isinstance(rhs, DataArray) and _over_new_dims(rhs, store.dims):
-            _log_extra_rhs_dims(rhs, store.dims)
-            return self.sub(rhs).to_constraint(sign, 0)
-        rhs_da = constraints.rhs_on_grid(store, rhs)
-        if isinstance(rhs_da, str):
-            return self._fallback(rhs_da).to_constraint(sign, rhs, join)
-        return constraints.Constraint(
-            self.reset_const(), sign, rhs_da - self.const, self.model
-        )
+        return super().to_constraint(sign, rhs, join)
 
     @overload
     def __add__(
@@ -2989,7 +3007,7 @@ class LinearExpression(BaseExpression):
                 "reindexing"
             )
         store = self._store
-        reason = _reindex_reason(indexers, store.dims, fill_value, method, copy)
+        reason = _reindex_reason(indexers, self.indexes, fill_value, method, copy)
         if not isinstance(store, CSRStore) or reason is not None:
             dense = self._fallback(reason)
             kwargs: dict[str, Any] = dict(method=method, tolerance=tolerance, copy=copy)
@@ -3062,13 +3080,10 @@ class LinearExpression(BaseExpression):
         -------
         df : polars.DataFrame
         """
+        if self.is_constant:
+            return _constant_polars(self.const, ["vars", "coeffs", "const"])
         if self.is_sparse:
             df = pl.DataFrame(self._store_terms())
-        elif self.is_constant:
-            df = pl.DataFrame(
-                {"const": self.data["const"].values.reshape(-1)}
-            ).with_columns(pl.lit(None).alias("coeffs"), pl.lit(None).alias("vars"))
-            return df.select(["vars", "coeffs", "const"])
         else:
             df = filter_nulls_polars(to_polars(self.data))
         df = maybe_group_terms_polars(df)
@@ -3772,14 +3787,7 @@ class QuadraticExpression(BaseExpression):
         df : polars.DataFrame
         """
         if self.is_constant:
-            df = pl.DataFrame(
-                {"const": self.data["const"].values.reshape(-1)}
-            ).with_columns(
-                pl.lit(None).alias("coeffs"),
-                pl.lit(None).alias("vars1"),
-                pl.lit(None).alias("vars2"),
-            )
-            return df.select(["vars1", "vars2", "coeffs", "const"])
+            return _constant_polars(self.const, ["vars1", "vars2", "coeffs", "const"])
 
         vars = self.data.vars.assign_coords(
             {FACTOR_DIM: ["vars1", "vars2"]}
@@ -3874,7 +3882,7 @@ def _dense_copies(exprs: Sequence[Any], reason: Reason | None) -> list[Any]:
 
 def _reindex_reason(
     indexers: Mapping[Any, Any],
-    dims: tuple[str, ...],
+    indexes: Indexes,
     fill_value: Any,
     method: str | None,
     copy: bool,
@@ -3886,8 +3894,12 @@ def _reindex_reason(
         return "reindex(copy=False)"
     if fill_value is not FILL_VALUE:
         return "reindex(fill_value=...)"
-    if not set(indexers) <= set(dims):
+    if not set(indexers) <= set(indexes):
         return "reindex(indexers off the grid)"
+    for d, labels in indexers.items():
+        source, target = indexes[d], pd.Index(labels)
+        if not (source.equals(target) or (source.is_unique and target.is_unique)):
+            return "reindex(non-unique index)"
     return None
 
 

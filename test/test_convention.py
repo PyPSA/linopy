@@ -1443,6 +1443,10 @@ class TestAuxCoordConflict:
     )
 
     @pytest.fixture
+    def m(self, backend: Model) -> Model:
+        return backend
+
+    @pytest.fixture
     def A(self) -> pd.Index:
         return pd.Index([1, 2, 3], name="A")
 
@@ -1650,6 +1654,10 @@ class TestAuxCoordPropagation:
     Non-conflicting aux coords must propagate through arithmetic and
     into constraints — the positive half of §11.
     """
+
+    @pytest.fixture
+    def m(self, backend: Model) -> Model:
+        return backend
 
     @pytest.fixture
     def A(self) -> pd.Index:

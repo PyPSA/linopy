@@ -12,6 +12,7 @@ import xarray as xr
 import yaml
 
 from linopy import Model
+from linopy.spec import terms
 
 EXAMPLES_DIR = os.environ.get("MATHSPEC_EXAMPLES")
 needs_examples = pytest.mark.skipif(
@@ -71,6 +72,12 @@ DISPATCH_P = xr.DataArray(
 def table(series: pd.Series, column: str) -> pd.DataFrame:
     """*series* as a spec table: its named index levels as label columns, its values under *column*."""
     return series.rename(column).reset_index()
+
+
+def eager(spec: Any, sources: Any, **kwargs: Any) -> Model:
+    """*spec* built with the eager evaluator alone, the reference the term path is held to."""
+    with terms.eager_only():
+        return Model.from_spec(spec, sources, **kwargs)
 
 
 def solved(spec: Any, sources: Any, store: bool = True, **kwargs: Any) -> Model:

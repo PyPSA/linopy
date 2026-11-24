@@ -263,8 +263,19 @@ class Store(ABC):
         """Drop the terms of absent cells."""
 
     @abstractmethod
+    def on_cells(self, value: Any) -> float | np.ndarray | None:
+        """:func:`on_cells` on this store's grid."""
+
+    @abstractmethod
+    def moved(self, rhs: float | np.ndarray) -> tuple[Self, DataArray]:
+        """``rhs``, laid out by :meth:`on_cells`, moved onto this side: the store with a zero constant, and the constant the other side keeps."""
+
+    @abstractmethod
     def prune(self, tol: float = 0.0) -> Self:
-        """Drop the terms with a coefficient of at most ``tol`` in magnitude."""
+        """
+        Drop the terms with a coefficient of at most ``tol`` in magnitude;
+        this store itself if there is none.
+        """
 
     @abstractmethod
     def canonical(self) -> Self:
@@ -282,9 +293,10 @@ class Store(ABC):
         self, label_index: VariableLabelIndex, active_rows: np.ndarray, name: str
     ) -> scipy.sparse.csr_array:
         """
-        The cells selected by the boolean ``active_rows`` as CSR rows over the
-        dense variable positions of ``label_index``, raising for labels of
-        removed variables with the constraint ``name``.
+        The live terms of the cells selected by the boolean ``active_rows``
+        as CSR rows over the dense variable positions of ``label_index``,
+        one per variable and none with a zero coefficient, raising for
+        labels of removed variables with the constraint ``name``.
         """
 
     @abstractmethod
@@ -304,10 +316,10 @@ class Store(ABC):
         dims = tuple(map(str, positions.dims))
         return self.take(positions.values.ravel(), Grid.from_dataset(positions, dims))
 
-    def isel(self, indexers: Mapping[Hashable, slice]) -> Self:
-        """The cells at the positional slices ``indexers`` of grid dims."""
-        grid = self.grid
-        return self._take_positions(grid.dataarray(np.arange(grid.size)).isel(indexers))
+    def isel(self, indexers: Mapping[Any, int | slice], drop: bool = False) -> Self:
+        """The cells at the positions ``indexers`` picks on grid dims, as ``Dataset.isel``."""
+        grid, rows = self.grid.isel(indexers, drop)
+        return self.take(rows, grid)
 
     def transpose(self, dims: Sequence[str]) -> Self:
         """The cells on the grid dims reordered to ``dims``."""
@@ -778,7 +790,6 @@ class DenseStore(Store):
         return coords_within(value, self.ds)
 
     def on_cells(self, value: Any) -> float | np.ndarray | None:
-        """:func:`on_cells` on this store's grid."""
         return on_cells(value, self.ds.variables["const"].dims, self.ds)
 
     def combined(
@@ -800,7 +811,6 @@ class DenseStore(Store):
         return self._derived(absorb_absence(self._own(**fields)))
 
     def moved(self, rhs: float | np.ndarray) -> tuple[DenseStore, DataArray]:
-        """``rhs``, laid out by :meth:`on_cells`, moved onto this side: the store with a zero constant, and the constant the other side keeps."""
         store = self.absorbed()
         const = store.ds.variables["const"]
         with np.errstate(all="ignore"):
@@ -912,6 +922,7 @@ class DenseStore(Store):
             data, labels, indptr, len(indptr) - 1, label_index, name
         )
         csr.sum_duplicates()
+        csr.eliminate_zeros()
         return csr
 
     def with_grid(self, grid: Grid) -> DenseStore:
@@ -927,8 +938,10 @@ class DenseStore(Store):
         vars_[~present] = -1
         return self.from_arrays(grid, coeffs, vars_, const, self.model)
 
-    def isel(self, indexers: Mapping[Hashable, slice]) -> DenseStore:
-        return DenseStore(self.ds.isel(indexers), self.model)
+    def isel(
+        self, indexers: Mapping[Any, int | slice], drop: bool = False
+    ) -> DenseStore:
+        return DenseStore(self.ds.isel(indexers, drop=drop), self.model)
 
     def transpose(self, dims: Sequence[str]) -> DenseStore:
         return DenseStore(self.ds.transpose(*dims, TERM_DIM), self.model)
