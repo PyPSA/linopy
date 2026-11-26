@@ -3,6 +3,9 @@
 This module aims at testing the correct behavior of the Expressions class.
 """
 
+from collections.abc import Callable
+from typing import Any
+
 import pandas as pd
 import pytest
 import xarray as xr
@@ -101,6 +104,64 @@ def test_add_expressions_mask() -> None:
 
     expr = m.add_expressions(x + 1, name="masked", mask=mask)
     assert_linequal(expr, (x + 1).where(mask))
+
+
+IDX = pd.RangeIndex(3, name="i")
+KEEP = xr.DataArray([True, False, True], coords=[IDX])
+AUX = {"aux": ("i", [5, 6, 7])}
+
+FORWARDED: dict[str, Callable[[Any], Any]] = {
+    "assign_attrs": lambda e: e.assign_attrs(note="kept"),
+    "assign_coords": lambda e: e.assign_coords(i=[10, 11, 12]),
+    "broadcast_like": lambda e: e.broadcast_like(xr.DataArray([0, 0], dims="k")),
+    "drop_isel": lambda e: e.drop_isel(i=0),
+    "drop_sel": lambda e: e.drop_sel(i=0),
+    "drop_vars": lambda e: e.assign_coords(AUX).drop_vars("aux"),
+    "expand_dims": lambda e: e.expand_dims("k"),
+    "getitem": lambda e: e[[0, 1]],
+    "isel": lambda e: e.isel(i=[0, 1]),
+    "loc": lambda e: e.loc[[0, 1]],
+    "reindex": lambda e: e.reindex(i=[0, 1, 2, 3]),
+    "reindex_like": lambda e: e.reindex_like(KEEP.isel(i=[0, 1])),
+    "rename": lambda e: e.rename({"i": "j"}),
+    "rename_dims": lambda e: e.rename_dims({"i": "j"}),
+    "roll": lambda e: e.roll(i=1),
+    "sel": lambda e: e.sel(i=[0, 1]),
+    "shift": lambda e: e.shift(i=1),
+    "swap_dims": lambda e: e.assign_coords(AUX).swap_dims(i="aux"),
+    "where": lambda e: e.where(KEEP),
+}
+
+ARITHMETIC: dict[str, Callable[[Any], Any]] = {
+    "add": lambda e: e + 1,
+    "mul": lambda e: 2 * e,
+    "neg": lambda e: -e,
+    "sum": lambda e: e.sum(),
+}
+
+
+@pytest.fixture(params=[False, True], ids=["linear", "quadratic"])
+def named(
+    backend: Model, request: pytest.FixtureRequest
+) -> LinearExpression | QuadraticExpression:
+    x = backend.add_variables(coords=[IDX], name="x")
+    return backend.add_expressions(x * x if request.param else 2 * x, name="e")
+
+
+@pytest.mark.parametrize("method", FORWARDED.values(), ids=list(FORWARDED))
+def test_forwarded_method_keeps_name(
+    named: LinearExpression | QuadraticExpression, method: Callable[[Any], Any]
+) -> None:
+    result = method(named)
+    assert type(result) is type(named)
+    assert result.name == "e"
+
+
+@pytest.mark.parametrize("operation", ARITHMETIC.values(), ids=list(ARITHMETIC))
+def test_arithmetic_drops_name(
+    named: LinearExpression | QuadraticExpression, operation: Callable[[Any], Any]
+) -> None:
+    assert operation(named).attrs["name"] is None
 
 
 def test_expressions_remove(m: Model) -> None:
