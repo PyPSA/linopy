@@ -130,6 +130,7 @@ linopy 1.0 makes the strict arithmetic convention the only behaviour and puts de
 - `QuadraticExpression.groupby(...).sum()` and `.map` return a `QuadraticExpression`. ([\#1064](https://github.com/PyPSA/linopy/issues/1064))
 - On a sparse model, building a quadratic expression from a sparse one, e.g. `x.groupby(g).sum() * y`, no longer emits a `PerformanceWarning`. ([\#1195](https://github.com/PyPSA/linopy/pull/1195))
 - `LinearExpression.add` and `.sub` with `join=` accept a quadratic expression, where they raised a `ValueError`. ([\#1195](https://github.com/PyPSA/linopy/pull/1195))
+- `Variable.update` checks bounds against the variable's coordinates like `add_variables`: wrong or missing coordinates raise the same error, where they raised a misleading NaN error or, on masked cells, passed silently. ([\#731](https://github.com/PyPSA/linopy/issues/731))
 - `Variable.fix` accepts NaN or non-binary fix values at masked positions of a binary variable. `Variables.fix` validates all variables before fixing any.
 - `LinearExpression.is_constant` is `True` for every expression without variables, e.g. the sum of a fully masked variable. ([\#1152](https://github.com/PyPSA/linopy/pull/1152))
 - On a sparse model, a constraint keeps the auxiliary coordinates of its right-hand side, as on a dense one. ([\#1200](https://github.com/PyPSA/linopy/pull/1200))
