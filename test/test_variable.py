@@ -195,9 +195,38 @@ def test_variable_update_returns_self(z: linopy.Variable) -> None:
     assert out is z
 
 
-def test_variable_update_array_invalid_dim(x: linopy.Variable) -> None:
-    with pytest.raises(ValueError):
-        x.update(lower=pd.Series(range(15, 25)))
+@pytest.mark.parametrize(
+    "lower",
+    [
+        pd.Series(range(15, 30)),
+        pd.Series(range(10), index=pd.RangeIndex(10, name="other")),
+        DataArray(np.ones((10, 2)), coords=[pd.RangeIndex(10, name="first"), [0, 1]]),
+        DataArray(range(10), coords=[pd.RangeIndex(5, 15, name="first")]),
+        DataArray(range(5), coords=[pd.RangeIndex(5, name="first")]),
+    ],
+    ids=["wrong-length", "wrong-dim", "extra-dim", "shifted-coords", "subset-coords"],
+)
+def test_variable_update_validates_like_add_variables(m: Model, lower: Any) -> None:
+    x = m.variables["x"]
+    with pytest.raises(ValueError) as added:
+        m.add_variables(lower=lower, coords=x.coords, name="w")
+    with pytest.raises(ValueError) as updated:
+        x.update(lower=lower)
+    assert str(updated.value) == str(added.value)
+
+
+def test_variable_update_rejects_coords_missing_on_masked_cells() -> None:
+    m = Model()
+    first = pd.RangeIndex(3, name="first")
+    x = m.add_variables(coords=[first], mask=DataArray([True, True, False], [first]))
+    with pytest.raises(ValueError, match="do not match coords"):
+        x.update(lower=DataArray([1.0, 2.0], coords=[pd.RangeIndex(2, name="first")]))
+
+
+def test_variable_update_reindexes_reordered_coords(x: linopy.Variable) -> None:
+    lower = pd.Series(range(10), index=pd.Index(range(9, -1, -1), name="first"))
+    x.update(lower=lower)
+    np.testing.assert_array_equal(x.lower.values, range(9, -1, -1))
 
 
 def test_variable_update_upper_only(z: linopy.Variable) -> None:

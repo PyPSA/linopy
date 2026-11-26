@@ -1073,8 +1073,8 @@ class Variable:
         lower : ConstantLike, optional
             New lower bound. Accepts any constant — scalars, numpy
             arrays, pandas Series / DataFrame, xarray DataArray (e.g.
-            time-varying bounds). Aligned via xarray broadcast against
-            the variable's existing shape; new dims are rejected.
+            time-varying bounds). Aligned to the variable's coords as in
+            ``add_variables``.
             Decision variables / linear expressions are not accepted.
         upper : ConstantLike, optional
             New upper bound. Same.
@@ -1090,8 +1090,8 @@ class Variable:
             If either bound is a Variable / Expression (bounds must be
             numeric, not symbolic).
         ValueError
-            If the new bound introduces dimensions not in the variable's
-            coords, contains NaN at a non-masked position, or if the
+            If the new bound has dimensions or coordinate values not in
+            the variable's coords, contains NaN at a non-masked position, or if the
             resulting ``lower > upper`` anywhere.
         """
         if lower is None and upper is None:
@@ -1114,11 +1114,7 @@ class Variable:
         before any mutation if any input is wrong.
         """
         updates: dict[str, DataArray] = {}
-        own_dims = self.model.variables[self.name].dims
-        for name, val, ref in (
-            ("lower", lower, self.lower),
-            ("upper", upper, self.upper),
-        ):
+        for name, val in (("lower", lower), ("upper", upper)):
             if val is None:
                 continue
             if not isinstance(val, ConstantLike):
@@ -1126,9 +1122,7 @@ class Variable:
                     f"Variable.update({name}=...) must be a constant; "
                     f"got {type(val).__name__}."
                 )
-            new_val = DataArray(val).broadcast_like(ref)
-            if not set(new_val.dims).issubset(own_dims):
-                raise ValueError("Cannot assign new dimensions to existing variable.")
+            new_val = broadcast_to_coords(val, self.coords, label=f"{name} bound")
             if (new_val.isnull() & (self.labels != -1)).any():
                 check_user_nan("variable bound")
             updates[name] = new_val
