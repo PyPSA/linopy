@@ -118,6 +118,7 @@ FORWARDED: dict[str, Callable[[Any], Any]] = {
     "drop_sel": lambda e: e.drop_sel(i=0),
     "drop_vars": lambda e: e.assign_coords(AUX).drop_vars("aux"),
     "expand_dims": lambda e: e.expand_dims("k"),
+    "fillna": lambda e: e.shift(i=1).fillna(5),
     "getitem": lambda e: e[[0, 1]],
     "isel": lambda e: e.isel(i=[0, 1]),
     "loc": lambda e: e.loc[[0, 1]],
@@ -130,6 +131,7 @@ FORWARDED: dict[str, Callable[[Any], Any]] = {
     "shift": lambda e: e.shift(i=1),
     "swap_dims": lambda e: e.assign_coords(AUX).swap_dims(i="aux"),
     "where": lambda e: e.where(KEEP),
+    "where_other": lambda e: e.where(KEEP, 3 * e.model.variables["x"]),
 }
 
 ARITHMETIC: dict[str, Callable[[Any], Any]] = {

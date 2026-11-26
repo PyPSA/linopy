@@ -1963,6 +1963,7 @@ class BaseExpression(ABC):
             self.data.where(cond, other=_other, drop=drop), self.model
         )
 
+    @keeps_name
     def fillna(
         self,
         value: int
@@ -2726,6 +2727,7 @@ class LinearExpression(BaseExpression):
         """
         return type(self)._from_store(self._store.scale(-1.0), self._model)
 
+    @keeps_name
     def fillna(
         self,
         value: int
