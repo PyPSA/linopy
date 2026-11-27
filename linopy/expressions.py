@@ -169,7 +169,11 @@ MethodT = TypeVar("MethodT", bound=Callable[..., Any])
 
 
 def keeps_name(method: MethodT) -> MethodT:
-    """Wrap the expression method ``method`` to give its result the expression's name."""
+    """
+    Wrap the expression method ``method`` to give its result the expression's
+    name. Subclass overrides of a wrapped method are wrapped too, see
+    :meth:`BaseExpression.__init_subclass__`.
+    """
 
     @functools.wraps(method)
     def wrapper(expr: BaseExpression, /, *args: Any, **kwargs: Any) -> Any:
@@ -177,6 +181,7 @@ def keeps_name(method: MethodT) -> MethodT:
         result.attrs["name"] = expr.attrs["name"]
         return result
 
+    wrapper.keeps_name = True  # type: ignore[attr-defined]
     return cast(MethodT, wrapper)
 
 
@@ -1005,6 +1010,13 @@ class BaseExpression(ABC):
 
     @abstractmethod
     def linear_terms(self) -> tuple[np.ndarray, np.ndarray]: ...
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        for name, method in list(vars(cls).items()):
+            inherited = getattr(super(cls, cls), name, None)
+            if getattr(inherited, "keeps_name", False):
+                setattr(cls, name, keeps_name(method))
 
     def __init__(self, data: Dataset | Any | None, model: Model) -> None:
         from linopy.model import Model
@@ -2562,7 +2574,6 @@ class LinearExpression(BaseExpression):
             return method(self._fallback(store))
         return type(self)._from_store(store, self._model)
 
-    @keeps_name
     @skip_full_indexers
     def sel(self, *args: Any, **kwargs: Any) -> Self:
         """
@@ -2579,7 +2590,6 @@ class LinearExpression(BaseExpression):
         obj._attrs = dict(self.attrs)
         return obj
 
-    @keeps_name
     def isel(
         self,
         indexers: Mapping[Any, Any] | None = None,
@@ -2598,11 +2608,9 @@ class LinearExpression(BaseExpression):
         args = (indexers, drop, missing_dims)
         return self._gathered("isel", super().isel, *args, **indexers_kwargs)
 
-    @keeps_name
     def __getitem__(self, selector: int | slice | tuple[Any, ...] | DataArray) -> Self:
         return self._gathered("__getitem__", super().__getitem__, selector)
 
-    @keeps_name
     def shift(self, *args: Any, **kwargs: Any) -> Self:
         """
         Shift along dimensions as ``Dataset.shift``. For a CSR-backed
@@ -2613,7 +2621,6 @@ class LinearExpression(BaseExpression):
             return self._fallback("shift(fill_value)").shift(*args, **kwargs)
         return self._gathered("shift", super().shift, *args, **kwargs)
 
-    @keeps_name
     def roll(self, *args: Any, **kwargs: Any) -> Self:
         """
         Roll along dimensions as ``Dataset.roll``. For a CSR-backed
@@ -2621,7 +2628,6 @@ class LinearExpression(BaseExpression):
         """
         return self._gathered("roll", super().roll, *args, **kwargs)
 
-    @keeps_name
     def assign_coords(self, *args: Any, **kwargs: Any) -> Self:
         """
         Assign coordinates as ``Dataset.assign_coords``. For a CSR-backed
@@ -2639,7 +2645,6 @@ class LinearExpression(BaseExpression):
             return self._fallback(reason).assign_coords(*args, **kwargs)
         return type(self)._from_store(store.with_grid(grid), self._model)
 
-    @keeps_name
     def where(
         self,
         cond: DataArray | Callable[[Any], DataArray],
@@ -2727,7 +2732,6 @@ class LinearExpression(BaseExpression):
         """
         return type(self)._from_store(self._store.scale(-1.0), self._model)
 
-    @keeps_name
     def fillna(
         self,
         value: int
@@ -3011,7 +3015,6 @@ class LinearExpression(BaseExpression):
         check_has_nulls(df, name=self.type)
         return df
 
-    @keeps_name
     def reindex(
         self,
         indexers: Mapping[Any, Any] | None = None,
@@ -3044,7 +3047,6 @@ class LinearExpression(BaseExpression):
         grid = store.grid.with_indexes(indexers)
         return type(self)._from_store(store.reindex(grid), self._model)
 
-    @keeps_name
     def rename(
         self,
         name_dict: Mapping[Any, Any] | None = None,
@@ -3062,7 +3064,6 @@ class LinearExpression(BaseExpression):
         relabel = {str(k): str(v) for k, v in name_dict.items()}
         return type(self)._from_store(store.rename(relabel), self._model)
 
-    @keeps_name
     def drop_vars(
         self,
         names: str | Iterable[Hashable] | Callable[[Dataset], str | Iterable[Hashable]],
