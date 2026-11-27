@@ -165,6 +165,26 @@ if TYPE_CHECKING:
     from linopy.variables import ScalarVariable, Variable
 
 
+MethodT = TypeVar("MethodT", bound=Callable[..., Any])
+
+
+def keeps_name(method: MethodT) -> MethodT:
+    """
+    Wrap the expression method ``method`` to give its result the expression's
+    name. Subclass overrides of a wrapped method are wrapped too, see
+    :meth:`BaseExpression.__init_subclass__`.
+    """
+
+    @functools.wraps(method)
+    def wrapper(expr: BaseExpression, /, *args: Any, **kwargs: Any) -> Any:
+        result = method(expr, *args, **kwargs)
+        result.attrs["name"] = expr.attrs["name"]
+        return result
+
+    wrapper.keeps_name = True  # type: ignore[attr-defined]
+    return cast(MethodT, wrapper)
+
+
 def exprwrap(
     method: Callable, *default_args: Any, **new_default_kwargs: Any
 ) -> Callable:
@@ -184,7 +204,7 @@ def exprwrap(
     if new_default_kwargs:
         _exprwrap.__doc__ += f" with default arguments: {new_default_kwargs}"
 
-    return _exprwrap
+    return keeps_name(_exprwrap)
 
 
 def _expr_unwrap(
@@ -991,6 +1011,13 @@ class BaseExpression(ABC):
     @abstractmethod
     def linear_terms(self) -> tuple[np.ndarray, np.ndarray]: ...
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        for name, method in list(vars(cls).items()):
+            inherited = getattr(super(cls, cls), name, None)
+            if getattr(inherited, "keeps_name", False):
+                setattr(cls, name, keeps_name(method))
+
     def __init__(self, data: Dataset | Any | None, model: Model) -> None:
         from linopy.model import Model
 
@@ -1566,6 +1593,7 @@ class BaseExpression(ABC):
         """
         return self.__matmul__(other)
 
+    @keeps_name
     def __getitem__(self, selector: int | slice | tuple[Any, ...] | DataArray) -> Self:
         """
         Get selection from the expression.
@@ -1888,6 +1916,7 @@ class BaseExpression(ABC):
         """
         return self.const.isnull()
 
+    @keeps_name
     def where(
         self,
         cond: DataArray | Callable[[Any], DataArray],
@@ -1946,6 +1975,7 @@ class BaseExpression(ABC):
             self.data.where(cond, other=_other, drop=drop), self.model
         )
 
+    @keeps_name
     def fillna(
         self,
         value: int
